@@ -33,10 +33,17 @@ ENDPOINT = 'https://ensemble-api.open-meteo.com/v1/ensemble'
 ATTRIBUTION = 'Open-Meteo (CC BY 4.0)'
 
 #: Open-Meteo variable -> (key in the published document, unit label, decimals).
+#:
+#: ``precipitation`` is published as an *outlook*: KNMI's 5-minute ensemble is
+#: far better inside its 6-hour horizon, but it stops there, and this carries the
+#: rain picture out to days. The two are kept in separate series rather than
+#: spliced into one line - different models, different members, different step -
+#: so a reader can see which one they are looking at.
 VARIABLES = {
     'temperature_2m': ('temperature', '°C', 1),
     'wind_speed_10m': ('wind', 'm/s', 1),
     'shortwave_radiation': ('solar', 'W/m²', 0),
+    'precipitation': ('precipitation_outlook', 'mm/h', 1),
 }
 
 

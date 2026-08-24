@@ -113,7 +113,12 @@ def build_forecast(path: str, config: Config, conditions=None):
         meta = {
             'reference_time': source.reference_time,
             'product': f'{config.ensemble_stat} of {source.member_count} ensemble members',
-            'points': [location.name for location in extractor.locations],
+            # Coordinates too: a client that knows where the user clicked can
+            # then pick the nearest published location without another request.
+            'points': [
+                {'name': location.name, 'lat': location.lat, 'lon': location.lon}
+                for location in extractor.locations
+            ],
         }
         return frames, meta, resampler.target
 
@@ -154,6 +159,17 @@ def publish_points(config: Config, source, extractor: PointExtractor,
 
         blocks = conditions.for_location(location) if conditions else None
         if blocks:
+            blocks = dict(blocks)
+            outlook = blocks.get('precipitation_outlook')
+            if outlook and series:
+                # KNMI is better inside its own horizon, so the outlook only
+                # covers what lies beyond it.
+                knmi_ends = series[-1]['t']
+                outlook['series'] = [
+                    entry for entry in outlook['series'] if entry['t'] > knmi_ends
+                ]
+                if not outlook['series']:
+                    blocks.pop('precipitation_outlook')
             document.update(blocks)
             document['conditions_source'] = {
                 'model': conditions.model,

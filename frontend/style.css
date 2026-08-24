@@ -978,3 +978,51 @@ body.page-forecast {
         max-height: 44vh;
     }
 }
+
+.coords {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--muted-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------- chart interaction */
+
+.chart-daybreak { stroke: rgba(255, 255, 255, 0.16); stroke-width: 1; }
+.chart-crosshair { stroke: rgba(255, 255, 255, 0.45); stroke-width: 1; pointer-events: none; }
+.chart svg { cursor: crosshair; }
+
+.chart-tooltip {
+    position: absolute;
+    top: 6px;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 132px;
+    padding: 8px 10px;
+    background: rgba(10, 12, 17, 0.94);
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+}
+.chart-tooltip[hidden] { display: none; }
+.tip-time {
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted-dim);
+}
+.tip-value { font-size: 1.05rem; font-weight: 700; line-height: 1.1; }
+.tip-value small { margin-left: 3px; font-size: 0.62rem; font-weight: 600; color: var(--muted); }
+.tip-band {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.7rem;
+    color: var(--text);
+}
+.tip-band i { font-style: normal; color: var(--muted-dim); }
