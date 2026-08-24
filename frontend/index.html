@@ -31,6 +31,9 @@
         <symbol id="icon-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 4l9 16H3z"/><path d="M12 10v4"/><path d="M12 17v.3"/>
         </symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M6 6l12 12M18 6L6 18"/>
+        </symbol>
         <symbol id="icon-cloud" viewBox="0 0 24 24" fill="currentColor">
             <path d="M7 18a4.5 4.5 0 0 1-.6-8.96 5.5 5.5 0 0 1 10.55-1.4A4.25 4.25 0 0 1 17.5 18z"/>
         </symbol>
@@ -63,27 +66,113 @@
             </button>
         </div>
 
-    <div class="popover popover--info" id="info-popover" role="dialog" aria-label="About this map" hidden>
-        <h2>About this map</h2>
-        <p>Rainfall intensity in 5-minute steps, six hours ahead. KNMI produces it
-           by blending radar echoes with the HARMONIE-AROME weather model, so the
-           near term is driven by what the radar can see and the later hours by
-           the model. Accuracy drops the further right you scrub.</p>
-        <dl class="info-list">
-            <dt><i class="zone-swatch zone-swatch--nowcast"></i>Nowcast</dt>
-            <dd>First two hours, mostly radar extrapolation.</dd>
-            <dt><i class="zone-swatch zone-swatch--forecast"></i>Forecast</dt>
-            <dd>Beyond that, increasingly the weather model.</dd>
-        </dl>
-        <p class="info-foot">The blend is seamless — the split above is a reading
-           aid, not a change of data source. Each frame is the median of 20
-           ensemble members.</p>
-        <p class="info-foot">Click anywhere on the map to read the rain rate and
-           the full timeline for that spot. <kbd>Space</kbd> plays,
-           <kbd>←</kbd> <kbd>→</kbd> step frame by frame.</p>
-        <p class="info-foot info-source" id="info-source"></p>
-    </div>
     </header>
+
+    <div class="modal-backdrop" id="about-backdrop" hidden></div>
+    <div class="modal" id="about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+        <div class="modal-head">
+            <h2 id="about-title">About Stratus</h2>
+            <button type="button" id="about-close" class="icon-btn" aria-label="Close">
+                <svg aria-hidden="true"><use href="#icon-close"/></svg>
+            </button>
+        </div>
+
+        <div class="modal-body">
+            <p>Rainfall over the Netherlands in 5-minute steps: an hour of measured
+               radar behind you, six hours of forecast ahead. Everything is
+               self-hosted — the page talks only to this server.</p>
+
+            <section class="about-section">
+                <h3>Reading the timeline</h3>
+                <dl class="info-list">
+                    <dt><i class="zone-swatch zone-swatch--observed"></i>Observed</dt>
+                    <dd>What the radar actually measured.</dd>
+                    <dt><i class="zone-swatch zone-swatch--nowcast"></i>Nowcast</dt>
+                    <dd>First two hours ahead, mostly radar extrapolation.</dd>
+                    <dt><i class="zone-swatch zone-swatch--forecast"></i>Forecast</dt>
+                    <dd>Beyond that, increasingly the weather model.</dd>
+                </dl>
+                <p class="about-note">The forecast is <em>seamless</em> — that split is a
+                   reading aid, not a change of data source. Accuracy drops the further
+                   right you scrub.</p>
+            </section>
+
+            <section class="about-section">
+                <h3>Data &amp; weather models</h3>
+                <p class="about-note">Precipitation comes from the
+                   <a href="https://dataplatform.knmi.nl/" target="_blank" rel="noopener">KNMI Data Platform</a>,
+                   licensed CC BY 4.0.</p>
+                <ul class="about-list" id="about-datasets"></ul>
+                <ul class="about-list">
+                    <li>
+                        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>
+                        <span class="about-kind">temperature</span>
+                        <p>The KNMI product is precipitation only, so temperature comes from
+                           Open-Meteo's ensemble endpoint — which returns every member, giving
+                           the same kind of spread the rain forecast has. Fetched server-side.</p>
+                    </li>
+                </ul>
+            </section>
+
+            <section class="about-section">
+                <h3>Mapping</h3>
+                <ul class="about-list">
+                    <li>
+                        <a href="https://maplibre.org/" target="_blank" rel="noopener">MapLibre GL JS</a>
+                        <span class="about-kind">renderer</span>
+                        <p>Open-source GPU map rendering, served from this host rather than a CDN.</p>
+                    </li>
+                    <li>
+                        <a href="https://carto.com/basemaps" target="_blank" rel="noopener">CARTO basemaps</a>
+                        <span class="about-kind">tiles</span>
+                        <p>Ground and label layers drawn separately so place names stay readable
+                           through the rain. Built from
+                           <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+                           data.</p>
+                    </li>
+                </ul>
+            </section>
+
+            <section class="about-section">
+                <h3>How it works</h3>
+                <ul class="about-list about-list--plain">
+                    <li><strong>Push, not polling.</strong> A Python service subscribes to KNMI's
+                        MQTT notification service and ingests each file as it is announced,
+                        rather than repeatedly asking whether one has appeared.</li>
+                    <li><strong>Two grids, one raster.</strong> The forecast arrives as NetCDF on a
+                        lat/lon grid and the radar as KNMI HDF5 on a polar stereographic one;
+                        both are resampled onto a single Web Mercator raster so the map can
+                        stretch one canvas over them.</li>
+                    <li><strong>16-bit WebP packing.</strong> Each rain rate is split across the red
+                        and green channels of a lossless WebP, so a whole 6-hour cycle is about
+                        a megabyte.</li>
+                    <li><strong>Colour on the GPU.</strong> A WebGL shader recombines those bytes and
+                        applies the colour scale, so frames can be recoloured without
+                        refetching. A Rust server hands out the finished frames.</li>
+                </ul>
+            </section>
+
+            <section class="about-section">
+                <h3>Credit</h3>
+                <p class="about-note">Inspired by
+                   <a href="https://nimbus.yannick.cloud" target="_blank" rel="noopener">Nimbus</a>
+                   by Yannick, which showed what a self-hosted KNMI radar viewer could be —
+                   the ensemble timeline, the WebP channel packing and the shader-side colour
+                   ramp are all ideas taken from it. This is an independent implementation.</p>
+            </section>
+
+            <section class="about-section">
+                <h3>Keyboard</h3>
+                <p class="about-note"><kbd>Space</kbd> play or pause ·
+                   <kbd>←</kbd> <kbd>→</kbd> step one frame ·
+                   <kbd>Home</kbd> <kbd>End</kbd> jump to either end ·
+                   <kbd>Esc</kbd> close. Click anywhere on the map for the rain rate and
+                   the full timeline at that spot.</p>
+            </section>
+
+            <p class="about-foot" id="about-source"></p>
+        </div>
+    </div>
 
     <section class="panel" id="panel" aria-label="Radar playback">
         <div class="panel-primary">

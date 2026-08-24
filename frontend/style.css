@@ -540,17 +540,17 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(5
     cursor: pointer;
 }
 
-.info-list { margin: 0 0 10px; font-size: 0.78rem; }
+.info-list { margin: 0 0 10px; font-size: 0.8rem; }
 .info-list dt {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     font-weight: 700;
     margin-top: 8px;
 }
-.info-list dd { margin: 2px 0 0 20px; color: var(--muted); line-height: 1.4; }
-.info-foot { font-size: 0.75rem !important; }
-.info-foot kbd {
+.info-list dd { margin: 2px 0 0 21px; color: var(--muted); line-height: 1.45; }
+
+kbd {
     padding: 1px 5px;
     border: 1px solid var(--border-strong);
     border-radius: 4px;
@@ -558,8 +558,119 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(5
     font-family: inherit;
     font-size: 0.9em;
     color: var(--text);
+    white-space: nowrap;
 }
-.info-source { margin-bottom: 0 !important; color: var(--muted-dim) !important; }
+
+/* ------------------------------------------------------------ about modal */
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.6);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+}
+.modal-backdrop[hidden] { display: none; }
+
+.modal {
+    position: fixed;
+    z-index: 41;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(660px, calc(100vw - 32px));
+    max-height: min(82vh, 780px);
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+.modal[hidden] { display: none; }
+
+.modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.modal-head h2 { margin: 0; font-size: 1.05rem; font-weight: 700; }
+
+.modal-body {
+    overflow-y: auto;
+    padding: 16px 18px 20px;
+    font-size: 0.85rem;
+    line-height: 1.55;
+}
+.modal-body > p { margin: 0 0 4px; color: var(--muted); }
+
+.about-section { margin-top: 22px; }
+.about-section h3 {
+    margin: 0 0 8px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted-dim);
+}
+.about-note { margin: 8px 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.5; }
+
+.about-list { list-style: none; margin: 0; padding: 0; }
+.about-list li { margin-bottom: 14px; }
+.about-list li:last-child { margin-bottom: 0; }
+.about-list li > a { font-weight: 600; }
+.about-list li p {
+    margin: 3px 0 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+.about-list--plain li {
+    color: var(--muted);
+    font-size: 0.82rem;
+    padding-left: 14px;
+    position: relative;
+}
+.about-list--plain li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.6em;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+.about-list--plain strong { color: var(--text); font-weight: 600; }
+
+/* Marks what a source contributes, so the list scans without reading it. */
+.about-kind {
+    margin-left: 7px;
+    padding: 1px 7px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    vertical-align: 1px;
+}
+
+.about-foot {
+    margin: 22px 0 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    color: var(--muted-dim);
+    font-size: 0.75rem;
+}
+
+.modal a { color: #7cb2ff; text-decoration: none; }
+.modal a:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------ map popup */
 

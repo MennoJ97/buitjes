@@ -21,8 +21,12 @@ const BASEMAPS = {
 
 const tileUrl = (name) => `https://a.basemaps.cartocdn.com/${name}/{z}/{x}/{y}.png`;
 
+// The map's attribution control is the conventional home for credits, so the
+// inspiration is acknowledged there as well as in the About dialog.
 const BASEMAP_ATTRIBUTION =
-    '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors';
+    '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors' +
+    ' | data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>' +
+    ' | inspired by <a href="https://nimbus.yannick.cloud">Nimbus</a>';
 
 /** Below this rate we call it dry, matching the bottom of the colour ramp. */
 const WET_THRESHOLD_MM_H = 0.1;
@@ -55,7 +59,10 @@ const el = {
     settingsBtn: $('settings-btn'),
     settingsPopover: $('settings-popover'),
     infoBtn: $('info-btn'),
-    infoPopover: $('info-popover'),
+    aboutModal: $('about-modal'),
+    aboutBackdrop: $('about-backdrop'),
+    aboutClose: $('about-close'),
+    aboutDatasets: $('about-datasets'),
     collapseBtn: $('collapse-btn'),
     locateBtn: $('locate-btn'),
     speedSlider: $('speed-slider'),
@@ -63,7 +70,7 @@ const el = {
     opacitySlider: $('opacity-slider'),
     opacityLabel: $('opacity-label'),
     basemapSelect: $('basemap-select'),
-    infoSource: $('info-source'),
+    aboutSource: $('about-source'),
     glcanvas: $('glcanvas'),
 };
 
@@ -146,11 +153,7 @@ async function load({ initial }) {
 
         buildTimeline();
         el.refTime.textContent = formatClock(manifest.reference_time ?? manifest.generated_at);
-        if (el.infoSource && manifest.source) {
-            el.infoSource.textContent = `Data: ${manifest.source.attribution ?? 'KNMI'} — ${
-                manifest.source.dataset ?? 'unknown dataset'
-            }.`;
-        }
+        describeSources(manifest);
 
         if (initial) {
             // Open on the frame nearest to now, not the end of the forecast.
@@ -508,6 +511,79 @@ function summarise(series, reference) {
     return `Dry now — rain expected ${when} (${formatRate(onset.mmh)} mm/h).`;
 }
 
+// ---------------------------------------------------------------- about
+
+/** KNMI's dataset pages follow a fixed slug: underscores and dots become dashes. */
+function knmiDatasetUrl(dataset, version) {
+    const slug = `${dataset}-${version}`.replace(/[_.]/g, '-');
+    return `https://dataplatform.knmi.nl/dataset/${slug}`;
+}
+
+const DATASET_NOTES = {
+    forecast:
+        'The seamless ensemble: KNMI runs pySTEPS to blend radar extrapolation with the ' +
+        'HARMONIE-AROME ensemble, publishing 20 members every 5 minutes out to 6 hours. ' +
+        'The map shows the median of those members.',
+    observed:
+        'The real-time radar composite, corrected against rain gauges, from Dutch, Belgian ' +
+        'and German radars. This is measurement rather than forecast, and it fills the part ' +
+        'of the timeline before now.',
+};
+
+/**
+ * Build the data-source list from the manifest, so the About box describes what
+ * is actually being served rather than what was true when it was written.
+ */
+function describeSources(manifest) {
+    const source = manifest.source ?? {};
+    if (el.aboutDatasets) {
+        const entries = [
+            { dataset: source.dataset, version: source.version, kind: 'forecast' },
+            { dataset: source.observed, version: '1.0', kind: 'observed' },
+        ].filter((entry) => entry.dataset);
+
+        el.aboutDatasets.innerHTML = '';
+        for (const entry of entries) {
+            const item = document.createElement('li');
+            const link = document.createElement('a');
+            link.href = knmiDatasetUrl(entry.dataset, entry.version);
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = entry.dataset;
+            const kind = document.createElement('span');
+            kind.className = 'about-kind';
+            kind.textContent = entry.kind;
+            const note = document.createElement('p');
+            note.textContent = DATASET_NOTES[entry.kind] ?? '';
+            item.append(link, kind, note);
+            el.aboutDatasets.appendChild(item);
+        }
+    }
+
+    if (el.aboutSource) {
+        const parts = [source.attribution, source.product].filter(Boolean);
+        el.aboutSource.textContent = parts.length
+            ? `${parts.join(' — ')}. Updated every 5 minutes.`
+            : '';
+    }
+}
+
+function openAbout() {
+    closePopovers();
+    el.aboutBackdrop.hidden = false;
+    el.aboutModal.hidden = false;
+    el.infoBtn.setAttribute('aria-expanded', 'true');
+    el.aboutClose.focus();
+}
+
+function closeAbout() {
+    el.aboutBackdrop.hidden = true;
+    el.aboutModal.hidden = true;
+    el.infoBtn.setAttribute('aria-expanded', 'false');
+}
+
+const aboutIsOpen = () => !el.aboutModal.hidden;
+
 // ---------------------------------------------------------------- chrome
 
 function showBanner(message, retryable, tone = 'warn') {
@@ -529,10 +605,7 @@ function openPopover(popover, button) {
 }
 
 function closePopovers(except) {
-    for (const [popover, button] of [
-        [el.settingsPopover, el.settingsBtn],
-        [el.infoPopover, el.infoBtn],
-    ]) {
+    for (const [popover, button] of [[el.settingsPopover, el.settingsBtn]]) {
         if (popover === except) continue;
         popover.hidden = true;
         button.setAttribute('aria-expanded', 'false');
@@ -642,7 +715,9 @@ function setBasemap(name) {
 }
 
 el.settingsBtn.addEventListener('click', () => togglePopover(el.settingsPopover, el.settingsBtn));
-el.infoBtn.addEventListener('click', () => togglePopover(el.infoPopover, el.infoBtn));
+el.infoBtn.addEventListener('click', () => (aboutIsOpen() ? closeAbout() : openAbout()));
+el.aboutClose.addEventListener('click', closeAbout);
+el.aboutBackdrop.addEventListener('click', closeAbout);
 
 el.collapseBtn.addEventListener('click', () => {
     const collapsed = el.panel.classList.toggle('is-collapsed');
@@ -686,9 +761,12 @@ document.addEventListener('click', (event) => {
 
 document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+        closeAbout();
         closePopovers();
         return;
     }
+    // The map's shortcuts should not fire while the About dialog has focus.
+    if (aboutIsOpen()) return;
     // Leave the arrow keys alone while a slider or select has focus.
     const tag = event.target.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
