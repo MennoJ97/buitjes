@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nimbus Clone - Home Server</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://unpkg.com/maplibre-gl@3.3.1/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@3.3.1/dist/maplibre-gl.js"></script>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- Top left branding overlay -->
+    <div class="top-overlay">
+        <h1>☁️ Nimbus <span>Clone</span></h1>
+        <div class="ref-time">Reference Time: <span id="ref-time">Loading...</span></div>
+    </div>
+
+    <!-- Bottom control panel -->
+    <div class="control-panel">
+        <div class="timeline-row">
+            <div id="current-time-display">--:--</div>
+            <div class="timeline-container">
+                <input type="range" id="timeline-slider" min="0" max="11" value="11" step="1">
+            </div>
+            <div class="step-label">+5m</div>
+        </div>
+
+        <div class="controls-row">
+            <button id="play-pause-btn" class="play-btn">▶</button>
+            <div class="speed-control">
+                <label>Speed</label>
+                <input type="range" id="speed-slider" min="1" max="10" value="3">
+                <span id="speed-label">3 fps</span>
+            </div>
+            <div class="opacity-control">
+                <label>Opacity</label>
+                <input type="range" id="opacity-slider" min="0" max="100" value="70">
+                <span id="opacity-label">70%</span>
+            </div>
+        </div>
+        
+        <div class="legend-row">
+            <div class="legend-title">RAINFALL RATE (MM/H)</div>
+            <div class="color-bar">
+                <div class="segment" style="background: transparent;"></div>
+                <div class="segment" style="background: #0000FF;"></div>
+                <div class="segment" style="background: #00FF00;"></div>
+                <div class="segment" style="background: #FFFF00;"></div>
+                <div class="segment" style="background: #FFA500;"></div>
+                <div class="segment" style="background: #FF0000;"></div>
+                <div class="segment" style="background: #FF00FF;"></div>
+                <div class="segment" style="background: #FFFFFF;"></div>
+            </div>
+            <div class="legend-labels">
+                <span>0.05</span>
+                <span>0.2</span>
+                <span>1</span>
+                <span>5</span>
+                <span>15</span>
+                <span>30</span>
+                <span>100</span>
+                <span>250+</span>
+            </div>
+        </div>
+    </div>
+    
+    <canvas id="glcanvas" width="500" height="500" style="display: none;"></canvas>
+    <script src="app.js"></script>
+</body>
+</html>

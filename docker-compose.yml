@@ -1,0 +1,28 @@
+
+
+services:
+  weather-app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: nimbus-weather-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./frontend:/app/frontend # Mount frontend so it can be edited without rebuilding the container
+    ports:
+      - "3000:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.weatherapp.rule=Host(`weather.yourdomain.com`)" # Adjust to your domain
+      - "traefik.http.routers.weatherapp.entrypoints=websecure"
+      - "traefik.http.routers.weatherapp.tls=true"
+      - "traefik.http.routers.weatherapp.tls.certresolver=myresolver" # Change to your Traefik cert resolver
+      - "traefik.http.services.weatherapp.loadbalancer.server.port=3000"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
