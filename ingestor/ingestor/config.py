@@ -39,10 +39,10 @@ class Config:
     history_minutes: int
     observed_max_fetch: int
     widget_locations: tuple
-    temperature_model: str
-    temperature_past_hours: int
-    temperature_forecast_hours: int
-    temperature_refresh: int
+    conditions_model: str
+    conditions_past_hours: int
+    conditions_forecast_hours: int
+    conditions_refresh: int
 
     @classmethod
     def from_env(cls) -> 'Config':
@@ -102,12 +102,14 @@ class Config:
             # separated by semicolons. These are the only points that get
             # ensemble spread; see ingestor/points.py for why.
             widget_locations=tuple(parse_locations(os.environ.get('WIDGET_LOCATIONS', ''))),
-            # Temperature comes from Open-Meteo's ensemble endpoint, so it gets
-            # a spread like precipitation does. Set empty to omit temperature.
-            temperature_model=os.environ.get('TEMPERATURE_MODEL', 'icon_seamless').strip(),
-            temperature_past_hours=int(os.environ.get('TEMPERATURE_PAST_HOURS', '2')),
-            temperature_forecast_hours=int(os.environ.get('TEMPERATURE_FORECAST_HOURS', '8')),
+            # Temperature, wind and solar come from Open-Meteo's ensemble
+            # endpoint, so they get a spread like precipitation does. Set the
+            # model empty to publish precipitation only.
+            conditions_model=os.environ.get('CONDITIONS_MODEL',
+                                            os.environ.get('TEMPERATURE_MODEL', 'icon_seamless')).strip(),
+            conditions_past_hours=int(os.environ.get('CONDITIONS_PAST_HOURS', '3')),
+            conditions_forecast_hours=int(os.environ.get('CONDITIONS_FORECAST_HOURS', '12')),
             # Temperature is hourly and slow-moving; no need to refetch it on
             # every 5-minute precipitation cycle.
-            temperature_refresh=int(os.environ.get('TEMPERATURE_REFRESH_MINUTES', '30')) * 60,
+            conditions_refresh=int(os.environ.get('CONDITIONS_REFRESH_MINUTES', '30')) * 60,
         )
