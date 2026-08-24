@@ -29,9 +29,9 @@ from .blend import BlendFile, reduce_members
 from .config import Config
 from .encode import encode_frame
 from .knmi import KnmiClient, RateLimited
-from .points import PERCENTILES, PointExtractor, summarise
+from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
-from .temperature import ATTRIBUTION as TEMPERATURE_ATTRIBUTION, TemperatureSource
+from .conditions import ATTRIBUTION as CONDITIONS_ATTRIBUTION, ConditionsSource
 from .raster import MercatorResampler, StereographicResampler, TargetGrid
 
 log = logging.getLogger('ingestor')
@@ -72,7 +72,7 @@ def write_atomic(directory: str, name: str, payload: bytes) -> None:
 # ------------------------------------------------------------------ forecast
 
 
-def build_forecast(path: str, config: Config, temperature=None):
+def build_forecast(path: str, config: Config, conditions=None):
     """Decode one forecast cycle into frames. Returns (frames, meta, grid)."""
     with BlendFile(path) as source:
         resampler = MercatorResampler(
@@ -108,7 +108,7 @@ def build_forecast(path: str, config: Config, temperature=None):
         log.info('forecast %s: wrote %d frames, %.1f MiB',
                  source.reference_time, len(frames), written / 1024 / 1024)
 
-        publish_points(config, source, extractor, temperature)
+        publish_points(config, source, extractor, conditions)
 
         meta = {
             'reference_time': source.reference_time,
@@ -122,8 +122,12 @@ def point_file_name(name: str) -> str:
     return f'point_{name}.json'
 
 
+def current_file_name(name: str) -> str:
+    return f'current_{name}.json'
+
+
 def publish_points(config: Config, source, extractor: PointExtractor,
-                   temperature=None) -> None:
+                   conditions=None) -> None:
     """Write one point forecast per configured location."""
     if not extractor:
         return
@@ -148,18 +152,21 @@ def publish_points(config: Config, source, extractor: PointExtractor,
             },
         }
 
-        temperature_series = temperature.series_for(location) if temperature else None
-        if temperature_series:
-            document['temperature'] = {
-                'unit': 'C',
+        blocks = conditions.for_location(location) if conditions else None
+        if blocks:
+            document.update(blocks)
+            document['conditions_source'] = {
+                'model': conditions.model,
                 'step': 'hourly',
                 'percentiles': list(PERCENTILES),
-                'model': temperature.model,
-                'attribution': TEMPERATURE_ATTRIBUTION,
-                'series': temperature_series,
+                'attribution': CONDITIONS_ATTRIBUTION,
             }
         write_atomic(
             config.frame_dir, point_file_name(location.name), json.dumps(document).encode()
+        )
+        write_atomic(
+            config.frame_dir, current_file_name(location.name),
+            json.dumps(current_conditions(document)).encode(),
         )
 
     log.info('point forecasts published for %s',
@@ -370,7 +377,7 @@ def seconds_until_next_publication(config: Config, state: State, now: float) -> 
     return remaining if remaining > 0 else config.poll_retry
 
 
-def run_once(client: KnmiClient, config: Config, state: State, temperature=None,
+def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
              check_forecast: bool = True) -> None:
     # A radar-only notification means the forecast cannot have moved, so looking
     # it up would spend a request to learn nothing.
@@ -388,7 +395,7 @@ def run_once(client: KnmiClient, config: Config, state: State, temperature=None,
             downloaded = client.download(
                 config.dataset, config.version, filename, os.path.join(scratch, filename)
             )
-            frames, meta, grid = build_forecast(downloaded, config, temperature)
+            frames, meta, grid = build_forecast(downloaded, config, conditions)
         state.last_forecast_file = filename
         state.forecast_frames, state.meta, state.grid = frames, meta, grid
         reconcile_grid(config, grid)
@@ -451,9 +458,9 @@ def main() -> None:
     os.makedirs(config.frame_dir, exist_ok=True)
     client = KnmiClient(config.api_key)
     listener = build_listener(config)
-    temperature = TemperatureSource(
-        config.temperature_model, config.temperature_past_hours,
-        config.temperature_forecast_hours, config.temperature_refresh,
+    conditions = ConditionsSource(
+        config.conditions_model, config.conditions_past_hours,
+        config.conditions_forecast_hours, config.conditions_refresh,
     ) if config.widget_locations else None
 
     log.info('ingesting %s v%s into %s (history %d min from %s); discovery: %s',
@@ -461,15 +468,15 @@ def main() -> None:
              config.history_minutes, config.observed_dataset,
              'notification service' if listener else 'scheduled polling')
     if config.widget_locations:
-        log.info('point forecasts for %s; temperature: %s',
+        log.info('point forecasts for %s; conditions: %s',
                  ', '.join(l.name for l in config.widget_locations),
-                 config.temperature_model or 'disabled')
+                 config.conditions_model or 'disabled')
 
     state = State()
     continue_kwargs = {'check_forecast': True}
     while True:
         try:
-            run_once(client, config, state, temperature, **continue_kwargs)
+            run_once(client, config, state, conditions, **continue_kwargs)
             continue_kwargs = {'check_forecast': True}
             delay = seconds_until_next_publication(config, state, time.time())
         except RateLimited as exc:

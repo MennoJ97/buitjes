@@ -171,3 +171,49 @@ def summarise(series: list[dict], reference_time: int) -> dict:
 def _clock(timestamp: int) -> str:
     import time
     return time.strftime('%H:%M', time.gmtime(timestamp)) + ' UTC'
+
+
+def _value_at(series, when: int):
+    """The entry nearest ``when``, or None for an empty series."""
+    if not series:
+        return None
+    return min(series, key=lambda entry: abs(entry['t'] - when))
+
+
+def current_conditions(document: dict) -> dict:
+    """A compact "right now" view of a point forecast.
+
+    A homepage widget that only wants a headline should not have to pull down
+    and reduce ~80 timesteps to find it, so the reduction happens here, once
+    per cycle, rather than in every client.
+    """
+    reference = document['reference_time']
+    now = {
+        'generated_at': document['generated_at'],
+        'reference_time': reference,
+        'location': document['location'],
+        'summary': document['summary'],
+    }
+
+    rain = _value_at(document['precipitation']['series'], reference)
+    if rain:
+        now['precipitation'] = {
+            'unit': document['precipitation']['unit'],
+            'value': rain['median'],
+            'p10': rain['p10'],
+            'p90': rain['p90'],
+            'probability': rain['probability'],
+        }
+
+    for key in ('temperature', 'wind', 'solar'):
+        block = document.get(key)
+        entry = _value_at(block['series'], reference) if block else None
+        if entry:
+            now[key] = {
+                'unit': block['unit'],
+                'value': entry['median'],
+                'p10': entry['p10'],
+                'p90': entry['p90'],
+            }
+
+    return now

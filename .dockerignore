@@ -1,0 +1,34 @@
+# Keep the build context small. This lives on a synced CloudStorage folder, so
+# every file Docker reads crosses a FUSE mount - excluding what the images never
+# use keeps "load build context" quick.
+.git
+.gitignore
+.dockerignore
+
+# Secrets: the images take configuration from the environment, never from a file.
+.env
+.env.local
+.env.*.local
+
+docs/
+*.md
+
+# Rust build output (the image builds its own)
+backend/target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Downloaded KNMI source data and ingestor output
+*.h5
+*.nc
+frames/
+manifest.json
+grid.json
+mqtt-client-id
+
+.DS_Store
+**/.DS_Store
