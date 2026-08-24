@@ -25,11 +25,13 @@ import re
 import tempfile
 import time
 
-from .blend import BlendFile
+from .blend import BlendFile, reduce_members
 from .config import Config
 from .encode import encode_frame
 from .knmi import KnmiClient, RateLimited
+from .points import PERCENTILES, PointExtractor, summarise
 from .radar import RadarFile, valid_time_from_filename
+from .temperature import ATTRIBUTION as TEMPERATURE_ATTRIBUTION, TemperatureSource
 from .raster import MercatorResampler, StereographicResampler, TargetGrid
 
 log = logging.getLogger('ingestor')
@@ -70,7 +72,7 @@ def write_atomic(directory: str, name: str, payload: bytes) -> None:
 # ------------------------------------------------------------------ forecast
 
 
-def build_forecast(path: str, config: Config):
+def build_forecast(path: str, config: Config, temperature=None):
     """Decode one forecast cycle into frames. Returns (frames, meta, grid)."""
     with BlendFile(path) as source:
         resampler = MercatorResampler(
@@ -82,11 +84,17 @@ def build_forecast(path: str, config: Config):
             resampler.width, resampler.height,
         )
 
+        extractor = PointExtractor(config.widget_locations, source.lat, source.lon)
+
         nowcast_until = source.reference_time + config.nowcast_minutes * 60
         frames = []
         written = 0
         for index, valid_time in enumerate(source.valid_times):
-            field = resampler(source.field(index, config.ensemble_stat))
+            # One read serves both outputs: the reduced field for the map and,
+            # while the members are still in memory, the point samples.
+            members = source.members(index)
+            extractor.observe(valid_time, members)
+            field = resampler(reduce_members(members, config.ensemble_stat))
             payload = encode_frame(field, config.max_precip)
             name = forecast_frame_name(source.reference_time, valid_time)
             write_atomic(config.frame_dir, name, payload)
@@ -100,11 +108,62 @@ def build_forecast(path: str, config: Config):
         log.info('forecast %s: wrote %d frames, %.1f MiB',
                  source.reference_time, len(frames), written / 1024 / 1024)
 
+        publish_points(config, source, extractor, temperature)
+
         meta = {
             'reference_time': source.reference_time,
             'product': f'{config.ensemble_stat} of {source.member_count} ensemble members',
+            'points': [location.name for location in extractor.locations],
         }
         return frames, meta, resampler.target
+
+
+def point_file_name(name: str) -> str:
+    return f'point_{name}.json'
+
+
+def publish_points(config: Config, source, extractor: PointExtractor,
+                   temperature=None) -> None:
+    """Write one point forecast per configured location."""
+    if not extractor:
+        return
+
+    for index, location in enumerate(extractor.locations):
+        series = extractor.series_for(index)
+        document = {
+            'generated_at': int(time.time()),
+            'reference_time': source.reference_time,
+            'location': {'name': location.name, 'lat': location.lat, 'lon': location.lon},
+            'precipitation': {
+                'unit': 'mm/h',
+                'members': source.member_count,
+                'percentiles': list(PERCENTILES),
+                'series': series,
+            },
+            'summary': summarise(series, source.reference_time),
+            'source': {
+                'dataset': config.dataset,
+                'version': config.version,
+                'attribution': 'KNMI (CC BY 4.0)',
+            },
+        }
+
+        temperature_series = temperature.series_for(location) if temperature else None
+        if temperature_series:
+            document['temperature'] = {
+                'unit': 'C',
+                'step': 'hourly',
+                'percentiles': list(PERCENTILES),
+                'model': temperature.model,
+                'attribution': TEMPERATURE_ATTRIBUTION,
+                'series': temperature_series,
+            }
+        write_atomic(
+            config.frame_dir, point_file_name(location.name), json.dumps(document).encode()
+        )
+
+    log.info('point forecasts published for %s',
+             ', '.join(location.name for location in extractor.locations))
 
 
 # ------------------------------------------------------------------ observed
@@ -273,6 +332,7 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
             'observed': config.observed_dataset if config.history_minutes > 0 else None,
             'attribution': 'KNMI (CC BY 4.0)',
         },
+        'points': meta.get('points', []),
         'frames': frames,
     }
     write_atomic(config.frame_dir, MANIFEST_NAME, json.dumps(manifest).encode())
@@ -310,7 +370,13 @@ def seconds_until_next_publication(config: Config, state: State, now: float) -> 
     return remaining if remaining > 0 else config.poll_retry
 
 
-def run_once(client: KnmiClient, config: Config, state: State) -> None:
+def run_once(client: KnmiClient, config: Config, state: State, temperature=None,
+             check_forecast: bool = True) -> None:
+    # A radar-only notification means the forecast cannot have moved, so looking
+    # it up would spend a request to learn nothing.
+    if not check_forecast and state.grid is not None:
+        return update_observed(client, config, state)
+
     filename = client.latest_filename(config.dataset, config.version)
     if not filename:
         log.warning('dataset %s has no files', config.dataset)
@@ -322,13 +388,18 @@ def run_once(client: KnmiClient, config: Config, state: State) -> None:
             downloaded = client.download(
                 config.dataset, config.version, filename, os.path.join(scratch, filename)
             )
-            frames, meta, grid = build_forecast(downloaded, config)
+            frames, meta, grid = build_forecast(downloaded, config, temperature)
         state.last_forecast_file = filename
         state.forecast_frames, state.meta, state.grid = frames, meta, grid
         reconcile_grid(config, grid)
     elif state.grid is None:
         return  # nothing published yet and no new cycle to build one from
 
+    update_observed(client, config, state)
+
+
+def update_observed(client: KnmiClient, config: Config, state: State) -> None:
+    """Top up observed history and republish if the frame list changed."""
     reference_time = state.meta['reference_time']
     _, still_missing = fetch_observed(client, config, state.grid, reference_time)
     state.backfilling = still_missing > 0
@@ -380,16 +451,26 @@ def main() -> None:
     os.makedirs(config.frame_dir, exist_ok=True)
     client = KnmiClient(config.api_key)
     listener = build_listener(config)
+    temperature = TemperatureSource(
+        config.temperature_model, config.temperature_past_hours,
+        config.temperature_forecast_hours, config.temperature_refresh,
+    ) if config.widget_locations else None
 
     log.info('ingesting %s v%s into %s (history %d min from %s); discovery: %s',
              config.dataset, config.version, config.frame_dir,
              config.history_minutes, config.observed_dataset,
              'notification service' if listener else 'scheduled polling')
+    if config.widget_locations:
+        log.info('point forecasts for %s; temperature: %s',
+                 ', '.join(l.name for l in config.widget_locations),
+                 config.temperature_model or 'disabled')
 
     state = State()
+    continue_kwargs = {'check_forecast': True}
     while True:
         try:
-            run_once(client, config, state)
+            run_once(client, config, state, temperature, **continue_kwargs)
+            continue_kwargs = {'check_forecast': True}
             delay = seconds_until_next_publication(config, state, time.time())
         except RateLimited as exc:
             delay = max(config.poll_retry, exc.retry_after)
@@ -402,9 +483,14 @@ def main() -> None:
         # the subscription until KNMI announces a file. The timeout is only a
         # safety net against a connection that died without saying so.
         if listener is not None and not state.backfilling:
-            if not listener.wait(config.notification_idle_timeout):
+            announced = listener.wait(config.notification_idle_timeout)
+            if not announced:
                 log.warning('no notification for %ds; running a cycle anyway',
                             config.notification_idle_timeout)
+                check_forecast = True
+            else:
+                check_forecast = config.dataset in announced
+            continue_kwargs['check_forecast'] = check_forecast
             continue
 
         # Jitter so a restart loop does not resynchronise onto the same second.

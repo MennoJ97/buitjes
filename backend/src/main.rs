@@ -41,6 +41,7 @@ async fn main() {
         .route("/healthz", get(healthz))
         .route("/api/config", get(serve_manifest))
         .route("/api/frames/:file", get(serve_frame))
+        .route("/api/point/:name", get(serve_point))
         .fallback_service(ServeDir::new("frontend"))
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
@@ -180,9 +181,48 @@ async fn serve_frame(State(state): State<AppState>, Path(file): Path<String>) ->
     }
 }
 
+/// Point forecasts are published per configured location as `point_<name>.json`.
+fn is_valid_point_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// Per-location forecast for the homepage widget: a precipitation line with
+/// ensemble spread. Cached briefly — the underlying cycle only moves every
+/// 5 minutes, and the widget should not need to think about that.
+async fn serve_point(State(state): State<AppState>, Path(name): Path<String>) -> Response {
+    if !is_valid_point_name(&name) {
+        return (StatusCode::NOT_FOUND, "unknown location").into_response();
+    }
+
+    match tokio::fs::read(state.frame_dir.join(format!("point_{name}.json"))).await {
+        Ok(body) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "public, max-age=120"),
+            ],
+            body,
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            br#"{"error":"no forecast published for that location"}"#.to_vec(),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_valid_frame_name;
+    use super::{is_valid_frame_name, is_valid_point_name};
 
     #[test]
     fn accepts_generated_names() {
@@ -209,6 +249,20 @@ mod tests {
             "o_../x.webp",
         ] {
             assert!(!is_valid_frame_name(name), "should reject {name}");
+        }
+    }
+
+    #[test]
+    fn accepts_point_names() {
+        for name in ["home", "den-haag", "office_2"] {
+            assert!(is_valid_point_name(name), "should accept {name}");
+        }
+    }
+
+    #[test]
+    fn rejects_point_name_traversal() {
+        for name in ["", "../manifest", "Home", "a/b", "a.json", "x".repeat(33).as_str()] {
+            assert!(!is_valid_point_name(name), "should reject {name:?}");
         }
     }
 }

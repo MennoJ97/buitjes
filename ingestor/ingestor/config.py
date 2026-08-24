@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from .points import parse_locations
+
 
 def _float_list(raw: str):
     parts = [p.strip() for p in raw.split(',')]
@@ -36,6 +38,11 @@ class Config:
     observed_version: str
     history_minutes: int
     observed_max_fetch: int
+    widget_locations: tuple
+    temperature_model: str
+    temperature_past_hours: int
+    temperature_forecast_hours: int
+    temperature_refresh: int
 
     @classmethod
     def from_env(cls) -> 'Config':
@@ -91,4 +98,16 @@ class Config:
             # Backfill is deliberately slow: resolving a download URL costs an API
             # call each, and KNMI rate-limits well below a dozen calls in a row.
             observed_max_fetch=int(os.environ.get('OBSERVED_MAX_FETCH_PER_CYCLE', '3')),
+            # Locations to publish a point forecast for, as "name:lat:lon"
+            # separated by semicolons. These are the only points that get
+            # ensemble spread; see ingestor/points.py for why.
+            widget_locations=tuple(parse_locations(os.environ.get('WIDGET_LOCATIONS', ''))),
+            # Temperature comes from Open-Meteo's ensemble endpoint, so it gets
+            # a spread like precipitation does. Set empty to omit temperature.
+            temperature_model=os.environ.get('TEMPERATURE_MODEL', 'icon_seamless').strip(),
+            temperature_past_hours=int(os.environ.get('TEMPERATURE_PAST_HOURS', '2')),
+            temperature_forecast_hours=int(os.environ.get('TEMPERATURE_FORECAST_HOURS', '8')),
+            # Temperature is hourly and slow-moving; no need to refetch it on
+            # every 5-minute precipitation cycle.
+            temperature_refresh=int(os.environ.get('TEMPERATURE_REFRESH_MINUTES', '30')) * 60,
         )

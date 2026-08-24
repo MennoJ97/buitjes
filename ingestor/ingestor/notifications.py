@@ -27,6 +27,12 @@ log = logging.getLogger(__name__)
 
 TOPIC_TEMPLATE = 'dataplatform/file/v1/{dataset}/{version}/created'
 
+
+def _dataset_from_topic(topic: str) -> str | None:
+    """dataplatform/file/v1/<dataset>/<version>/created -> <dataset>."""
+    parts = topic.split('/')
+    return parts[3] if len(parts) > 3 else None
+
 #: The broker identifies a session by client id, so it must be stable across
 #: restarts for queued messages to be replayed, and unique per client.
 CLIENT_ID_FILE = 'mqtt-client-id'
@@ -63,6 +69,8 @@ class NotificationListener:
         self._host = host
         self._port = port
         self._signal = threading.Event()
+        self._lock = threading.Lock()
+        self._announced: set[str] = set()
 
         self._client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -87,9 +95,15 @@ class NotificationListener:
             log.info('subscribed to %s', topic)
 
     def _on_message(self, client, userdata, message):
-        # Deliberately does no work and parses nothing: the handler must return
-        # promptly so it does not hold up the broker's QoS acknowledgements.
+        # Deliberately does no work and parses no payload: the handler must
+        # return promptly so it does not hold up the broker's QoS
+        # acknowledgements. The topic alone says which dataset moved, which is
+        # enough to avoid re-checking the other one.
         log.info('notification on %s', message.topic)
+        dataset = _dataset_from_topic(message.topic)
+        if dataset:
+            with self._lock:
+                self._announced.add(dataset)
         self._signal.set()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
@@ -106,11 +120,18 @@ class NotificationListener:
         )
         self._client.loop_start()
 
-    def wait(self, timeout: float) -> bool:
-        """Block until a file is announced. False if the timeout ran out first."""
-        got_one = self._signal.wait(timeout)
+    def wait(self, timeout: float) -> set[str]:
+        """Block until a file is announced.
+
+        Returns the set of dataset names announced since the last call, so the
+        caller can look up only what actually moved. An empty set means the
+        timeout expired with nothing published.
+        """
+        self._signal.wait(timeout)
         self._signal.clear()
-        return got_one
+        with self._lock:
+            announced, self._announced = self._announced, set()
+        return announced
 
     def stop(self) -> None:
         self._client.loop_stop()

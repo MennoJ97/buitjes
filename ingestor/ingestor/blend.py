@@ -71,10 +71,22 @@ class BlendFile:
     def __len__(self):
         return len(self.valid_times)
 
-    def field(self, index: int, stat: str = 'median'):
-        """Rain rate in mm/h at one timestep, reduced across ensemble members."""
+    def members(self, index: int):
+        """Every member's rain rate in mm/h at one timestep, as (member, lat, lon).
+
+        This is the expensive read (~24 MiB), so callers that need both the map
+        field and point samples should take this once and derive both from it.
+        """
         raw = self._variable[:, index, :, :]
         if self._fill is not None:
             raw = np.where(raw == self._fill, 0, raw)
-        values = raw.astype(np.float32) * self._scale + self._offset
-        return _REDUCERS[stat](values)
+        return raw.astype(np.float32) * self._scale + self._offset
+
+    def field(self, index: int, stat: str = 'median'):
+        """Rain rate in mm/h at one timestep, reduced across ensemble members."""
+        return reduce_members(self.members(index), stat)
+
+
+def reduce_members(values, stat: str = 'median'):
+    """Collapse a (member, ...) array to a single field."""
+    return _REDUCERS[stat](values)
