@@ -8,3 +8,6 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
 serde_json = "1.0"
+# Only used to fetch conditions for arbitrary coordinates on demand.
+# rustls rather than the system OpenSSL so the runtime image stays slim.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

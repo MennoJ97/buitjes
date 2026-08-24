@@ -108,7 +108,7 @@ class Config:
             conditions_model=os.environ.get('CONDITIONS_MODEL',
                                             os.environ.get('TEMPERATURE_MODEL', 'icon_seamless')).strip(),
             conditions_past_hours=int(os.environ.get('CONDITIONS_PAST_HOURS', '3')),
-            conditions_forecast_hours=int(os.environ.get('CONDITIONS_FORECAST_HOURS', '12')),
+            conditions_forecast_hours=int(os.environ.get('CONDITIONS_FORECAST_HOURS', '48')),
             # Temperature is hourly and slow-moving; no need to refetch it on
             # every 5-minute precipitation cycle.
             conditions_refresh=int(os.environ.get('CONDITIONS_REFRESH_MINUTES', '30')) * 60,

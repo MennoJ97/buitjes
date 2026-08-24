@@ -30,6 +30,7 @@
                 <span>Location</span>
                 <select id="location-select"></select>
             </label>
+            <p class="coords"><span id="location-coords">—</span></p>
             <p class="ref-time"><span class="ref-time-label">Updated</span> <time id="ref-time">--:--</time></p>
             <a class="link-button" href="index.html">Back to map</a>
         </div>
@@ -47,9 +48,7 @@
                 <span class="chart-meta" id="rain-meta"></span>
             </div>
             <div class="chart" id="chart-rain"></div>
-            <p class="chart-note">Median of the KNMI ensemble, with the shaded
-               bands showing where 50% and 80% of members fall. A wide band means
-               the members disagree.</p>
+            <p class="chart-note" id="rain-note">KNMI ensemble · 5-minute steps</p>
         </section>
 
         <section class="chart-card">
@@ -58,8 +57,16 @@
                 <span class="chart-meta" id="prob-meta"></span>
             </div>
             <div class="chart" id="chart-probability"></div>
-            <p class="chart-note">The share of ensemble members with any rain at
-               each step — the question a median alone cannot answer.</p>
+            <p class="chart-note">Share of members with rain</p>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Rain outlook</h2>
+                <span class="chart-meta" id="outlook-meta"></span>
+            </div>
+            <div class="chart" id="chart-outlook"></div>
+            <p class="chart-note">Beyond KNMI's 6 hours · hourly · separate model</p>
         </section>
 
         <section class="chart-card">

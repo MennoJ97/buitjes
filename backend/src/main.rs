@@ -8,7 +8,9 @@ use axum::{
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
@@ -26,6 +28,110 @@ struct AppState {
     max_manifest_age: u64,
     api_keys: Arc<Vec<String>>,
     protected_prefixes: Arc<Vec<String>>,
+    conditions: ConditionsProxy,
+}
+
+/// On-demand conditions for coordinates nobody configured in advance.
+///
+/// Point forecasts are precomputed per configured location, but the map lets
+/// you click anywhere, and a coordinate should give a real forecast rather than
+/// silently snapping to the nearest sampled point. Temperature, wind, solar and
+/// the rain outlook all come from Open-Meteo, which accepts any coordinate — so
+/// this fetches them when asked.
+///
+/// It stays a deliberately narrow proxy: the URL and parameter set are fixed
+/// here and only the two coordinates come from the caller, so it cannot be used
+/// to fetch anything else. Responses are cached per rounded coordinate, which
+/// both spares Open-Meteo and keeps a page reload instant.
+#[derive(Clone)]
+struct ConditionsProxy {
+    client: reqwest::Client,
+    model: String,
+    past_hours: u32,
+    forecast_hours: u32,
+    cache: Arc<Mutex<HashMap<(i32, i32), (Instant, Arc<Vec<u8>>)>>>,
+    ttl: Duration,
+}
+
+const OPEN_METEO_ENDPOINT: &str = "https://ensemble-api.open-meteo.com/v1/ensemble";
+const OPEN_METEO_VARIABLES: &str =
+    "temperature_2m,wind_speed_10m,shortwave_radiation,precipitation";
+
+impl ConditionsProxy {
+    fn from_env() -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .unwrap_or_default(),
+            model: std::env::var("CONDITIONS_MODEL")
+                .unwrap_or_else(|_| "icon_seamless".to_string()),
+            past_hours: env_number("CONDITIONS_PAST_HOURS", 3),
+            forecast_hours: env_number("CONDITIONS_FORECAST_HOURS", 48),
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            ttl: Duration::from_secs(60 * env_number("CONDITIONS_REFRESH_MINUTES", 30) as u64),
+        }
+    }
+
+    /// Cache key: hundredths of a degree, about a kilometre. Finer than that is
+    /// below the resolution of the model being asked.
+    fn key(latitude: f64, longitude: f64) -> (i32, i32) {
+        ((latitude * 100.0).round() as i32, (longitude * 100.0).round() as i32)
+    }
+
+    fn cached(&self, key: (i32, i32)) -> Option<Arc<Vec<u8>>> {
+        let cache = self.cache.lock().ok()?;
+        let (stored, body) = cache.get(&key)?;
+        (stored.elapsed() < self.ttl).then(|| Arc::clone(body))
+    }
+
+    async fn fetch(&self, latitude: f64, longitude: f64) -> Result<Arc<Vec<u8>>, String> {
+        let key = Self::key(latitude, longitude);
+        if let Some(body) = self.cached(key) {
+            return Ok(body);
+        }
+
+        let response = self
+            .client
+            .get(OPEN_METEO_ENDPOINT)
+            .query(&[
+                ("latitude", latitude.to_string()),
+                ("longitude", longitude.to_string()),
+                ("hourly", OPEN_METEO_VARIABLES.to_string()),
+                ("models", self.model.clone()),
+                ("past_hours", self.past_hours.to_string()),
+                ("forecast_hours", self.forecast_hours.to_string()),
+                ("wind_speed_unit", "ms".to_string()),
+                ("timezone", "UTC".to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!("upstream returned {}", response.status()));
+        }
+
+        let body = Arc::new(
+            response
+                .bytes()
+                .await
+                .map_err(|error| error.to_string())?
+                .to_vec(),
+        );
+        if let Ok(mut cache) = self.cache.lock() {
+            // Bounded so a scripted sweep of coordinates cannot grow it forever.
+            if cache.len() > 512 {
+                cache.clear();
+            }
+            cache.insert(key, (Instant::now(), Arc::clone(&body)));
+        }
+        Ok(body)
+    }
+}
+
+fn env_number(name: &str, default: u32) -> u32 {
+    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 /// Paths the API key guards when `API_KEYS` is set.
@@ -171,6 +277,7 @@ async fn main() {
             "API_KEY_PROTECTED_PREFIXES",
             DEFAULT_PROTECTED_PREFIXES,
         )),
+        conditions: ConditionsProxy::from_env(),
     };
 
     if state.api_keys.is_empty() {
@@ -189,6 +296,7 @@ async fn main() {
         .route("/api/frames/:file", get(serve_frame))
         .route("/api/point/:name", get(serve_point))
         .route("/api/current/:name", get(serve_current))
+        .route("/api/conditions", get(serve_conditions))
         .fallback_service(ServeDir::new("frontend"))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -379,6 +487,61 @@ async fn serve_point_document(state: &AppState, name: &str, prefix: &str) -> Res
             br#"{"error":"no forecast published for that location"}"#.to_vec(),
         )
             .into_response(),
+    }
+}
+
+/// Conditions for any coordinate inside the served domain.
+///
+/// Returns Open-Meteo's ensemble response unchanged: the client already knows
+/// how to turn members into percentiles for the precomputed locations, so
+/// reducing it here would only duplicate that logic in a second language.
+async fn serve_conditions(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
+    let latitude = params.get("lat").and_then(|v| v.parse::<f64>().ok());
+    let longitude = params.get("lon").and_then(|v| v.parse::<f64>().ok());
+
+    let (Some(latitude), Some(longitude)) = (latitude, longitude) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            br#"{"error":"lat and lon are required"}"#.to_vec(),
+        )
+            .into_response();
+    };
+
+    if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            br#"{"error":"lat or lon is out of range"}"#.to_vec(),
+        )
+            .into_response();
+    }
+
+    match state.conditions.fetch(latitude, longitude).await {
+        Ok(body) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "public, max-age=600"),
+            ],
+            body.to_vec(),
+        )
+            .into_response(),
+        Err(error) => {
+            eprintln!("conditions fetch failed: {error}");
+            (
+                StatusCode::BAD_GATEWAY,
+                [
+                    (header::CONTENT_TYPE, "application/json"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                br#"{"error":"could not reach the conditions provider"}"#.to_vec(),
+            )
+                .into_response()
+        }
     }
 }
 

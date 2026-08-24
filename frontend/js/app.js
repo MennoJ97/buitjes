@@ -499,12 +499,22 @@ function updateInspectPopup() {
     });
 }
 
-/** Only offer the deeper page when a published location exists to open. */
+/**
+ * Link through to the full page for the published location nearest the click,
+ * naming it so it is obvious the graphs are for there and not for the exact
+ * pixel that was clicked.
+ */
 function trendLinkHtml() {
-    const names = store.manifest?.points ?? [];
-    if (!names.length) return '';
-    return `<a class="popup-link" href="forecast.html?location=${encodeURIComponent(names[0])}">` +
-           'Full forecast &amp; graphs &rarr;</a>';
+    const point = nearestPublishedLocation(inspectPoint);
+    if (!point) return '';
+    // Send the coordinate, not the resolved name: the URL then says what the
+    // reader actually asked about, and the page can explain which sampled
+    // location it settled on and how far away that is.
+    const query = inspectPoint
+        ? `lat=${inspectPoint.lat.toFixed(4)}&lon=${inspectPoint.lng.toFixed(4)}`
+        : `location=${encodeURIComponent(point.name)}`;
+    return `<a class="popup-link" href="forecast.html?${query}">` +
+           `Full forecast for ${point.name} &rarr;</a>`;
 }
 
 function drawSparkline(canvas, series) {
@@ -578,6 +588,35 @@ const TREND_CHARTS = [
 ];
 
 let trendPoint = null;
+let trendLocation = null;
+
+/**
+ * The published location closest to a map position.
+ *
+ * Ensemble spread only exists where the ingestor samples members, so a click on
+ * open water cannot have its own forecast. Picking the nearest published point
+ * and saying which one it is beats both a dead link and a fabricated band.
+ * Equirectangular distance is ample over a country-sized domain.
+ */
+function nearestPublishedLocation(lngLat) {
+    const points = store.manifest?.points ?? [];
+    if (!points.length) return null;
+    if (!lngLat) return points[0];
+
+    const latitudeScale = Math.cos((lngLat.lat * Math.PI) / 180);
+    let best = points[0];
+    let bestDistance = Infinity;
+    for (const point of points) {
+        const dx = (point.lon - lngLat.lng) * latitudeScale;
+        const dy = point.lat - lngLat.lat;
+        const distance = dx * dx + dy * dy;
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = point;
+        }
+    }
+    return best;
+}
 
 async function loadTrend(name) {
     const response = await fetch(`/api/point/${encodeURIComponent(name)}`, { cache: 'no-store' });
@@ -590,6 +629,7 @@ function renderTrend(document_) {
     el.trendTitle.textContent = document_.location.name;
     el.trendSub.textContent = document_.summary?.text ?? '';
     el.trendLink.href = `forecast.html?location=${encodeURIComponent(document_.location.name)}`;
+    el.trendSub.title = `${document_.location.lat.toFixed(4)}, ${document_.location.lon.toFixed(4)}`;
 
     el.trendBody.innerHTML = '';
     for (const config of TREND_CHARTS) {
@@ -614,9 +654,9 @@ function renderTrend(document_) {
     }
 }
 
-async function openTrend() {
-    const names = store.manifest?.points ?? [];
-    if (!names.length) {
+async function openTrend(lngLat = inspectPoint) {
+    const point = nearestPublishedLocation(lngLat);
+    if (!point) {
         el.trendBody.innerHTML =
             '<p class="chart-empty">No point forecasts are published. ' +
             'Set WIDGET_LOCATIONS on the server to add one.</p>';
@@ -626,9 +666,12 @@ async function openTrend() {
         return;
     }
     el.trendPanel.hidden = false;
+    if (trendLocation === point.name && trendPoint) return; // already showing it
     try {
-        renderTrend(await loadTrend(names[0]));
+        trendLocation = point.name;
+        renderTrend(await loadTrend(point.name));
     } catch (error) {
+        trendLocation = null;
         el.trendBody.innerHTML = `<p class="chart-empty">Could not load: ${error.message}</p>`;
     }
 }
@@ -636,6 +679,7 @@ async function openTrend() {
 function closeTrend() {
     el.trendPanel.hidden = true;
     el.trendToggle.checked = false;
+    trendLocation = null;
 }
 
 // ---------------------------------------------------------------- about
@@ -881,6 +925,7 @@ el.locateBtn.addEventListener('click', () => {
 map.on('click', (event) => {
     closePopovers();
     inspect(event.lngLat);
+    if (!el.trendPanel.hidden) openTrend(event.lngLat);
 });
 map.on('load', () => {
     if (store.manifest) setupRadarLayer();
