@@ -1,90 +1,214 @@
 use axum::{
+    extract::{Path, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
-    response::IntoResponse,
-    http::{header, StatusCode},
-    extract::Query,
 };
-use image::{ImageBuffer, Rgba, codecs::webp::WebPEncoder, ExtendedColorType, ImageEncoder};
-use tower_http::{services::ServeDir, cors::CorsLayer};
-use std::net::SocketAddr;
-use std::io::Cursor;
-use serde::Deserialize;
 use serde_json::json;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tower_http::{cors::CorsLayer, services::ServeDir};
+
+/// Frames and the manifest are produced by the ingestor sidecar and shared
+/// through a volume; this server only hands them out.
+const MANIFEST_NAME: &str = "manifest.json";
+
+/// How stale the manifest may get before /healthz starts failing. The ingestor
+/// publishes every ~5 minutes, so this tolerates a few missed cycles.
+const DEFAULT_MAX_MANIFEST_AGE: u64 = 1200;
+
+#[derive(Clone)]
+struct AppState {
+    frame_dir: PathBuf,
+    max_manifest_age: u64,
+}
 
 #[tokio::main]
 async fn main() {
+    let state = AppState {
+        frame_dir: PathBuf::from(
+            std::env::var("FRAME_DIR").unwrap_or_else(|_| "/data".to_string()),
+        ),
+        max_manifest_age: std::env::var("MAX_MANIFEST_AGE_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_MAX_MANIFEST_AGE),
+    };
+
     let app = Router::new()
-        .route("/api/radar.webp", get(serve_radar))
-        .route("/api/config", get(serve_config))
-        .nest_service("/", ServeDir::new("frontend"))
-        .layer(CorsLayer::permissive());
+        .route("/healthz", get(healthz))
+        .route("/api/config", get(serve_manifest))
+        .route("/api/frames/:file", get(serve_frame))
+        .fallback_service(ServeDir::new("frontend"))
+        .layer(CorsLayer::permissive())
+        .with_state(state.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    println!("Server running on http://{}", addr);
+    println!(
+        "Server running on http://{} (frames from {})",
+        addr,
+        state.frame_dir.display()
+    );
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn serve_config() -> impl IntoResponse {
-    // Mock: Generate timestamps for every 5 mins over the past hour
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    // Round to nearest 5 min (300 sec)
-    let current_step = now - (now % 300);
-    let mut timestamps = Vec::new();
-    for i in 0..12 {
-        timestamps.push(current_step - ((11 - i) * 300));
-    }
-    
-    axum::Json(json!({
-        "timestamps": timestamps
-    }))
+/// How old the newest forecast is, in seconds.
+///
+/// Deliberately measured from the manifest's `reference_time` rather than the
+/// file's mtime: the ingestor rewrites the manifest on every poll as observed
+/// history fills in, so mtime would stay fresh even if KNMI stopped publishing
+/// forecasts altogether — exactly the failure this is meant to catch.
+async fn forecast_age(state: &AppState) -> Option<u64> {
+    let raw = tokio::fs::read(state.frame_dir.join(MANIFEST_NAME)).await.ok()?;
+    let manifest: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let reference = manifest.get("reference_time")?.as_u64()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    Some(now.saturating_sub(reference))
 }
 
-#[derive(Deserialize)]
-struct RadarQuery {
-    t: Option<u64>,
-}
-
-async fn serve_radar(Query(query): Query<RadarQuery>) -> impl IntoResponse {
-    let width = 500;
-    let height = 500;
-    let mut img = ImageBuffer::new(width, height);
-
-    // Use requested timestamp or current time
-    let time = query.t.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
-    
-    // Animate mock data based on the timestamp (simulate movement)
-    let cx = width as f32 / 2.0 + ((time as f32) / 300.0 * 0.5).sin() * 150.0;
-    let cy = height as f32 / 2.0 + ((time as f32) / 300.0 * 0.5).cos() * 150.0;
-
-    for (x, y, pixel) in img.enumerate_pixels_mut() {
-        let dist = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
-        let precip = if dist < 150.0 {
-            (150.0 - dist) * 0.3 // mm/h up to 45
-        } else {
-            0.0
-        };
-
-        let max_precip = 100.0;
-        let normalized = (precip / max_precip).clamp(0.0, 1.0);
-        let val_16bit = (normalized * 65535.0) as u16;
-        
-        let r = (val_16bit >> 8) as u8;
-        let g = (val_16bit & 0xFF) as u8;
-        let b = 0;
-        let a = if precip > 0.1 { 255 } else { 0 };
-
-        *pixel = Rgba([r, g, b, a]);
-    }
-
-    let mut buffer = Cursor::new(Vec::new());
-    let encoder = WebPEncoder::new_lossless(&mut buffer);
-    encoder.write_image(img.as_raw(), width, height, ExtendedColorType::Rgba8).unwrap();
+/// Reports the freshness of the ingestor's output, so Traefik and the Docker
+/// healthcheck notice a poller that has died or lost its API key.
+async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
+    let age = forecast_age(&state).await;
+    let (status, ok, detail) = match age {
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "no manifest yet - the ingestor has not published a cycle",
+        ),
+        Some(seconds) if seconds > state.max_manifest_age => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "the newest forecast is stale - the ingestor is not keeping up",
+        ),
+        Some(_) => (StatusCode::OK, true, "ok"),
+    };
 
     (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/webp"), (header::CACHE_CONTROL, "public, max-age=31536000")],
-        buffer.into_inner(),
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(json!({
+            "status": if ok { "ok" } else { "degraded" },
+            "detail": detail,
+            "forecast_age_seconds": age,
+            "max_forecast_age_seconds": state.max_manifest_age,
+        })),
     )
+}
+
+async fn serve_manifest(State(state): State<AppState>) -> Response {
+    match tokio::fs::read(state.frame_dir.join(MANIFEST_NAME)).await {
+        Ok(body) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-cache"),
+            ],
+            body,
+        )
+            .into_response(),
+        // Normal for the first minute after startup: the ingestor has not
+        // finished its first cycle. Retry-After tells clients it is worth waiting.
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::RETRY_AFTER, "10"),
+            ],
+            br#"{"status":"warming_up","error":"no forecast has been published yet"}"#.to_vec(),
+        )
+            .into_response(),
+    }
+}
+
+/// Frame filenames are generated by the ingestor as `p_<reference>_<valid>.webp`
+/// for forecasts and `o_<valid>.webp` for observed radar. Validating against
+/// those shapes keeps the path join free of traversal tricks.
+fn is_valid_frame_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".webp") else {
+        return false;
+    };
+    let Some((prefix, rest)) = stem.split_once('_') else {
+        return false;
+    };
+    let is_number = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+
+    match prefix {
+        "p" => match rest.split_once('_') {
+            Some((reference, valid)) => is_number(reference) && is_number(valid),
+            None => false,
+        },
+        "o" => is_number(rest),
+        _ => false,
+    }
+}
+
+async fn serve_frame(State(state): State<AppState>, Path(file): Path<String>) -> impl IntoResponse {
+    if !is_valid_frame_name(&file) {
+        return (
+            StatusCode::NOT_FOUND,
+            [
+                (header::CONTENT_TYPE, "text/plain"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            Vec::new(),
+        );
+    }
+
+    match tokio::fs::read(state.frame_dir.join(&file)).await {
+        // The reference time is in the filename, so a given URL never changes.
+        Ok(body) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "image/webp"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            body,
+        ),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            [
+                (header::CONTENT_TYPE, "text/plain"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            Vec::new(),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_frame_name;
+
+    #[test]
+    fn accepts_generated_names() {
+        assert!(is_valid_frame_name("p_1787583900_1787584200.webp"));
+        assert!(is_valid_frame_name("o_1787584200.webp"));
+    }
+
+    #[test]
+    fn rejects_traversal_and_junk() {
+        for name in [
+            "../manifest.json",
+            "p_1_2.webp/../../etc/passwd",
+            "/etc/passwd",
+            "manifest.json",
+            "grid.json",
+            "p_abc_123.webp",
+            "p_123.webp",
+            "p__123.webp",
+            "x_1_2.webp",
+            "p_1_2.png",
+            "o_.webp",
+            "o_abc.webp",
+            "o_1_2.webp",
+            "o_../x.webp",
+        ] {
+            assert!(!is_valid_frame_name(name), "should reject {name}");
+        }
+    }
 }

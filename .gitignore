@@ -1,3 +1,33 @@
+# Secrets: holds the KNMI Open Data and Notification Service API keys.
+# .env.example is the committed template.
 .env
+.env.local
+.env.*.local
+
+# Rust build output
 backend/target/
 
+# Python (ingestor)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Downloaded KNMI source data - a single forecast cycle is ~30 MB.
+# The ingestor writes these to a scratch dir, but keep them out by accident too.
+*.h5
+*.nc
+
+# Ingestor output: frames live in a docker volume, never in the repo.
+frames/
+manifest.json
+grid.json
+mqtt-client-id
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Vendored library sourcemaps (the libraries themselves are committed)
+frontend/vendor/**/*.map

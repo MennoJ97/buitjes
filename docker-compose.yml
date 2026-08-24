@@ -1,16 +1,35 @@
-
-
 services:
+  ingestor:
+    build:
+      context: .
+      dockerfile: ingestor/Dockerfile
+    container_name: stratus-ingestor
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      FRAME_DIR: /data
+    volumes:
+      - frames:/data
+    networks:
+      - default
+
   weather-app:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: nimbus-weather-app
+    container_name: stratus-weather-app
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      FRAME_DIR: /data
     volumes:
-      - ./frontend:/app/frontend # Mount frontend so it can be edited without rebuilding the container
+      # Read-only: the ingestor owns this directory, the server only serves it.
+      - frames:/data:ro
+    depends_on:
+      - ingestor
+    # The frontend is baked into the image; no bind mount in production.
+    # For local development use:
+    #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
     ports:
       - "3000:3000"
     labels:
@@ -22,7 +41,12 @@ services:
       - "traefik.http.services.weatherapp.loadbalancer.server.port=3000"
     networks:
       - proxy
+      - default
+
+volumes:
+  frames:
 
 networks:
   proxy:
     external: true
+  default: {}

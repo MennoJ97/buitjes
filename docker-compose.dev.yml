@@ -1,0 +1,11 @@
+# Local development overlay. Bind-mounts the frontend over the copy baked into
+# the image so edits are picked up on reload without rebuilding.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Deliberately NOT named docker-compose.override.yml: that filename is applied
+# automatically, which would silently re-enable the bind mount on the server.
+services:
+  weather-app:
+    volumes:
+      - ./frontend:/app/frontend:ro
