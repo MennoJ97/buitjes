@@ -1,0 +1,283 @@
+/**
+ * The standalone forecast page: every published series for one location, drawn
+ * with its ensemble spread.
+ *
+ * Reads `/api/point/<name>` — one document holding precipitation and the
+ * Open-Meteo conditions — plus `/api/config` for the list of locations the
+ * ingestor publishes.
+ */
+
+import { renderBandChart } from './chart.js';
+import { colorForRate } from './ramp.js';
+
+const $ = (id) => document.getElementById(id);
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const WET_THRESHOLD_MM_H = 0.1;
+
+/** Which document key goes in which card, and how it should look. */
+const CHARTS = [
+    {
+        key: 'precipitation', container: 'chart-rain', meta: 'rain-meta',
+        colour: '#3b82f6', zeroFloor: true, minSpan: 1,
+        format: (value) => (value >= 10 ? value.toFixed(0) : value.toFixed(1)),
+    },
+    {
+        key: 'temperature', container: 'chart-temperature', meta: 'temp-meta',
+        colour: '#f97316', zeroFloor: false, minSpan: 4, format: (value) => value.toFixed(0),
+    },
+    {
+        key: 'wind', container: 'chart-wind', meta: 'wind-meta',
+        colour: '#22c55e', zeroFloor: true, minSpan: 4, format: (value) => value.toFixed(0),
+    },
+    {
+        key: 'solar', container: 'chart-solar', meta: 'solar-meta',
+        colour: '#eab308', zeroFloor: true, minSpan: 100, format: (value) => value.toFixed(0),
+    },
+];
+
+let currentDocument = null;
+
+function showBanner(message, retryable, tone = 'warn') {
+    $('banner-text').textContent = message;
+    $('banner-retry').hidden = !retryable;
+    $('banner').classList.toggle('banner--info', tone === 'info');
+    $('banner').hidden = false;
+}
+
+const hideBanner = () => { $('banner').hidden = true; };
+
+function locationFromUrl() {
+    return new URLSearchParams(location.search).get('location');
+}
+
+async function loadLocations() {
+    const response = await fetch('/api/config', { cache: 'no-store' });
+    if (!response.ok) return [];
+    const manifest = await response.json();
+    return manifest.points ?? [];
+}
+
+async function loadPoint(name) {
+    const response = await fetch(`/api/point/${encodeURIComponent(name)}`, { cache: 'no-store' });
+    if (response.status === 401) throw new Error('this server requires an API key for point forecasts');
+    if (response.status === 404) throw new Error(`no forecast is published for "${name}"`);
+    if (!response.ok) throw new Error(`server returned ${response.status}`);
+    return response.json();
+}
+
+function render(document_) {
+    currentDocument = document_;
+    const reference = document_.reference_time;
+
+    $('ref-time').textContent = new Date(reference * 1000)
+        .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    $('summary-text').textContent = document_.summary?.text ?? '';
+
+    renderSummaryStats(document_);
+
+    for (const config of CHARTS) {
+        const block = document_[config.key];
+        const container = $(config.container);
+        const meta = $(config.meta);
+        if (!block) {
+            container.innerHTML = '<p class="chart-empty">Not published for this location.</p>';
+            meta.textContent = '';
+            continue;
+        }
+        meta.textContent = describeRange(block);
+        renderBandChart(container, block.series, {
+            unit: block.unit,
+            colour: config.colour,
+            zeroFloor: config.zeroFloor,
+            minSpan: config.minSpan,
+            formatValue: config.format,
+            now: reference,
+        });
+    }
+
+    renderProbability(document_, reference);
+
+    const source = document_.source ?? {};
+    const conditions = document_.conditions_source ?? {};
+    $('forecast-foot').textContent = [
+        `Precipitation: ${source.attribution ?? 'KNMI'} — ${source.dataset ?? ''}`,
+        conditions.model ? `Conditions: ${conditions.attribution} — ${conditions.model}` : null,
+    ].filter(Boolean).join(' · ');
+}
+
+/** Min/max of the median line, which is what a glance at a card wants. */
+function describeRange(block) {
+    const medians = block.series.map((entry) => entry.median);
+    const low = Math.min(...medians);
+    const high = Math.max(...medians);
+    const round = (value) => (Math.abs(value) >= 10 ? Math.round(value) : Math.round(value * 10) / 10);
+    return `${round(low)}–${round(high)} ${block.unit}`;
+}
+
+function renderSummaryStats(document_) {
+    const stats = $('summary-stats');
+    stats.innerHTML = '';
+
+    const rain = document_.precipitation?.series ?? [];
+    const peak = rain.length ? Math.max(...rain.map((entry) => entry.median)) : 0;
+    // 5-minute steps, so a rate in mm/h contributes a twelfth of an hour.
+    const total = rain.reduce((sum, entry) => sum + entry.median / 12, 0);
+    const wettest = rain.reduce(
+        (best, entry) => (entry.probability > (best?.probability ?? -1) ? entry : best),
+        null
+    );
+
+    const items = [
+        ['Peak rate', `${peak.toFixed(1)} mm/h`],
+        ['Total expected', `${total.toFixed(1)} mm`],
+        ['Highest chance', wettest ? `${Math.round(wettest.probability * 100)}%` : '—'],
+    ];
+    for (const key of ['temperature', 'wind', 'solar']) {
+        const block = document_[key];
+        if (!block?.series?.length) continue;
+        const medians = block.series.map((entry) => entry.median);
+        items.push([
+            key === 'solar' ? 'Peak solar' : key === 'wind' ? 'Peak wind' : 'Max temp',
+            `${Math.max(...medians)} ${block.unit}`,
+        ]);
+    }
+
+    for (const [label, value] of items) {
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const definition = document.createElement('dd');
+        definition.textContent = value;
+        stats.append(term, definition);
+    }
+}
+
+/**
+ * Probability has no percentiles — it is already a summary across members — so
+ * it is drawn as bars coloured by the rate they accompany rather than a band.
+ */
+function renderProbability(document_, reference) {
+    const container = $('chart-probability');
+    const series = document_.precipitation?.series ?? [];
+    container.innerHTML = '';
+    if (!series.length) return;
+
+    const peak = Math.max(...series.map((entry) => entry.probability));
+    $('prob-meta').textContent = `peaks at ${Math.round(peak * 100)}%`;
+
+    const height = 150;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const width = Math.max(240, container.clientWidth || 480);
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', String(height));
+
+    const pad = { top: 10, right: 8, bottom: 22, left: 42 };
+    const plotWidth = width - pad.left - pad.right;
+    const plotHeight = height - pad.top - pad.bottom;
+    const barWidth = plotWidth / series.length;
+
+    for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
+        const y = pad.top + plotHeight - fraction * plotHeight;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', pad.left); line.setAttribute('x2', width - pad.right);
+        line.setAttribute('y1', y); line.setAttribute('y2', y);
+        line.setAttribute('class', 'chart-grid');
+        svg.appendChild(line);
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', pad.left - 6); label.setAttribute('y', y + 3);
+        label.setAttribute('class', 'chart-axis');
+        label.textContent = `${Math.round(fraction * 100)}%`;
+        svg.appendChild(label);
+    }
+
+    series.forEach((entry, index) => {
+        if (entry.probability <= 0) return;
+        const barHeight = entry.probability * plotHeight;
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', pad.left + index * barWidth);
+        rect.setAttribute('y', pad.top + plotHeight - barHeight);
+        rect.setAttribute('width', Math.max(1, barWidth - 1));
+        rect.setAttribute('height', barHeight);
+        // Colour by the rate those members are predicting, so a high chance of
+        // drizzle does not look like a high chance of a downpour.
+        rect.setAttribute('fill', colorForRate(Math.max(entry.median, WET_THRESHOLD_MM_H)));
+        svg.appendChild(rect);
+    });
+
+    if (reference > series[0].t && reference < series[series.length - 1].t) {
+        const span = series[series.length - 1].t - series[0].t;
+        const x = pad.left + ((reference - series[0].t) / span) * plotWidth;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x); line.setAttribute('x2', x);
+        line.setAttribute('y1', pad.top); line.setAttribute('y2', pad.top + plotHeight);
+        line.setAttribute('class', 'chart-now');
+        svg.appendChild(line);
+    }
+
+    container.appendChild(svg);
+}
+
+async function selectLocation(name) {
+    try {
+        render(await loadPoint(name));
+        hideBanner();
+        const url = new URL(window.location.href);
+        url.searchParams.set('location', name);
+        history.replaceState(null, '', url);
+    } catch (error) {
+        showBanner(`Could not load the forecast — ${error.message}`, true);
+    }
+}
+
+async function boot() {
+    const select = $('location-select');
+    let names = [];
+    try {
+        names = await loadLocations();
+    } catch {
+        // Fall through: an explicit ?location= may still work.
+    }
+
+    const requested = locationFromUrl();
+    if (!names.length && requested) names = [requested];
+
+    if (!names.length) {
+        showBanner(
+            'No point forecasts are published. Set WIDGET_LOCATIONS in the server .env to add one.',
+            false
+        );
+        return;
+    }
+
+    select.innerHTML = '';
+    for (const name of names) {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+    }
+    select.value = names.includes(requested) ? requested : names[0];
+    select.hidden = names.length < 2;
+
+    await selectLocation(select.value);
+    select.addEventListener('change', () => selectLocation(select.value));
+}
+
+$('banner-retry').addEventListener('click', () => {
+    hideBanner();
+    selectLocation($('location-select').value);
+});
+
+// Re-render on resize: the charts are laid out in pixels for the current width.
+let resizeHandle = null;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeHandle);
+    resizeHandle = setTimeout(() => currentDocument && render(currentDocument), 150);
+});
+
+setInterval(() => {
+    const name = $('location-select').value;
+    if (name) selectLocation(name);
+}, REFRESH_INTERVAL_MS);
+
+boot();

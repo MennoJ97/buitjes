@@ -1,6 +1,5 @@
 import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
-import { renderBandChart } from './chart.js';
 
 /** How each timeline zone is described in the UI. */
 const ZONES = {
@@ -72,13 +71,6 @@ const el = {
     opacityLabel: $('opacity-label'),
     basemapSelect: $('basemap-select'),
     aboutSource: $('about-source'),
-    trendPanel: $('trend-panel'),
-    trendToggle: $('trend-toggle'),
-    trendClose: $('trend-close'),
-    trendBody: $('trend-body'),
-    trendTitle: $('trend-title'),
-    trendSub: $('trend-sub'),
-    trendLink: $('trend-link'),
     glcanvas: $('glcanvas'),
 };
 
@@ -488,7 +480,6 @@ function updateInspectPopup() {
             </div>
             <canvas class="popup-spark" id="popup-spark" height="44"></canvas>
             <p class="popup-summary">${summarise(series, reference)}</p>
-            ${trendLinkHtml()}
         </div>
     `);
 
@@ -497,14 +488,6 @@ function updateInspectPopup() {
         const canvas = document.getElementById('popup-spark');
         if (canvas) drawSparkline(canvas, series);
     });
-}
-
-/** Only offer the deeper page when a published location exists to open. */
-function trendLinkHtml() {
-    const names = store.manifest?.points ?? [];
-    if (!names.length) return '';
-    return `<a class="popup-link" href="forecast.html?location=${encodeURIComponent(names[0])}">` +
-           'Full forecast &amp; graphs &rarr;</a>';
 }
 
 function drawSparkline(canvas, series) {
@@ -556,86 +539,6 @@ function summarise(series, reference) {
     const minutes = Math.round((onset.t - reference) / 60);
     const when = minutes < 90 ? `in ${minutes} min` : `at ${formatClock(onset.t)}`;
     return `Dry now — rain expected ${when} (${formatRate(onset.mmh)} mm/h).`;
-}
-
-// ---------------------------------------------------------------- trend panel
-
-/**
- * The same charts as the standalone page, docked over the map.
- *
- * Optional and off by default: it covers a chunk of the map, and the map's own
- * job is the spatial picture. It shows the nearest *published* location rather
- * than wherever you clicked — ensemble spread only exists for the locations the
- * ingestor samples, and inventing a band for an arbitrary pixel would be a lie.
- */
-const TREND_CHARTS = [
-    { key: 'precipitation', label: 'Rainfall', colour: '#3b82f6', zeroFloor: true, minSpan: 1,
-      format: (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1)) },
-    { key: 'temperature', label: 'Temperature', colour: '#f97316', zeroFloor: false, minSpan: 4,
-      format: (v) => v.toFixed(0) },
-    { key: 'wind', label: 'Wind', colour: '#22c55e', zeroFloor: true, minSpan: 4,
-      format: (v) => v.toFixed(0) },
-];
-
-let trendPoint = null;
-
-async function loadTrend(name) {
-    const response = await fetch(`/api/point/${encodeURIComponent(name)}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`server returned ${response.status}`);
-    return response.json();
-}
-
-function renderTrend(document_) {
-    trendPoint = document_;
-    el.trendTitle.textContent = document_.location.name;
-    el.trendSub.textContent = document_.summary?.text ?? '';
-    el.trendLink.href = `forecast.html?location=${encodeURIComponent(document_.location.name)}`;
-
-    el.trendBody.innerHTML = '';
-    for (const config of TREND_CHARTS) {
-        const block = document_[config.key];
-        if (!block) continue;
-        const wrapper = document.createElement('div');
-        wrapper.className = 'trend-chart';
-        const heading = document.createElement('h3');
-        heading.textContent = `${config.label} (${block.unit})`;
-        const chart = document.createElement('div');
-        chart.className = 'chart';
-        wrapper.append(heading, chart);
-        el.trendBody.appendChild(wrapper);
-        renderBandChart(chart, block.series, {
-            colour: config.colour,
-            zeroFloor: config.zeroFloor,
-            minSpan: config.minSpan,
-            formatValue: config.format,
-            height: 120,
-            now: document_.reference_time,
-        });
-    }
-}
-
-async function openTrend() {
-    const names = store.manifest?.points ?? [];
-    if (!names.length) {
-        el.trendBody.innerHTML =
-            '<p class="chart-empty">No point forecasts are published. ' +
-            'Set WIDGET_LOCATIONS on the server to add one.</p>';
-        el.trendTitle.textContent = 'Forecast trend';
-        el.trendSub.textContent = '';
-        el.trendPanel.hidden = false;
-        return;
-    }
-    el.trendPanel.hidden = false;
-    try {
-        renderTrend(await loadTrend(names[0]));
-    } catch (error) {
-        el.trendBody.innerHTML = `<p class="chart-empty">Could not load: ${error.message}</p>`;
-    }
-}
-
-function closeTrend() {
-    el.trendPanel.hidden = true;
-    el.trendToggle.checked = false;
 }
 
 // ---------------------------------------------------------------- about
@@ -778,7 +681,7 @@ function isHourBoundary(t) {
 // ---------------------------------------------------------------- events
 
 el.slider.addEventListener('input', (event) => {
-    showFrame(Number(event.target.value), { fromSlider: true });
+    showFrame(Number(event.target.value));
 });
 el.stepBack.addEventListener('click', () => step(-1));
 el.stepForward.addEventListener('click', () => step(1));
@@ -844,11 +747,6 @@ function setBasemap(name) {
 el.settingsBtn.addEventListener('click', () => togglePopover(el.settingsPopover, el.settingsBtn));
 el.infoBtn.addEventListener('click', () => (aboutIsOpen() ? closeAbout() : openAbout()));
 el.aboutClose.addEventListener('click', closeAbout);
-el.trendClose.addEventListener('click', closeTrend);
-el.trendToggle.addEventListener('change', () => {
-    if (el.trendToggle.checked) openTrend();
-    else closeTrend();
-});
 el.aboutBackdrop.addEventListener('click', closeAbout);
 
 el.collapseBtn.addEventListener('click', () => {

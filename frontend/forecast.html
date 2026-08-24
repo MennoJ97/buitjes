@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>Stratus — Forecast detail</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="page-forecast">
+    <div class="banner" id="banner" role="alert" hidden>
+        <svg class="banner-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 4l9 16H3z"/><path d="M12 10v4"/><path d="M12 17v.3"/>
+        </svg>
+        <span class="banner-spinner" aria-hidden="true"></span>
+        <span id="banner-text"></span>
+        <button type="button" id="banner-retry" class="banner-retry">Retry</button>
+    </div>
+
+    <header class="forecast-head">
+        <div class="brand">
+            <svg class="brand-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M7 18a4.5 4.5 0 0 1-.6-8.96 5.5 5.5 0 0 1 10.55-1.4A4.25 4.25 0 0 1 17.5 18z"/>
+            </svg>
+            <span class="brand-name">Stratus</span>
+            <span class="brand-tag">Forecast detail</span>
+        </div>
+        <div class="forecast-head-actions">
+            <label class="field-inline">
+                <span>Location</span>
+                <select id="location-select"></select>
+            </label>
+            <p class="ref-time"><span class="ref-time-label">Updated</span> <time id="ref-time">--:--</time></p>
+            <a class="link-button" href="index.html">Back to map</a>
+        </div>
+    </header>
+
+    <main class="forecast-main">
+        <section class="summary-card" id="summary-card">
+            <p class="summary-text" id="summary-text">Loading…</p>
+            <dl class="summary-stats" id="summary-stats"></dl>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Rainfall rate</h2>
+                <span class="chart-meta" id="rain-meta"></span>
+            </div>
+            <div class="chart" id="chart-rain"></div>
+            <p class="chart-note">Median of the KNMI ensemble, with the shaded
+               bands showing where 50% and 80% of members fall. A wide band means
+               the members disagree.</p>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Chance of rain</h2>
+                <span class="chart-meta" id="prob-meta"></span>
+            </div>
+            <div class="chart" id="chart-probability"></div>
+            <p class="chart-note">The share of ensemble members with any rain at
+               each step — the question a median alone cannot answer.</p>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Temperature</h2>
+                <span class="chart-meta" id="temp-meta"></span>
+            </div>
+            <div class="chart" id="chart-temperature"></div>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Wind speed</h2>
+                <span class="chart-meta" id="wind-meta"></span>
+            </div>
+            <div class="chart" id="chart-wind"></div>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Solar radiation</h2>
+                <span class="chart-meta" id="solar-meta"></span>
+            </div>
+            <div class="chart" id="chart-solar"></div>
+        </section>
+
+        <p class="forecast-foot" id="forecast-foot"></p>
+    </main>
+
+    <script type="module" src="js/forecast.js"></script>
+</body>
+</html>

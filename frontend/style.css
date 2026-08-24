@@ -738,3 +738,243 @@ body.theme-light {
     * { transition: none !important; }
     .banner--info .banner-spinner { animation: none; }
 }
+
+/* ------------------------------------------------------------ charts */
+
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; overflow: visible; }
+.chart-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
+.chart-now { stroke: #f8fafc; stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.7; }
+.chart-axis {
+    fill: var(--muted-dim);
+    font-size: 10px;
+    text-anchor: end;
+    font-variant-numeric: tabular-nums;
+}
+.chart-axis--time { text-anchor: middle; }
+.chart-unit {
+    position: absolute;
+    top: 0;
+    right: 0;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--muted-dim);
+}
+.chart-empty { margin: 24px 0; color: var(--muted-dim); font-size: 0.82rem; text-align: center; }
+
+/* ------------------------------------------------------- forecast page */
+
+body.page-forecast {
+    overflow: auto;
+    background:
+        radial-gradient(1100px 520px at 50% -10%, rgba(59, 130, 246, 0.10), transparent 70%),
+        var(--bg);
+    min-height: 100vh;
+}
+
+.forecast-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 18px clamp(14px, 4vw, 32px);
+    border-bottom: 1px solid var(--border);
+}
+.forecast-head .brand { text-shadow: none; }
+.brand-tag {
+    padding: 3px 9px;
+    border-radius: 20px;
+    background: var(--accent-strong);
+    color: #fff;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+.forecast-head-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+.field-inline { display: flex; align-items: center; gap: 8px; }
+.field-inline > span {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted-dim);
+}
+.field-inline select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+.field-inline select[hidden] { display: none; }
+
+.link-button {
+    padding: 7px 13px;
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    color: var(--text);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+.link-button:hover { background: rgba(255, 255, 255, 0.08); }
+
+.forecast-main {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 22px clamp(14px, 4vw, 32px) 60px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+    gap: 18px;
+}
+
+.summary-card,
+.chart-card {
+    background: var(--panel-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+}
+/* The headline reads as a sentence, so it gets the full width. */
+.summary-card { grid-column: 1 / -1; }
+.summary-text { margin: 0 0 14px; font-size: 1.15rem; font-weight: 600; line-height: 1.4; }
+
+.summary-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 30px;
+    margin: 0;
+}
+.summary-stats dt {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted-dim);
+}
+.summary-stats dd {
+    margin: 2px 0 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+/* Each stat is a dt/dd pair stacked into its own column. */
+.summary-stats dt { flex: 0 0 auto; }
+.summary-stats dd { flex: 0 0 auto; margin-right: 20px; }
+
+.chart-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.chart-head h2 { margin: 0; font-size: 0.9rem; font-weight: 700; }
+.chart-meta { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chart-note { margin: 10px 0 0; font-size: 0.75rem; line-height: 1.5; color: var(--muted-dim); }
+
+.forecast-foot {
+    grid-column: 1 / -1;
+    margin: 4px 0 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: 0.72rem;
+    color: var(--muted-dim);
+}
+
+@media (max-width: 760px) {
+    .forecast-main { grid-template-columns: 1fr; }
+    .summary-stats { gap: 8px 18px; }
+}
+
+/* ------------------------------------------------------- trend panel */
+
+/* Docked over the map, opposite the controls, and off by default: the map's
+   own job is the spatial picture, so the graphs are opt-in. */
+.trend-panel {
+    position: absolute;
+    top: 66px;
+    right: 16px;
+    z-index: 12;
+    width: min(360px, calc(100vw - 32px));
+    max-height: calc(100vh - 250px);
+    display: flex;
+    flex-direction: column;
+    padding: 14px 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5);
+    backdrop-filter: blur(18px) saturate(1.5);
+}
+.trend-panel[hidden] { display: none; }
+
+.trend-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.trend-head h2 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-transform: capitalize;
+}
+.trend-sub { margin: 3px 0 0; font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
+
+.trend-body { overflow-y: auto; }
+.trend-chart + .trend-chart { margin-top: 14px; }
+.trend-chart h3 {
+    margin: 0 0 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted-dim);
+}
+
+.trend-link {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    color: #7cb2ff;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+.trend-link:hover { text-decoration: underline; }
+
+.popup-link {
+    display: inline-block;
+    margin-top: 8px;
+    color: #7cb2ff;
+    font-size: 0.74rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+.popup-link:hover { text-decoration: underline; }
+
+.field--check { display: flex; align-items: center; gap: 9px; }
+.field--check input { width: 15px; height: 15px; accent-color: var(--accent-strong); }
+.field--check span { font-size: 0.8rem; color: var(--text); }
+
+@media (max-width: 900px) {
+    /* No room to dock beside the map; sit under the top bar instead. */
+    .trend-panel {
+        top: auto;
+        bottom: calc(100% - 100vh + 16px);
+        left: 16px;
+        right: 16px;
+        width: auto;
+        max-height: 44vh;
+    }
+}
