@@ -1,3 +1,20 @@
+# Stratus — the ingestor that publishes forecast frames, and the server that
+# hands them to a browser.
+#
+# This file is what runs in production. Everything host-specific comes from
+# `.env`, so the same file works on a laptop and on the server:
+#
+#   STRATUS_HOST          the hostname Traefik routes (weather.example.nl)
+#   STRATUS_MIDDLEWARES   the router's middleware chain, in order
+#
+# Local development, which adds the published port and bind-mounts the frontend:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# TLS is assumed to be configured on the `websecure` entrypoint (a wildcard cert
+# covering STRATUS_HOST). A Traefik that issues per-router certificates instead
+# needs `traefik.http.routers.weatherapp.tls.certresolver=<resolver>` added below.
+
 services:
   ingestor:
     build:
@@ -9,10 +26,28 @@ services:
       - .env
     environment:
       FRAME_DIR: /data
+      # Load-bearing, not cosmetic. Alert bodies say "starting around 14:05",
+      # and that clock comes from `datetime.fromtimestamp` — the container's
+      # local time. Without TZ the image is UTC, so every summer alert names a
+      # time two hours in the past and reads as a stale notification.
+      # A bind-mounted /etc/localtime would NOT fix this on its own.
+      TZ: ${TZ:-Europe/Amsterdam}
     volumes:
       - frames:/data
+    # One cycle holds all 20 members of a single 5-minute step at once
+    # (20 x 780 x 780 float32), then drops them; the arrays never stack up
+    # across steps. Measured peak for the container is ~330 MB including the
+    # page cache from the HDF5 reads, so this is roughly 1.5x headroom and not
+    # a target to run against.
+    mem_limit: 512m
     networks:
+      # `proxy` is here only so alerts can reach ntfy by container name
+      # (ALERT_WEBHOOK_URL=http://ntfy/<topic>). Going out to the public
+      # hostname instead would send the alert through the reverse proxy and
+      # its WAF, which inspects JSON bodies — a job that notifies itself into
+      # an IP ban is a bad way to learn it is raining.
       - default
+      - proxy
 
   weather-app:
     build:
@@ -22,10 +57,15 @@ services:
     restart: unless-stopped
     environment:
       FRAME_DIR: /data
+      TZ: ${TZ:-Europe/Amsterdam}
       # Comma-separated origins allowed to call the API cross-origin. Unset
-      # means same-origin only; the homepage widget's origin must be named.
+      # means same-origin only. A homepage widget that renders server-side —
+      # the dashboard fetching this container over the Docker network — makes
+      # no browser request here and needs nothing set.
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-      # Comma-separated keys for the widget endpoints. Empty leaves them open.
+      # Comma-separated keys for the widget endpoints. Empty leaves them open,
+      # which is the right answer when the router in front requires a login:
+      # the only clients that can reach the port are already trusted.
       API_KEYS: ${API_KEYS:-}
       API_KEY_PROTECTED_PREFIXES: ${API_KEY_PROTECTED_PREFIXES:-/api/point,/api/current}
     volumes:
@@ -33,17 +73,16 @@ services:
       - frames:/data:ro
     depends_on:
       - ingestor
-    # The frontend is baked into the image; no bind mount in production.
-    # For local development use:
-    #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
-    ports:
-      - "3000:3000"
+    # Serving files and slicing JSON. Measured peak is 16 MB; the limit is here
+    # so a leak shows up as a restart rather than as swap on a busy host.
+    mem_limit: 128m
+    # No published port: reaching this container should mean going through the
+    # proxy, where the middleware chain below applies. The dev overlay adds one.
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.weatherapp.rule=Host(`weather.yourdomain.com`)" # Adjust to your domain
+      - "traefik.http.routers.weatherapp.rule=Host(`${STRATUS_HOST:-weather.example.com}`)"
       - "traefik.http.routers.weatherapp.entrypoints=websecure"
       - "traefik.http.routers.weatherapp.tls=true"
-      - "traefik.http.routers.weatherapp.tls.certresolver=myresolver" # Change to your Traefik cert resolver
       - "traefik.http.services.weatherapp.loadbalancer.server.port=3000"
       # Rate limiting lives here rather than in the app: it runs before a
       # request reaches the container, and it protects the static frontend and
@@ -53,12 +92,17 @@ services:
       - "traefik.http.middlewares.weatherapp-ratelimit.ratelimit.average=20"
       - "traefik.http.middlewares.weatherapp-ratelimit.ratelimit.burst=120"
       - "traefik.http.middlewares.weatherapp-ratelimit.ratelimit.period=1s"
-      - "traefik.http.routers.weatherapp.middlewares=weatherapp-ratelimit@docker"
+      # Order matters and the list replaces rather than appends, so an auth
+      # middleware has to be named here explicitly — see .env.example.
+      - "traefik.http.routers.weatherapp.middlewares=${STRATUS_MIDDLEWARES:-weatherapp-ratelimit@docker}"
     networks:
       - proxy
       - default
 
 volumes:
+  # Deliberately a named volume rather than a directory under the backup root:
+  # every frame in here is re-fetched from KNMI within one cycle, and the point
+  # documents are rewritten each cycle too. Nothing in it is worth restoring.
   frames:
 
 networks:

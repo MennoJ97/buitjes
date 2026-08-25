@@ -232,10 +232,6 @@ async fn require_api_key(
     }
 }
 
-/// Cross-origin policy for the API.
-///
-/// The homepage widget is served from a different origin, so *some* CORS is
-/// required. `CORS_ALLOWED_ORIGINS` is a comma-separated allowlist; the literal
 /// The frontend, served so that a redeploy actually reaches open browsers.
 ///
 /// `ServeDir` alone sends only `Last-Modified`, which is not an instruction but
@@ -263,9 +259,18 @@ async fn revalidate(request: axum::extract::Request, next: axum::middleware::Nex
     response
 }
 
+/// Cross-origin policy for the API.
+///
+/// The homepage widget is served from a different origin, so *some* CORS is
+/// required. `CORS_ALLOWED_ORIGINS` is a comma-separated allowlist; the literal
 /// `*` keeps the old permissive behaviour for anyone who wants it. Unset means
 /// same-origin only, which is the right default for a server on the public
 /// internet — the widget's origin has to be named deliberately.
+///
+/// A widget that fetches server-side (a dashboard `custom-api` template asking
+/// `http://stratus-weather-app:3000` over the shared Docker network) is not a
+/// browser request at all, so it needs none of this. Leave the variable unset
+/// unless something in a page's JavaScript really does call the API.
 fn cors_layer() -> CorsLayer {
     let configured = std::env::var("CORS_ALLOWED_ORIGINS").unwrap_or_default();
     let configured = configured.trim();

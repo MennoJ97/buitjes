@@ -1,11 +1,18 @@
-# Local development overlay. Bind-mounts the frontend over the copy baked into
-# the image so edits are picked up on reload without rebuilding.
+# Local development overlay.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 #
 # Deliberately NOT named docker-compose.override.yml: that filename is applied
-# automatically, which would silently re-enable the bind mount on the server.
+# automatically, which would silently re-enable both of these on the server.
 services:
   weather-app:
+    # Bind-mounts the frontend over the copy baked into the image, so edits are
+    # picked up on reload without rebuilding.
     volumes:
       - ./frontend:/app/frontend:ro
+    # The published port lives here rather than in the production file: on the
+    # server the only way in should be through the proxy, where rate limiting
+    # and the auth middleware apply. Publishing 3000 would sit beside all of
+    # that on the LAN.
+    ports:
+      - "3000:3000"
