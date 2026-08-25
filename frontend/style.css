@@ -77,6 +77,51 @@ body {
     .hover-readout { display: none !important; }
 }
 
+/* ------------------------------------------- map controls and credits */
+
+/* MapLibre ships its controls styled for a light map: the attribution is a
+   solid white chip whose *text colour is inherited*, which on this page means
+   near-white on white. The chrome here stays dark whichever basemap is showing,
+   so the chip is restyled to match the panels rather than the map. */
+.maplibregl-ctrl-attrib,
+.maplibregl-ctrl-attrib.maplibregl-compact {
+    background: var(--panel-solid);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.maplibregl-ctrl-attrib a {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.maplibregl-ctrl-attrib a:hover { text-decoration: underline; }
+
+/* The ⓘ glyph is a dark SVG baked into a data URI, invisible on a dark chip.
+   Inverting the element flips the glyph; the background is cleared first so
+   only the mark is affected. */
+.maplibregl-ctrl-attrib-button {
+    background-color: transparent;
+    filter: invert(1);
+}
+
+.maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+/* The playback panel covers the bottom corners once it grows near the full
+   width of the window, hiding the zoom buttons and the credits behind it. The
+   lift is set per corner in app.js, and only when that corner is actually
+   covered — see updateControlClearance for why it is measured, not a
+   breakpoint. */
+.maplibregl-ctrl-bottom-right,
+.maplibregl-ctrl-bottom-left {
+    bottom: var(--corner-lift, 0px);
+    transition: bottom 120ms ease-out;
+}
+
 button { font: inherit; }
 
 /* ------------------------------------------------------------ surfaces */

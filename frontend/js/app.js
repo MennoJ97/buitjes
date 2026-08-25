@@ -1347,6 +1347,42 @@ window.addEventListener('resize', redrawLegend);
 new ResizeObserver(() => map.resize()).observe(document.getElementById('map'));
 new ResizeObserver(redrawLegend).observe(el.legendCanvas);
 
+/**
+ * Keep MapLibre's bottom controls clear of the playback panel — but only when
+ * they would actually collide.
+ *
+ * The panel is centred and up to 960px wide, so on a wide screen the bottom
+ * corners are free and the controls belong in them. It is only once the panel
+ * grows to nearly the full width that it starts covering the zoom buttons and
+ * the credits. Lifting them unconditionally strands them halfway up the side of
+ * the map, which looks like a mistake rather than a layout.
+ *
+ * So the overlap is measured rather than assumed, per corner: each is lifted
+ * only if the panel actually reaches it. Measuring also handles the panel
+ * changing height when it collapses or the legend rewraps, which no breakpoint
+ * could track.
+ */
+function updateControlClearance() {
+    const panel = el.panel.getBoundingClientRect();
+    const clearance = Math.round(window.innerHeight - panel.top + 8);
+
+    for (const corner of ['left', 'right']) {
+        const node = document.querySelector(`.maplibregl-ctrl-bottom-${corner}`);
+        if (!node) continue;
+        // Read the corner's own width with any previous lift removed, so the
+        // measurement never depends on the answer it is about to produce.
+        node.style.setProperty('--corner-lift', '0px');
+        const box = node.getBoundingClientRect();
+        const collides = box.width > 0 && panel.right > box.left && panel.left < box.right;
+        node.style.setProperty('--corner-lift', collides ? `${clearance}px` : '0px');
+    }
+}
+
+new ResizeObserver(updateControlClearance).observe(el.panel);
+window.addEventListener('resize', updateControlClearance);
+// The controls are created by MapLibre, so wait until they exist.
+requestAnimationFrame(updateControlClearance);
+
 updateSliderFill(el.speedSlider);
 updateSliderFill(el.opacitySlider);
 redrawLegend();
