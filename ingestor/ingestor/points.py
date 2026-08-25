@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 
@@ -124,29 +125,31 @@ def _round(value: float) -> float:
 
 
 def summarise(series: list[dict], reference_time: int) -> dict:
-    """A plain-language read of the series, for a widget with one line of room."""
+    """A plain-language read of the series, for a widget with one line of room.
+
+    Describes the *spell* — the contiguous run of wet steps — rather than the
+    moment it begins. The onset rate is by construction the instant the median
+    crosses the wet threshold, so it is always a small number whether what
+    follows is five minutes of drizzle or the leading edge of a downpour; the
+    peak, and how far ahead of the onset it sits, is what tells them apart.
+
+    The peak is taken from the current spell only. A second shower three hours
+    out is a different event and must not be quoted as this one's severity.
+
+    The structured fields carry the same facts as ``text``, so a caller with
+    less room than a sentence can compose its own line instead of parsing this
+    one.
+    """
     future = [entry for entry in series if entry['t'] >= reference_time]
     if not future:
         return {'raining_now': False, 'text': 'No forecast available.'}
 
-    raining_now = future[0]['median'] >= WET_THRESHOLD_MM_H
-    peak = max(future, key=lambda entry: entry['median'])
+    onset_index = next(
+        (i for i, entry in enumerate(future) if entry['median'] >= WET_THRESHOLD_MM_H),
+        None,
+    )
 
-    if raining_now:
-        clearing = next(
-            (entry for entry in future if entry['median'] < WET_THRESHOLD_MM_H), None
-        )
-        text = (f'Raining now, easing off around {_clock(clearing["t"])}.'
-                if clearing else 'Raining for the rest of the forecast.')
-        return {
-            'raining_now': True,
-            'stops_at': clearing['t'] if clearing else None,
-            'peak_mm_h': peak['median'],
-            'text': text,
-        }
-
-    onset = next((entry for entry in future if entry['median'] >= WET_THRESHOLD_MM_H), None)
-    if onset is None:
+    if onset_index is None:
         # Even with a dry median, the ensemble may still be hinting at rain.
         best_chance = max(future, key=lambda entry: entry['probability'])
         if best_chance['probability'] >= 0.3:
@@ -158,19 +161,79 @@ def summarise(series: list[dict], reference_time: int) -> dict:
             }
         return {'raining_now': False, 'starts_at': None, 'text': 'Staying dry.'}
 
-    minutes = round((onset['t'] - reference_time) / 60)
-    when = f'in {minutes} min' if minutes < 90 else f'at {_clock(onset["t"])}'
+    dry_after = next(
+        (i for i in range(onset_index + 1, len(future))
+         if future[i]['median'] < WET_THRESHOLD_MM_H),
+        None,
+    )
+    spell = future[onset_index:dry_after]
+    clearing = future[dry_after] if dry_after is not None else None
+
+    onset = spell[0]
+    peak = max(spell, key=lambda entry: entry['median'])
+    raining_now = onset_index == 0
+
+    # Only worth its own clause if it is meaningfully heavier than the start,
+    # otherwise it is the same number twice.
+    peak_matters = (
+        peak['t'] != onset['t']
+        and peak['median'] >= onset['median'] * 1.5 + 0.05
+    )
+
+    lead_minutes = round((onset['t'] - reference_time) / 60)
+    # Whether the sentence counts minutes from now or names clock times. Mixing
+    # the two makes "rain at 11:25, up to 4 mm/h within 30 min" ambiguous:
+    # thirty minutes from now, or from an onset two hours away?
+    relative = raining_now or lead_minutes < 90
+
+    if raining_now:
+        parts = [f'Raining now at {_rate(onset["median"])} mm/h']
+    else:
+        when = f'in {lead_minutes} min' if relative else f'at {_clock(onset["t"])}'
+        parts = [f'Dry now — rain {when}' if peak_matters
+                 else f'Dry now — rain {when} at {_rate(onset["median"])} mm/h']
+
+    if peak_matters:
+        climb = round((peak['t'] - onset['t']) / 60)
+        parts.append(
+            f'up to {_rate(peak["median"])} mm/h within {climb} min'
+            if relative and climb <= 30
+            else f'peaking {_rate(peak["median"])} mm/h around {_clock(peak["t"])}'
+        )
+
+    parts.append(
+        f'easing off around {_clock(clearing["t"])}' if clearing
+        else 'lasting past the end of the forecast'
+    )
+
     return {
-        'raining_now': False,
-        'starts_at': onset['t'],
+        'raining_now': raining_now,
+        'starts_at': None if raining_now else onset['t'],
+        'stops_at': clearing['t'] if clearing else None,
         'peak_mm_h': peak['median'],
-        'text': f'Dry now, rain expected {when}.',
+        'peak_at': peak['t'],
+        'text': ', '.join(parts) + '.',
     }
 
 
+def _rate(mmh: float) -> str:
+    """Match the frontend's rate formatting, so the two never disagree."""
+    if mmh >= 10:
+        return str(round(mmh))
+    text = f'{mmh:.1f}' if mmh >= 1 else f'{mmh:.2f}'
+    return text.rstrip('0').rstrip('.')
+
+
 def _clock(timestamp: int) -> str:
-    import time
-    return time.strftime('%H:%M', time.gmtime(timestamp)) + ' UTC'
+    """Local 24-hour time.
+
+    Was UTC, with the offset spelled out in the string — which was honest but
+    unhelpful: a reader in Amsterdam saw "12:35 UTC" for something happening at
+    half past two. Now that the container sets TZ (it has to, or the alert
+    bodies name the wrong hour), local time is both correct and what the rest
+    of the app shows.
+    """
+    return datetime.fromtimestamp(timestamp).strftime('%H:%M')
 
 
 def _value_at(series, when: int):
