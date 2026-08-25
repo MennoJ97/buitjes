@@ -195,6 +195,11 @@ private fun Provenance(snapshot: Snapshot?) {
             ?.let { formatAge(it.ageSeconds(now)) }
         val staleness = when {
             snapshot == null -> null
+            // Never fetched at all. `isStale` says true here — deliberately, so
+            // that alerting refuses to evaluate — but "last checked a while ago"
+            // would be claiming a check that never happened. The line above
+            // already says why there is nothing ("No server set up yet").
+            snapshot.fetchedAt <= 0L -> null
             snapshot.isStale(now) -> "Stale — last checked ${age ?: "a while ago"}"
             snapshot.problem != null -> "${snapshot.problem.text}; showing data from $age"
             else -> "Updated $age"
