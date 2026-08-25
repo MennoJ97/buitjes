@@ -25,11 +25,14 @@ const OSM_CREDIT =
 // The map's attribution control is the conventional home for credits, so the
 // inspiration is acknowledged there as well as in the About dialog.
 // MapLibre inserts its own separator between this and the basemap's own credit.
-// Only what the licences require. The tile credits come and go with the style,
-// so this is just the data: KNMI is CC BY 4.0, which asks to be named wherever
-// its data is shown. The nod to Nimbus is a courtesy rather than an obligation
-// and lives in the About dialog, where there is room to say why.
-const OWN_CREDIT = 'data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>';
+// What stays put whichever basemap is showing; the tile credits come and go
+// with the style. KNMI is CC BY 4.0 and has to be named wherever its data is
+// shown. The nod to Nimbus is a courtesy rather than an obligation — kept here
+// as well as in the About dialog because a credit nobody opens a dialog to find
+// is not much of a credit. It costs nothing now the chip starts collapsed.
+const OWN_CREDIT =
+    'data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>' +
+    ' | inspired by <a href="https://nimbus.yannick.cloud">Nimbus</a>';
 
 /**
  * The recolouring that turns OpenFreeMap's Dark into a style you can read rain
