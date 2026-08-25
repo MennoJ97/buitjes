@@ -112,15 +112,26 @@ body {
 }
 
 /* The playback panel covers the bottom corners once it grows near the full
-   width of the window, hiding the zoom buttons and the credits behind it. The
-   lift is set per corner in app.js, and only when that corner is actually
-   covered — see updateControlClearance for why it is measured, not a
-   breakpoint. */
+   width of the window, hiding the zoom buttons and the credits behind it.
+   app.js sets one of these two per corner, and only when that corner is
+   actually covered — see updateControlClearance for why it is measured rather
+   than set by breakpoint, and why wrapping is preferred to lifting. */
 .maplibregl-ctrl-bottom-right,
 .maplibregl-ctrl-bottom-left {
     bottom: var(--corner-lift, 0px);
     transition: bottom 120ms ease-out;
 }
+/* Wrapping the credits into the space beside the panel, rather than moving
+   them out of its way. MapLibre lays the open chip out on one line; this lets
+   it use as many as it needs. */
+.maplibregl-ctrl-attrib.maplibregl-compact-show {
+    /* border-box so the cap is the width the corner actually occupies. With
+       content-box the ⓘ button and the padding sit outside it, and the chip
+       overran the gap it was measured into by about 38px. */
+    box-sizing: border-box;
+    max-width: var(--attrib-max-width, none);
+}
+.maplibregl-ctrl-attrib-inner { white-space: normal; }
 
 button { font: inherit; }
 

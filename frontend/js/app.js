@@ -1522,20 +1522,34 @@ new ResizeObserver(() => map.resize()).observe(document.getElementById('map'));
 new ResizeObserver(redrawLegend).observe(el.legendCanvas);
 
 /**
- * Keep MapLibre's bottom controls clear of the playback panel — but only when
- * they would actually collide.
+ * Keep MapLibre's bottom controls clear of the playback panel.
  *
  * The panel is centred and up to 960px wide, so on a wide screen the bottom
  * corners are free and the controls belong in them. It is only once the panel
- * grows to nearly the full width that it starts covering the zoom buttons and
- * the credits. Lifting them unconditionally strands them halfway up the side of
- * the map, which looks like a mistake rather than a layout.
+ * grows towards the full width that it starts covering the zoom buttons and the
+ * credits.
  *
- * So the overlap is measured rather than assumed, per corner: each is lifted
- * only if the panel actually reaches it. Measuring also handles the panel
- * changing height when it collapses or the legend rewraps, which no breakpoint
- * could track.
+ * Two ways out, and the cheap one is preferred. Expanded, the credits want
+ * about 420px on one line, which fits beside the panel only on a very wide
+ * window — but they wrap perfectly well, exactly as they already do on a phone
+ * where the viewport forces it. So the first move is to cap their width to the
+ * gap beside the panel and let them use two or three lines. Nothing moves;
+ * the corner stays a corner.
+ *
+ * Lifting the whole corner is the fallback, for when that gap is too narrow to
+ * wrap into — a phone, where the panel really does span the window. Lifting
+ * unconditionally was the old behaviour and it is the worse one: at 1280 the
+ * credits jumped 176px up the side of the map to buy a line of text they did
+ * not need.
+ *
+ * Measured rather than set by breakpoint, because the panel changes height when
+ * it collapses or the legend rewraps, and the credits change width when a
+ * vector style's TileJSON finally loads. No breakpoint tracks either.
  */
+
+/** Below this a wrapped credit line is more hyphen than word, so lift instead. */
+const MIN_ATTRIB_WIDTH = 140;
+
 function updateControlClearance() {
     const panel = el.panel.getBoundingClientRect();
     const clearance = Math.round(window.innerHeight - panel.top + 8);
@@ -1543,12 +1557,26 @@ function updateControlClearance() {
     for (const corner of ['left', 'right']) {
         const node = document.querySelector(`.maplibregl-ctrl-bottom-${corner}`);
         if (!node) continue;
-        // Read the corner's own width with any previous lift removed, so the
-        // measurement never depends on the answer it is about to produce.
+
+        // Reset both before measuring, so the measurement never depends on the
+        // answer it is about to produce.
         node.style.setProperty('--corner-lift', '0px');
+        node.style.removeProperty('--attrib-max-width');
+
         const box = node.getBoundingClientRect();
         const collides = box.width > 0 && panel.right > box.left && panel.left < box.right;
-        node.style.setProperty('--corner-lift', collides ? `${clearance}px` : '0px');
+        if (!collides) continue;
+
+        // MapLibre gives its control containers a 10px margin, which is inside
+        // the gap but outside the chip's own box.
+        const gap = Math.round(
+            corner === 'right' ? window.innerWidth - panel.right : panel.left
+        ) - 16;
+        if (gap >= MIN_ATTRIB_WIDTH) {
+            node.style.setProperty('--attrib-max-width', `${gap}px`);
+        } else {
+            node.style.setProperty('--corner-lift', `${clearance}px`);
+        }
     }
 }
 
