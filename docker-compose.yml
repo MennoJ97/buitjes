@@ -79,8 +79,12 @@ services:
       - frames:/data:ro
     depends_on:
       - ingestor
-    # Serving files and slicing JSON. Measured peak is 16 MB; the limit is here
-    # so a leak shows up as a restart rather than as swap on a busy host.
+    # Serving files and slicing JSON, plus decoding a cycle of frames whenever
+    # someone asks for a point the ingestor did not precompute. That decoding
+    # is what moved the measured plateau from 16 MB to ~48 under a sweep of 150
+    # distinct coordinates: frames are decoded one at a time and dropped, but
+    # the allocator keeps the arenas. The limit is here so a real leak shows up
+    # as a restart rather than as swap on a busy host — leave the headroom.
     mem_limit: 128m
     # No published port: reaching this container should mean going through the
     # proxy, where the middleware chain below applies. The dev overlay adds one.
