@@ -1192,3 +1192,67 @@ body.page-forecast {
     color: var(--text);
 }
 .tip-band i { font-style: normal; color: var(--muted-dim); }
+
+
+/* ------------------------------------------------------ forecast radar card */
+
+.mini-map {
+    height: 300px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg);
+}
+.radar-card .chart-head .chart-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-variant-numeric: tabular-nums;
+}
+.mini-status { color: var(--muted-dim); font-size: 0.72rem; }
+/* The icon is drawn with pseudo-elements, and the button itself stays an
+   unclipped 20x20 box. clip-path on the button would have shaped the hit area
+   as well as the paint: with the pause icon's two bars, the middle of the
+   control — where anyone would aim — fell in the gap and did nothing. */
+.mini-play {
+    position: relative;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+}
+/* Pause: two bars. Shown while playing, so the button says what a click does. */
+.mini-play::before,
+.mini-play::after {
+    content: '';
+    position: absolute;
+    top: 18%;
+    height: 64%;
+    width: 26%;
+    border-radius: 1px;
+    background: var(--accent);
+}
+.mini-play::before { left: 22%; }
+.mini-play::after { right: 22%; }
+.mini-play:hover::before,
+.mini-play:hover::after { background: var(--accent-strong); }
+
+/* Play: one triangle. */
+.mini-play.is-paused::after { display: none; }
+.mini-play.is-paused::before {
+    left: 30%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    transform: translateY(-50%);
+    background: transparent;
+    border-left: 11px solid var(--accent);
+    border-top: 7px solid transparent;
+    border-bottom: 7px solid transparent;
+}
+.mini-play.is-paused:hover::before { border-left-color: var(--accent-strong); }
+
+/* MapLibre paints its own canvas; the card supplies the rounded corner. */
+.mini-map .maplibregl-canvas { border-radius: 10px; }
+.mini-map .maplibregl-ctrl-attrib.maplibregl-compact { font-size: 0.68rem; }

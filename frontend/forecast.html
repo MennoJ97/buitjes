@@ -10,6 +10,7 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="page-forecast">
@@ -45,6 +46,20 @@
         <section class="summary-card" id="summary-card">
             <p class="summary-text" id="summary-text">Loading…</p>
             <dl class="summary-stats" id="summary-stats"></dl>
+        </section>
+
+        <!-- The charts say how much and when; only a picture says where from. -->
+        <section class="chart-card radar-card">
+            <div class="chart-head">
+                <h2>Radar</h2>
+                <span class="chart-meta">
+                    <button type="button" id="mini-play" class="mini-play" aria-label="Pause"></button>
+                    <time id="mini-time">--:--</time>
+                    <span class="mini-status" id="mini-status"></span>
+                </span>
+            </div>
+            <div class="mini-map" id="mini-map"></div>
+            <p class="chart-note">Last hour measured, next two extrapolated · loops</p>
         </section>
 
         <section class="chart-card">
@@ -93,5 +108,9 @@
     </main>
 
     <script type="module" src="js/forecast.js"></script>
+    <!-- Drawn by the WebGL renderer, handed to MapLibre as a canvas source.
+         Off screen because the map is where it is actually seen. -->
+    <canvas id="mini-canvas" width="500" height="500" class="offscreen" aria-hidden="true"></canvas>
+    <script src="vendor/maplibre/maplibre-gl.js"></script>
 </body>
 </html>

@@ -19,6 +19,10 @@ as twitchy as convective rain is a number that will be wrong.
   matters more than the pixels do.
 - **Hover anywhere** for the rain rate under the cursor; click for a full
   forecast at that exact coordinate rather than snapping to a preset location.
+- **A looping radar on the detail page**, centred on the location: the last
+  hour measured and the next two extrapolated. The charts say how much and
+  when; only a picture says which way it is coming from, and whether a shower
+  will hit you or pass five kilometres north.
 - **Point forecasts with real ensemble spread** for locations you configure —
   p10/p25/median/p75/p90 and a probability of rain per five-minute step, taken
   by sampling all 20 KNMI members while the timestep is in memory.

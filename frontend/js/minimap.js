@@ -1,0 +1,185 @@
+/**
+ * The small looping radar on the forecast page.
+ *
+ * The charts answer "how much, and when" for one point. They cannot answer
+ * "where is it coming from", which is the question a radar picture is uniquely
+ * good at — a shower that will miss you by five kilometres looks identical to a
+ * direct hit until you see it move.
+ *
+ * Deliberately not a second copy of the map page. It reuses the same frame
+ * store, the same WebGL renderer and the same basemap table; what it adds is a
+ * loop, a marker, and the decision about which frames are worth downloading.
+ */
+
+import { RadarRenderer, FrameStore } from './radar.js';
+import {
+    BASEMAPS, OWN_CREDIT, applyPaintOverrides, labelLayerId, storedBasemap, styleFor,
+} from './basemap.js';
+import { formatClock } from './time.js';
+import { apiFetch } from './key.js';
+
+/**
+ * Only the measured past and the extrapolated near future.
+ *
+ * The full manifest is ~85 frames at about 30 KB each — 2.5 MB, on a page that
+ * otherwise weighs 25 KB. The model-driven hours beyond +2h are what the Rain
+ * outlook chart below is for, and they are the part a radar loop conveys worst:
+ * smooth blobs that say more about the model than the sky. Trimming to
+ * observed + nowcast is about a third of that.
+ */
+const WINDOW_KINDS = new Set(['observed', 'nowcast']);
+
+const FRAME_MS = 260;
+/** A beat on the last frame, so the loop reads as a loop and not a stutter. */
+const HOLD_LAST_MS = 1100;
+const REFRESH_MS = 5 * 60 * 1000;
+
+export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl }) {
+    const store = new FrameStore();
+    let renderer = null;
+    let map = null;
+    let marker = null;
+    let index = 0;
+    let timer = null;
+    let playing = true;
+    let point = null;
+
+    const frame = () => store.frames[index];
+
+    function paint() {
+        const current = frame();
+        if (!current) return;
+        const image = store.imageFor(current);
+        if (image) renderer.draw(image); else renderer.clear();
+        timeEl.textContent = formatClock(current.t);
+        timeEl.dateTime = new Date(current.t * 1000).toISOString();
+        // The observed/nowcast split is the honest part of a radar loop, so say
+        // which one is on screen rather than letting them blur together.
+        statusEl.textContent = current.kind === 'observed' ? 'measured' : 'extrapolated';
+    }
+
+    function step() {
+        const last = index === store.frames.length - 1;
+        index = last ? 0 : index + 1;
+        paint();
+        schedule(last ? HOLD_LAST_MS : FRAME_MS);
+    }
+
+    function schedule(delay) {
+        clearTimeout(timer);
+        // setTimeout rather than setInterval: the pause on the last frame means
+        // the gap is not constant, and a drifting interval cannot express that.
+        if (playing) timer = setTimeout(step, delay);
+    }
+
+    function setPlaying(next) {
+        playing = next;
+        playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+        playBtn.classList.toggle('is-paused', !playing);
+        if (playing) schedule(FRAME_MS); else clearTimeout(timer);
+    }
+
+    playBtn.addEventListener('click', () => setPlaying(!playing));
+
+    /** Pause while off screen. A loop nobody is looking at is just battery. */
+    const visibility = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) schedule(FRAME_MS);
+        else clearTimeout(timer);
+    }, { threshold: 0.1 });
+
+    function buildMap() {
+        const name = storedBasemap();
+        const config = BASEMAPS[name];
+        map = new maplibregl.Map({
+            container: mapEl,
+            style: styleFor(config),
+            center: [point.lon, point.lat],
+            zoom: 8,
+            attributionControl: false,
+            // The page scrolls; a map that eats the wheel inside it does not.
+            scrollZoom: false,
+            dragRotate: false,
+            touchZoomRotate: false,
+        });
+        map.addControl(
+            new maplibregl.AttributionControl({ compact: true, customAttribution: OWN_CREDIT })
+        );
+        // MapLibre opens the compact attribution on load, which on a card this
+        // small is a bar across the whole map. Same reasoning as the full map:
+        // collapsed it is one ⓘ, and a click still shows every credit.
+        requestAnimationFrame(() => {
+            mapEl.querySelector('details.maplibregl-ctrl-attrib[open]')?.removeAttribute('open');
+        });
+        mapEl.classList.toggle('theme-light', !!config.lightUi);
+        map.once('load', () => {
+            applyPaintOverrides(map, config);
+            addRadarLayer();
+        });
+    }
+
+    function addRadarLayer() {
+        if (!map.isStyleLoaded()) return void map.once('styledata', addRadarLayer);
+        if (map.getSource('radar-mini')) {
+            map.getSource('radar-mini').setCoordinates(store.coordinates);
+            return;
+        }
+        map.addSource('radar-mini', {
+            type: 'canvas',
+            canvas: canvasEl.id,
+            coordinates: store.coordinates,
+            animate: true,
+        });
+        map.addLayer(
+            { id: 'radar-mini-layer', type: 'raster', source: 'radar-mini',
+              paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 0 } },
+            labelLayerId(map.getStyle().layers)
+        );
+    }
+
+    async function loadFrames() {
+        const response = await apiFetch('/api/config', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`manifest unavailable (${response.status})`);
+        const manifest = await response.json();
+        const frames = (manifest.frames ?? []).filter((f) => WINDOW_KINDS.has(f.kind));
+        if (!frames.length) throw new Error('no recent frames published');
+
+        const previous = frame()?.t;
+        store.setManifest({ ...manifest, frames });
+        if (!renderer) {
+            renderer = new RadarRenderer(canvasEl);
+        }
+        renderer.resize(store.width, store.height);
+        renderer.setMaxPrecip(store.maxPrecip);
+        // Hold the moment the reader was watching across a refresh rather than
+        // snapping back to the start of the window.
+        const held = store.frames.findIndex((f) => f.t === previous);
+        index = held === -1 ? Math.max(0, store.frames.findIndex((f) => f.kind === 'nowcast') - 1) : held;
+
+        await store.prefetch();
+        if (!map) { buildMap(); visibility.observe(mapEl); } else { addRadarLayer(); }
+        paint();
+        schedule(FRAME_MS);
+    }
+
+    return {
+        /** Point the loop at a location. Safe to call again when it changes. */
+        async show(next) {
+            const moved = !point || point.lat !== next.lat || point.lon !== next.lon;
+            point = next;
+            if (map && moved) {
+                map.jumpTo({ center: [point.lon, point.lat], zoom: 8 });
+            }
+            if (map) {
+                marker?.remove();
+                marker = new maplibregl.Marker({ color: '#f8fafc', scale: 0.7 })
+                    .setLngLat([point.lon, point.lat]).addTo(map);
+            }
+            await loadFrames();
+            if (!marker) {
+                marker = new maplibregl.Marker({ color: '#f8fafc', scale: 0.7 })
+                    .setLngLat([point.lon, point.lat]).addTo(map);
+            }
+        },
+        refreshTimer: setInterval(() => { loadFrames().catch(() => {}); }, REFRESH_MS),
+    };
+}

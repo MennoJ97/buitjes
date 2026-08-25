@@ -12,6 +12,7 @@ import { pointForName, pointForCoordinates } from './point.js';
 import { apiFetch, hasApiKey } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
+import { createRadarMinimap } from './minimap.js';
 
 const $ = (id) => document.getElementById(id);
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -119,6 +120,32 @@ async function loadLocations() {
     );
 }
 
+let minimap = null;
+
+/**
+ * The radar card follows whatever the page is showing — a named location or a
+ * clicked coordinate — so it is pointed from render(), which is the one place
+ * that knows which document actually came back.
+ *
+ * Failures are swallowed on purpose. The charts are the page; a radar loop that
+ * cannot load should not take them down with it, and it says so in its own
+ * corner rather than in the page banner.
+ */
+function showRadar(location) {
+    if (!minimap) {
+        minimap = createRadarMinimap({
+            mapEl: $('mini-map'),
+            canvasEl: $('mini-canvas'),
+            timeEl: $('mini-time'),
+            playBtn: $('mini-play'),
+            statusEl: $('mini-status'),
+        });
+    }
+    minimap.show(location).catch((error) => {
+        $('mini-status').textContent = `unavailable — ${error.message}`;
+    });
+}
+
 function render(document_) {
     currentDocument = document_;
     const reference = document_.reference_time;
@@ -132,6 +159,7 @@ function render(document_) {
         : 'KNMI ensemble · 5-minute steps';
 
     renderSummaryStats(document_);
+    showRadar(document_.location);
 
     for (const config of CHARTS) {
         const block = document_[config.key];
