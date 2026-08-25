@@ -810,7 +810,17 @@ kbd {
 .radar-popup .maplibregl-popup-close-button:hover { color: var(--text); background: transparent; }
 
 .popup-body { padding: 11px 13px; width: 244px; }
-.popup-rate { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+/* The close button is absolutely positioned in this corner — right: 4px and
+   about 22px wide — so it is not in the flow and the time ran underneath it.
+   Only this row shares its line, so the clearance belongs here rather than on
+   .popup-body, which would indent the sparkline and the summary too. */
+.popup-rate {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 8px;
+    padding-right: 26px;
+}
 .popup-swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
 .popup-rate strong { font-size: 1rem; font-variant-numeric: tabular-nums; }
 .popup-at { font-size: 0.72rem; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
