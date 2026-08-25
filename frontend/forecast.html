@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <title>Stratus — Forecast detail</title>
+    <title>Buitjes — Forecast detail</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="page-forecast">
@@ -22,7 +25,7 @@
             <svg class="brand-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M7 18a4.5 4.5 0 0 1-.6-8.96 5.5 5.5 0 0 1 10.55-1.4A4.25 4.25 0 0 1 17.5 18z"/>
             </svg>
-            <span class="brand-name">Stratus</span>
+            <span class="brand-name">Buitjes</span>
             <span class="brand-tag">Forecast detail</span>
         </div>
         <div class="forecast-head-actions">
@@ -31,7 +34,7 @@
                 <select id="location-select" hidden></select>
             </label>
             <p class="coords"><span id="location-coords">—</span></p>
-            <p class="ref-time"><span class="ref-time-label">Updated</span> <time id="ref-time">--:--</time></p>
+            <p class="ref-time" id="ref-time-wrap"><span class="ref-time-dot" aria-hidden="true"></span><span class="ref-time-label">Updated</span> <time id="ref-time">--:--</time><span class="ref-time-age" id="ref-time-age"></span></p>
             <a class="link-button" href="index.html">Back to map</a>
         </div>
     </header>

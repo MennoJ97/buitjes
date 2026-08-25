@@ -10,6 +10,7 @@
 import { renderBandChart } from './chart.js';
 import { pointForName, pointForCoordinates } from './point.js';
 import { apiFetch, hasApiKey } from './key.js';
+import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 
 const $ = (id) => document.getElementById(id);
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -51,14 +52,49 @@ const CHARTS = [
 let currentRequest = null;
 let currentDocument = null;
 
+/** See app.js: whoever raised the banner owns it, and an error outranks age. */
+let healthBannerUp = false;
+
 function showBanner(message, retryable, tone = 'warn') {
     $('banner-text').textContent = message;
     $('banner-retry').hidden = !retryable;
     $('banner').classList.toggle('banner--info', tone === 'info');
+    $('banner').classList.toggle('banner--stale', tone === 'stale');
     $('banner').hidden = false;
+    healthBannerUp = tone === 'stale';
 }
 
-const hideBanner = () => { $('banner').hidden = true; };
+const hideBanner = () => {
+    $('banner').hidden = true;
+    $('banner').classList.remove('banner--info', 'banner--stale');
+    healthBannerUp = false;
+};
+
+/**
+ * The same freshness check the map page runs, for the same reason: these charts
+ * are drawn from a document that stops being replaced when the feed stops, and
+ * nothing else on the page would say so.
+ */
+async function updateHealth() {
+    const { stale, age, detail } = readHealth(await fetchHealth());
+
+    $('ref-time-wrap').classList.toggle('is-stale', stale);
+    $('ref-time-age').textContent = stale ? `\u00b7 ${describeAge(age)} old` : '';
+    $('ref-time-wrap').title = stale ? detail : '';
+
+    if (!stale) {
+        if (healthBannerUp) hideBanner();
+        return;
+    }
+    if ($('banner').hidden || healthBannerUp) {
+        showBanner(
+            `No new forecast for ${describeAge(age)} — KNMI publishes every 5 minutes.`
+            + ' Showing the last one that arrived.',
+            false,
+            'stale'
+        );
+    }
+}
 
 function requestFromUrl() {
     const params = new URLSearchParams(location.search);
@@ -186,6 +222,9 @@ async function load(request, { explicit = false } = {}) {
             : await pointForName(request.name));
         hideBanner();
         if (explicit) rewriteUrl(request);
+        // After hideBanner(), so a stale reading can claim the banner the
+        // successful load just cleared.
+        await updateHealth();
     } catch (error) {
         showBanner(`Could not load the forecast — ${error.message}`, true);
     }
@@ -298,5 +337,9 @@ window.addEventListener('resize', () => {
 setInterval(() => {
     if (currentRequest) load(currentRequest);
 }, REFRESH_INTERVAL_MS);
+
+// More often than the reload: the document only changes every five minutes,
+// but its age changes every minute and that is the part worth watching.
+setInterval(updateHealth, HEALTH_POLL_MS);
 
 boot();

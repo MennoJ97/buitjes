@@ -8,11 +8,17 @@ use axum::{
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::{
+    cors::CorsLayer,
+    services::ServeDir,
+    trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
+};
+use tracing::{error, info, warn, Level};
 
 /// Frames and the manifest are produced by the ingestor sidecar and shared
 /// through a volume; this server only hands them out.
@@ -29,6 +35,13 @@ struct AppState {
     api_keys: Arc<Vec<String>>,
     protected_prefixes: Arc<Vec<String>>,
     conditions: ConditionsProxy,
+    /// Whether the newest forecast was stale the last time anyone asked.
+    ///
+    /// Only so that going stale — and coming back — is logged once each, on the
+    /// edge. The container health check polls every 30 seconds, so logging the
+    /// state rather than the change would turn one KNMI outage into a wall of
+    /// identical lines that buries the moment it began.
+    was_stale: Arc<AtomicBool>,
 }
 
 /// On-demand conditions for coordinates nobody configured in advance.
@@ -268,7 +281,7 @@ async fn revalidate(request: axum::extract::Request, next: axum::middleware::Nex
 /// internet — the widget's origin has to be named deliberately.
 ///
 /// A widget that fetches server-side (a dashboard `custom-api` template asking
-/// `http://stratus-weather-app:3000` over the shared Docker network) is not a
+/// `http://buitjes-weather-app:3000` over the shared Docker network) is not a
 /// browser request at all, so it needs none of this. Leave the variable unset
 /// unless something in a page's JavaScript really does call the API.
 fn cors_layer() -> CorsLayer {
@@ -276,11 +289,11 @@ fn cors_layer() -> CorsLayer {
     let configured = configured.trim();
 
     if configured == "*" {
-        println!("CORS: allowing any origin");
+        info!("CORS: allowing any origin");
         return CorsLayer::permissive();
     }
     if configured.is_empty() {
-        println!("CORS: same-origin only (set CORS_ALLOWED_ORIGINS to allow a widget host)");
+        info!("CORS: same-origin only (set CORS_ALLOWED_ORIGINS to allow a widget host)");
         return CorsLayer::new();
     }
 
@@ -291,21 +304,50 @@ fn cors_layer() -> CorsLayer {
             match origin.parse::<HeaderValue>() {
                 Ok(value) => Some(value),
                 Err(_) => {
-                    eprintln!("CORS: ignoring unparseable origin {origin:?}");
+                    warn!("CORS: ignoring unparseable origin {origin:?}");
                     None
                 }
             }
         })
         .collect();
 
-    println!("CORS: allowing {} origin(s)", origins.len());
+    info!(origins = origins.len(), "CORS: allowlist configured");
     CorsLayer::new()
         .allow_origin(origins)
         .allow_methods([Method::GET])
 }
 
+/// Log to stdout, for `docker compose logs` to pick up.
+///
+/// Local time rather than UTC so these lines interleave sensibly with the
+/// ingestor's, which have used the container's own timezone all along — two
+/// containers in one `docker compose logs` stamping the same moment two hours
+/// apart is a good way to misread an incident. Both read `TZ`.
+///
+/// Verbosity is `RUST_LOG`, defaulting to our own INFO and nothing from the
+/// libraries. Per-request lines live at DEBUG deliberately: Traefik's access
+/// log already records every request in front of this, and one map page load
+/// is ~85 frame fetches, so repeating them here by default would bury the
+/// handful of lines that say something. To see them:
+///
+///     RUST_LOG=weather_backend=debug,tower_http=debug
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("weather_backend=info,tower_http=warn"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
+            "%Y-%m-%d %H:%M:%S%.3f".to_string(),
+        ))
+        .with_target(true)
+        .compact()
+        .init();
+}
+
 #[tokio::main]
 async fn main() {
+    init_logging();
+
     let state = AppState {
         frame_dir: PathBuf::from(
             std::env::var("FRAME_DIR").unwrap_or_else(|_| "/data".to_string()),
@@ -320,20 +362,20 @@ async fn main() {
             DEFAULT_PROTECTED_PREFIXES,
         )),
         conditions: ConditionsProxy::from_env(),
+        was_stale: Arc::new(AtomicBool::new(false)),
     };
 
     if state.api_keys.is_empty() {
-        println!("API keys: disabled (every endpoint is open)");
+        info!("API keys: disabled (every endpoint is open)");
     } else {
-        println!(
-            "API keys: {} configured, guarding {}",
-            state.api_keys.len(),
-            state.protected_prefixes.join(", ")
+        info!(
+            keys = state.api_keys.len(),
+            guarding = %state.protected_prefixes.join(", "),
+            "API keys configured"
         );
     }
 
-    let app = Router::new()
-        .route("/healthz", get(healthz))
+    let served = Router::new()
         .route("/api/config", get(serve_manifest))
         .route("/api/frames/:file", get(serve_frame))
         .route("/api/point/:name", get(serve_point))
@@ -345,16 +387,43 @@ async fn main() {
             require_api_key,
         ))
         .layer(cors_layer())
+        // Quiet unless something breaks: spans and per-response lines at DEBUG,
+        // and only a 5xx reaches the log at WARN by default.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::DEBUG))
+                .on_response(DefaultOnResponse::new().level(Level::DEBUG))
+                .on_failure(DefaultOnFailure::new().level(Level::WARN)),
+        )
         .with_state(state.clone());
 
+    // /healthz sits outside that trace on purpose. It answers 503 when the
+    // *data* is stale, which is not a failed request, and the container health
+    // check asks every 30 seconds — inside, one KNMI outage would be a WARN
+    // every half minute saying nothing the staleness edge has not said once.
+    let app = Router::new()
+        .route("/healthz", get(healthz))
+        .with_state(state.clone())
+        .merge(served);
+
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    println!(
-        "Server running on http://{} (frames from {})",
-        addr,
-        state.frame_dir.display()
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            // Nothing useful to serve from, so say which address failed and
+            // why, rather than panicking with a bare `Address in use`.
+            error!("cannot bind {addr}: {error}");
+            std::process::exit(1);
+        }
+    };
+    info!(
+        frames = %state.frame_dir.display(),
+        "listening on http://{addr}"
     );
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    if let Err(error) = axum::serve(listener, app).await {
+        error!("server stopped: {error}");
+        std::process::exit(1);
+    }
 }
 
 /// How old the newest forecast is, in seconds.
@@ -388,6 +457,19 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
         ),
         Some(_) => (StatusCode::OK, true, "ok"),
     };
+
+    // Log the transition, not the state. See `AppState::was_stale`.
+    if state.was_stale.swap(!ok, Ordering::Relaxed) != !ok {
+        if ok {
+            info!(age_seconds = age, "forecast is fresh again");
+        } else {
+            warn!(
+                age_seconds = age,
+                limit_seconds = state.max_manifest_age,
+                "{detail}"
+            );
+        }
+    }
 
     (
         status,
@@ -609,7 +691,7 @@ async fn serve_conditions(
         )
             .into_response(),
         Err(error) => {
-            eprintln!("conditions fetch failed: {error}");
+            error!("conditions fetch failed: {error}");
             (
                 StatusCode::BAD_GATEWAY,
                 [

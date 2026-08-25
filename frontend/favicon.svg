@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Buitjes">
+    <rect width="24" height="24" rx="5.5" fill="#0f1218"/>
+    <!-- The brand mark from the topbar, unchanged but for the centring scale:
+         same path, same accent blue, same dark ground it sits on in the app. -->
+    <path transform="translate(1.38 1.62) scale(0.88)" fill="#3b82f6"
+          d="M7 18a4.5 4.5 0 0 1-.6-8.96 5.5 5.5 0 0 1 10.55-1.4A4.25 4.25 0 0 1 17.5 18z"/>
+</svg>

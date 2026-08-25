@@ -1,26 +1,32 @@
-# Stratus — the ingestor that publishes forecast frames, and the server that
+# Buitjes — the ingestor that publishes forecast frames, and the server that
 # hands them to a browser.
 #
 # This file is what runs in production. Everything host-specific comes from
 # `.env`, so the same file works on a laptop and on the server:
 #
-#   STRATUS_HOST          the hostname Traefik routes (weather.example.nl)
-#   STRATUS_MIDDLEWARES   the router's middleware chain, in order
+#   BUITJES_HOST          the hostname Traefik routes (weather.example.nl)
+#   BUITJES_MIDDLEWARES   the router's middleware chain, in order
 #
 # Local development, which adds the published port and bind-mounts the frontend:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 #
 # TLS is assumed to be configured on the `websecure` entrypoint (a wildcard cert
-# covering STRATUS_HOST). A Traefik that issues per-router certificates instead
-# needs `traefik.http.routers.weatherapp.tls.certresolver=<resolver>` added below.
+# covering BUITJES_HOST). A Traefik that issues per-router certificates instead
+# needs `traefik.http.routers.buitjes.tls.certresolver=<resolver>` added below.
+
+# The Compose project name. Without it the project is named after the directory
+# this file sits in, which is still WeatherApp — so the built images, the volume
+# and the default network would all read `weatherapp` while the containers read
+# `buitjes`.
+name: buitjes
 
 services:
   ingestor:
     build:
       context: .
       dockerfile: ingestor/Dockerfile
-    container_name: stratus-ingestor
+    container_name: buitjes-ingestor
     restart: unless-stopped
     env_file:
       - .env
@@ -53,7 +59,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: stratus-weather-app
+    container_name: buitjes-weather-app
     restart: unless-stopped
     environment:
       FRAME_DIR: /data
@@ -80,21 +86,21 @@ services:
     # proxy, where the middleware chain below applies. The dev overlay adds one.
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.weatherapp.rule=Host(`${STRATUS_HOST:-weather.example.com}`)"
-      - "traefik.http.routers.weatherapp.entrypoints=websecure"
-      - "traefik.http.routers.weatherapp.tls=true"
-      - "traefik.http.services.weatherapp.loadbalancer.server.port=3000"
+      - "traefik.http.routers.buitjes.rule=Host(`${BUITJES_HOST:-weather.example.com}`)"
+      - "traefik.http.routers.buitjes.entrypoints=websecure"
+      - "traefik.http.routers.buitjes.tls=true"
+      - "traefik.http.services.buitjes.loadbalancer.server.port=3000"
       # Rate limiting lives here rather than in the app: it runs before a
       # request reaches the container, and it protects the static frontend and
       # the frame downloads too, which are the bandwidth-heavy part.
       # average = sustained requests/second per client IP, burst = allowance.
       # A map page load fetches ~85 frames at once, hence the generous burst.
-      - "traefik.http.middlewares.weatherapp-ratelimit.ratelimit.average=20"
-      - "traefik.http.middlewares.weatherapp-ratelimit.ratelimit.burst=120"
-      - "traefik.http.middlewares.weatherapp-ratelimit.ratelimit.period=1s"
+      - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.average=20"
+      - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.burst=120"
+      - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.period=1s"
       # Order matters and the list replaces rather than appends, so an auth
       # middleware has to be named here explicitly — see .env.example.
-      - "traefik.http.routers.weatherapp.middlewares=${STRATUS_MIDDLEWARES:-weatherapp-ratelimit@docker}"
+      - "traefik.http.routers.buitjes.middlewares=${BUITJES_MIDDLEWARES:-buitjes-ratelimit@docker}"
     networks:
       - proxy
       - default

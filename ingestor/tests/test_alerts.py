@@ -227,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
 
 server = HTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
-url = f'http://127.0.0.1:{server.server_port}/stratus'
+url = f'http://127.0.0.1:{server.server_port}/buitjes'
 
 event = evaluate(wet_at(NOW), rule, NOW)
 check('json delivery reports success', Notifier(url, 'json').send(event, NOW) is True)

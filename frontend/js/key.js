@@ -19,10 +19,18 @@
  * that is what you need.
  */
 
-const STORAGE_KEY = 'stratus.key';
+const STORAGE_KEY = 'buitjes.key';
+const LEGACY_STORAGE_KEY = 'stratus.key';
 
 function readStoredKey() {
     try {
+        // The app was called Stratus once. Adopt a key stored under that name
+        // rather than making its owner dig `?key=` out of .env a second time.
+        const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (legacy && !localStorage.getItem(STORAGE_KEY)) {
+            localStorage.setItem(STORAGE_KEY, legacy);
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
+        }
         return localStorage.getItem(STORAGE_KEY) || '';
     } catch {
         return '';

@@ -3,6 +3,7 @@ import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js'
 import { renderBandChart } from './chart.js';
 import { pointForName, pointForCoordinates } from './point.js';
 import { apiFetch } from './key.js';
+import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 
 /** How each timeline zone is described in the UI. */
 const ZONES = {
@@ -143,12 +144,14 @@ const BASEMAPS = {
 };
 
 const DEFAULT_BASEMAP = 'dark';
-const BASEMAP_STORAGE_KEY = 'stratus.basemap';
+const BASEMAP_STORAGE_KEY = 'buitjes.basemap';
+const LEGACY_BASEMAP_KEY = 'stratus.basemap';
 
 /** The style chosen last time. Picking a legible map should not be a per-visit chore. */
 function storedBasemap() {
     try {
-        const name = localStorage.getItem(BASEMAP_STORAGE_KEY);
+        const name = localStorage.getItem(BASEMAP_STORAGE_KEY)
+            || localStorage.getItem(LEGACY_BASEMAP_KEY);  // named Stratus once
         return name && BASEMAPS[name] ? name : DEFAULT_BASEMAP;
     } catch {
         // Private browsing, or storage disabled entirely.
@@ -271,6 +274,8 @@ const el = {
     stepLabel: $('step-label'),
     kindBadge: $('kind-badge'),
     refTime: $('ref-time'),
+    refTimeWrap: $('ref-time-wrap'),
+    refTimeAge: $('ref-time-age'),
     zoneKey: $('zone-key'),
     legendCanvas: $('legend-canvas'),
     legendLabels: $('scale-labels'),
@@ -313,6 +318,11 @@ let inspectPoint = null;
 let inspectSeries = null;
 let refreshTimer = null;
 let warmupTimer = null;
+let healthTimer = null;
+/** Whether the banner currently on screen is ours, so we know we may replace
+ *  or clear it. A real error outranks "the data is old" and must not be
+ *  overwritten by the next health poll sixty seconds later. */
+let healthBannerUp = false;
 
 /**
  * The server is reachable but the ingestor has not published a cycle yet.
@@ -356,9 +366,50 @@ async function boot() {
         showBanner(err.message, false);
         return;
     }
-    await load({ initial: true });
+    // Started before the first load, not after it. A first load that threw used
+    // to take the periodic refresh down with it: the interval was only ever
+    // created on the line after the await, so a page that failed once would
+    // sit there for the rest of the session — and even a successful Retry
+    // would not bring the refresh back, because that line had been skipped.
     if (!refreshTimer) {
         refreshTimer = setInterval(() => load({ initial: false }).catch(() => {}), REFRESH_INTERVAL_MS);
+    }
+    // Polled separately from the manifest, and more often: the reload is a
+    // heavy thing to do every minute, but "how old is this" changes by the
+    // minute and is the one question a frozen map cannot answer for itself.
+    if (!healthTimer) {
+        healthTimer = setInterval(updateHealth, HEALTH_POLL_MS);
+    }
+    await load({ initial: true });
+}
+
+/**
+ * Say out loud when the forecast has stopped arriving.
+ *
+ * Without this the map degrades silently: the last cycle keeps being drawn,
+ * the timeline still animates, and the only clue is a clock in the corner that
+ * the reader has to notice and subtract from the current time themselves.
+ */
+async function updateHealth() {
+    const { stale, age, detail } = readHealth(await fetchHealth());
+
+    el.refTimeWrap.classList.toggle('is-stale', stale);
+    el.refTimeAge.textContent = stale ? `\u00b7 ${describeAge(age)} old` : '';
+    // The server's own wording, for anyone who wants the precise complaint.
+    el.refTimeWrap.title = stale ? detail : '';
+
+    if (!stale) {
+        if (healthBannerUp) hideBanner();
+        return;
+    }
+    // Only claim the banner if nothing more urgent is using it.
+    if (el.banner.hidden || healthBannerUp) {
+        showBanner(
+            `No new forecast for ${describeAge(age)} — KNMI publishes every 5 minutes.`
+            + ' Showing the last one that arrived.',
+            false,
+            'stale'
+        );
     }
 }
 
@@ -407,6 +458,9 @@ async function load({ initial }) {
         if (inspectPoint) inspectSeries = store.series(inspectPoint.lng, inspectPoint.lat);
 
         showFrame(currentIndex);
+        // After hideBanner() above, so a stale reading can claim the banner
+        // that the successful load just cleared.
+        await updateHealth();
     } catch (err) {
         el.loading.hidden = true;
         if (err instanceof DataNotReady) {
@@ -1114,12 +1168,17 @@ function showBanner(message, retryable, tone = 'warn') {
     el.bannerText.textContent = message;
     el.bannerRetry.hidden = !retryable;
     el.banner.classList.toggle('banner--info', tone === 'info');
+    el.banner.classList.toggle('banner--stale', tone === 'stale');
     el.banner.hidden = false;
+    // Whoever put the banner up owns it. An error raised while a stale notice
+    // was showing must not be replaced by the next health poll a minute later.
+    healthBannerUp = tone === 'stale';
 }
 
 function hideBanner() {
     el.banner.hidden = true;
-    el.banner.classList.remove('banner--info');
+    el.banner.classList.remove('banner--info', 'banner--stale');
+    healthBannerUp = false;
 }
 
 function openPopover(popover, button) {

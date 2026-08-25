@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <title>Stratus — Precipitation radar</title>
+    <title>Buitjes — Precipitation radar</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -58,12 +61,16 @@
     <header class="topbar">
         <div class="brand">
             <svg class="brand-mark" aria-hidden="true"><use href="#icon-cloud"/></svg>
-            <span class="brand-name">Stratus</span>
+            <span class="brand-name">Buitjes</span>
         </div>
         <div class="topbar-actions">
-            <p class="ref-time">
+            <!-- The age suffix and the dot only appear when the feed has
+                 stopped; a fresh reading looks exactly as it always did. -->
+            <p class="ref-time" id="ref-time-wrap">
+                <span class="ref-time-dot" aria-hidden="true"></span>
                 <span class="ref-time-label">Updated</span>
                 <time id="ref-time">--:--</time>
+                <span class="ref-time-age" id="ref-time-age"></span>
             </p>
             <button type="button" id="locate-btn" class="icon-btn" aria-label="Find my location" title="Find my location">
                 <svg aria-hidden="true"><use href="#icon-locate"/></svg>
@@ -78,7 +85,7 @@
     <div class="modal-backdrop" id="about-backdrop" hidden></div>
     <div class="modal" id="about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
         <div class="modal-head">
-            <h2 id="about-title">About Stratus</h2>
+            <h2 id="about-title">About Buitjes</h2>
             <button type="button" id="about-close" class="icon-btn" aria-label="Close">
                 <svg aria-hidden="true"><use href="#icon-close"/></svg>
             </button>

@@ -11,3 +11,9 @@ serde_json = "1.0"
 # Only used to fetch conditions for arbitrary coordinates on demand.
 # rustls rather than the system OpenSSL so the runtime image stays slim.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tracing = "0.1"
+# `env-filter` for RUST_LOG, `chrono` for local-time stamps. The obvious choice
+# for the latter — fmt::time::LocalTime — cannot read the local offset from a
+# multi-threaded process, which this is, so it renders nothing at all rather
+# than failing loudly. ChronoLocal has no such restriction.
+tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }

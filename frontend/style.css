@@ -184,6 +184,31 @@ button { font: inherit; }
 }
 .ref-time time { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* Both of these are absent until the feed stops, so a healthy page looks
+   exactly as it did before there was anything to report. Adding permanent
+   chrome to say "still fine" is how people learn to stop reading it. */
+.ref-time-dot, .ref-time-age { display: none; }
+.ref-time.is-stale .ref-time-dot,
+.ref-time.is-stale .ref-time-age { display: inline-block; }
+.ref-time.is-stale { color: var(--danger); }
+.ref-time.is-stale time { color: var(--danger); }
+.ref-time-dot {
+    width: 7px;
+    height: 7px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--danger);
+    vertical-align: baseline;
+}
+.ref-time-age { margin-left: 5px; font-variant-numeric: tabular-nums; }
+
+/* The label is hidden on narrow screens (see the media query below), which
+   would otherwise leave the age reading "07:05 · 41 min old" with no clue
+   what is old. Keeping the dot is the whole signal there. */
+@media (max-width: 560px) {
+    .ref-time-age { display: none !important; }
+}
+
 .icon-btn {
     width: 36px;
     height: 36px;
@@ -247,6 +272,12 @@ button { font: inherit; }
     animation: banner-spin 0.8s linear infinite;
 }
 @keyframes banner-spin { to { transform: rotate(360deg); } }
+
+/* Stale data is a third thing again: the page is working and the map is drawn,
+   the numbers are just old. So it keeps the amber icon — something is wrong
+   upstream — but drops the amber panel, which reads as "this failed". */
+.banner--stale { border-color: rgba(240, 160, 42, 0.25); color: var(--text); }
+.banner--stale .banner-spinner { display: none; }
 .banner-retry {
     flex: none;
     padding: 5px 10px;
