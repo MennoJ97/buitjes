@@ -1,0 +1,12 @@
+# Deliberately not indexed. This is one person's radar page, not a service
+# anyone should arrive at from a search — and KNMI, Buienradar and the rest
+# already answer that query properly for the people asking it.
+#
+# Paired with <meta name="robots" content="noindex, nofollow"> on both pages.
+# The two are not redundant but they do interact: a Disallow means a crawler
+# never fetches the page, so it never reads the noindex either, and a URL
+# linked from somewhere crawlable can still surface as a bare listing. Here
+# the only public link is from an apex page that is itself Disallow-all, so
+# there is nothing pointing at this from a crawlable source.
+User-agent: *
+Disallow: /
