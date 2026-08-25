@@ -162,6 +162,33 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Whether a request carries one of the configured keys.
+///
+/// Header or `key=` query parameter, because an `<img>` or a widget cannot
+/// always set headers. Shared by the gate below and by `/api/config`, which is
+/// not gated outright but does hide part of its answer without a key.
+fn presents_valid_key(
+    headers: &axum::http::HeaderMap,
+    uri: &axum::http::Uri,
+    state: &AppState,
+) -> bool {
+    let from_header = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let from_query = uri.query().and_then(|query| {
+        query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("key=").map(|value| value.to_string()))
+    });
+
+    let presented = from_header.or(from_query).unwrap_or_default();
+    state
+        .api_keys
+        .iter()
+        .any(|key| constant_time_eq(key, &presented))
+}
+
 /// Gate for the widget endpoints.
 ///
 /// The key is read from `X-API-Key` or a `key` query parameter — the latter
@@ -190,24 +217,7 @@ async fn require_api_key(
         return next.run(request).await;
     }
 
-    let from_header = request
-        .headers()
-        .get("x-api-key")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    let from_query = request.uri().query().and_then(|query| {
-        query.split('&').find_map(|pair| {
-            pair.strip_prefix("key=").map(|value| value.to_string())
-        })
-    });
-
-    let presented = from_header.or(from_query).unwrap_or_default();
-    let accepted = state
-        .api_keys
-        .iter()
-        .any(|key| constant_time_eq(key, &presented));
-
-    if accepted {
+    if presents_valid_key(request.headers(), request.uri(), &state) {
         next.run(request).await
     } else {
         (
@@ -386,15 +396,51 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-async fn serve_manifest(State(state): State<AppState>) -> Response {
+/// The manifest, with the list of published locations removed for callers who
+/// present no key.
+///
+/// The map itself has to stay open — it needs the bounds and the frame list to
+/// draw anything — but *where someone lives* is a different kind of fact from
+/// *where it is raining*. `points` carries the names and coordinates the owner
+/// configured, so it is served only to a request that presents a key, and the
+/// location picker appears only for that reader.
+///
+/// With no `API_KEYS` configured there is nothing to distinguish callers by, so
+/// the manifest is served whole: a single-user setup on a private network should
+/// not have to invent a key to see its own locations.
+fn manifest_for(body: Vec<u8>, authorised: bool) -> Vec<u8> {
+    if authorised {
+        return body;
+    }
+    match serde_json::from_slice::<serde_json::Value>(&body) {
+        Ok(mut manifest) => {
+            if let Some(object) = manifest.as_object_mut() {
+                object.remove("points");
+            }
+            serde_json::to_vec(&manifest).unwrap_or(body)
+        }
+        // Unparseable manifest: serving it unchanged is what happened before
+        // this function existed, and the frontend already copes with junk here.
+        Err(_) => body,
+    }
+}
+
+async fn serve_manifest(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Response {
+    let authorised =
+        state.api_keys.is_empty() || presents_valid_key(request.headers(), request.uri(), &state);
     match tokio::fs::read(state.frame_dir.join(MANIFEST_NAME)).await {
         Ok(body) => (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "application/json"),
                 (header::CACHE_CONTROL, "no-cache"),
+                // Never let a shared cache serve the keyed answer to someone else.
+                (header::VARY, "x-api-key"),
             ],
-            body,
+            manifest_for(body, authorised),
         )
             .into_response(),
         // Normal for the first minute after startup: the ingestor has not

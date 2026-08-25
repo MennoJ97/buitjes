@@ -2,6 +2,7 @@ import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
 import { renderBandChart } from './chart.js';
 import { pointForName, pointForCoordinates } from './point.js';
+import { apiFetch } from './key.js';
 
 /** How each timeline zone is described in the UI. */
 const ZONES = {
@@ -12,6 +13,9 @@ const ZONES = {
 
 const carto = (name) => `https://a.basemaps.cartocdn.com/${name}/{z}/{x}/{y}.png`;
 const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+// OpenFreeMap serves OpenStreetMap vector tiles without a key or a quota, and
+// its TileJSON carries its own attribution, so nothing needs crediting here.
+const OFM_DARK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
 
 const CARTO_CREDIT =
     '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors';
@@ -20,32 +24,80 @@ const OSM_CREDIT =
 
 // The map's attribution control is the conventional home for credits, so the
 // inspiration is acknowledged there as well as in the About dialog.
+// MapLibre inserts its own separator between this and the basemap's own credit.
 const OWN_CREDIT =
-    ' | data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>' +
+    'data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>' +
     ' | inspired by <a href="https://nimbus.yannick.cloud">Nimbus</a>';
 
 /**
- * Basemaps are split into a label-free ground layer and a separate label layer,
- * so place names can be drawn back on top of the radar. Rain at 70% opacity over
- * an all-in-one basemap swallows exactly the city names you want to locate it by.
+ * The recolouring that turns OpenFreeMap's Dark into a style you can read rain
+ * over, keyed by upstream layer id. Only the colours that matter are overridden,
+ * so the cartography itself stays maintained upstream.
  *
- * `groundPaint` and `labelPaint` make a style more legible without a different
- * tile provider — the alternatives with genuinely higher-contrast dark
- * cartography (Stadia's Alidade Smooth Dark, Stamen Toner) all want an API key
- * and a registered domain.
+ * This replaces a `raster-contrast` boost applied to the CARTO dark tiles, which
+ * never worked and could not have. Measured at z10 over Utrecht (luminance
+ * 0-255), that ground sits at a median of 9 and its labels at 89. `raster-contrast`
+ * pivots around mid-grey, so on a ground that dark it pushes *down* and clips;
+ * raising `raster-brightness-min` to compensate then lifts the whole image
+ * uniformly, moving the floor without ever widening the gap. The tiles were the
+ * ceiling, not the tuning. A vector style has no such ceiling — every colour
+ * below is simply ours to choose.
  *
- * The numbers are measured, not guessed, because the obvious ones are wrong:
- * `raster-contrast` pivots around mid-grey, and CARTO's dark ground lives at
- * 3-15% luminance, so simply turning contrast up drives the whole map below
- * zero and clips it to black. At contrast 0.35 alone, 100% of the ground
- * clipped. Raising `raster-brightness-min` in step lifts the range back into
- * view: at contrast 0.3 with a floor of 0.18 nothing clips, land reads 45/255
- * against water at 11 (from 38 against 8), and the labels go from 102 to 148.
+ * Place names go to pure white on a near-opaque halo, and the halo is what does
+ * the work. The bottom of the rain ramp (#c2e6ff, luminance 220) is far brighter
+ * than the map under it, so white text alone disappears into drizzle exactly
+ * where the old grey text disappeared into downpours; the halo is what keeps a
+ * city readable whichever end of the ramp happens to be sitting on top of it.
  *
- * That is a real improvement but a bounded one. Brightness can only compress
- * the range and contrast can only pivot at mid-grey, so these tiles cannot be
- * made dramatically punchier from the client side; the Light and OpenStreetMap
- * styles are the genuinely higher-contrast options here.
+ * Roads stay deliberately quiet. They are here to place the rain, not to be
+ * read — a first pass lifted the motorway network to luminance 103 and produced
+ * a road atlas with some weather on it.
+ */
+const HIGH_CONTRAST_DARK = {
+    ground: {
+        background: '#0e1116',
+        water: '#1b2430',
+        waterway: '#1b2430',
+        landcover_wood: '#131a22',
+        landuse_residential: '#151b24',
+        landuse_park: '#141d1a',
+        building: '#181f29',
+        highway_minor: '#222932',
+        highway_major_casing: '#161c23',
+        highway_major_inner: '#333c47',
+        highway_major_subtle: '#333c47',
+        highway_motorway_casing: '#1b222b',
+        highway_motorway_inner: '#46525f',
+        highway_motorway_subtle: '#46525f',
+        // Borders are the one line work worth seeing through rain: at the
+        // default zoom they are what tells you which country you are looking at.
+        boundary_state: '#4d5665',
+        'boundary_country_z0-4': '#92a1b3',
+        'boundary_country_z5-': '#92a1b3',
+    },
+    place: {
+        'text-color': '#ffffff',
+        'text-halo-color': 'rgba(6,9,13,0.92)',
+        'text-halo-width': 1.8,
+        'text-halo-blur': 0.2,
+    },
+    water: {
+        'text-color': '#8496ab',
+        'text-halo-color': 'rgba(6,9,13,0.9)',
+        'text-halo-width': 1.4,
+    },
+};
+
+/**
+ * Raster basemaps are split into a label-free ground layer and a separate label
+ * layer, so place names can be drawn back on top of the radar. Rain at 70%
+ * opacity over an all-in-one basemap swallows exactly the city names you want
+ * to locate it by.
+ *
+ * A `styleUrl` entry is a vector style instead: the whole style is JSON we can
+ * repaint, and MapLibre draws the place names as real text on top of the radar
+ * rather than as a second image. See HIGH_CONTRAST_DARK for why the one style
+ * that has to be legible is built that way.
  *
  * OpenStreetMap's standard tiles are one image with the names baked in, so they
  * cannot be split — its labels necessarily sit *under* the radar. That is the
@@ -60,11 +112,8 @@ const BASEMAPS = {
     },
     contrast: {
         label: 'Dark, high contrast',
-        ground: carto('dark_nolabels'),
-        labels: carto('dark_only_labels'),
-        credit: CARTO_CREDIT,
-        groundPaint: { 'raster-contrast': 0.3, 'raster-brightness-min': 0.18 },
-        labelPaint: { 'raster-brightness-min': 0.3 },
+        styleUrl: OFM_DARK_STYLE,
+        paint: HIGH_CONTRAST_DARK,
     },
     light: {
         label: 'Light',
@@ -102,7 +151,95 @@ function storedBasemap() {
     }
 }
 
-const attributionFor = (config) => config.credit + OWN_CREDIT;
+/**
+ * The style spec for a basemap: either the raster sandwich we assemble here, or
+ * a vector style URL for MapLibre to fetch. A vector style brings its own
+ * attribution along in its TileJSON, which is why only the raster entries carry
+ * a `credit`.
+ */
+function styleFor(config) {
+    if (config.styleUrl) return config.styleUrl;
+    const style = {
+        version: 8,
+        sources: {
+            basemap: {
+                type: 'raster',
+                tiles: [config.ground],
+                tileSize: 256,
+                attribution: config.credit,
+            },
+        },
+        layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+    };
+    if (config.labels) {
+        style.sources.labels = { type: 'raster', tiles: [config.labels], tileSize: 256 };
+        style.layers.push({ id: 'labels', type: 'raster', source: 'labels' });
+    }
+    return style;
+}
+
+/**
+ * Where the radar belongs: under the place names, over the ground. Raster styles
+ * name their label layer; a vector style's names are the first symbol layer.
+ */
+const labelLayerId = (layers) =>
+    layers.find((layer) => layer.id === 'labels' || layer.type === 'symbol')?.id;
+
+/**
+ * setStyle discards the whole style, radar included. transformStyle hands us the
+ * replacement just before it is applied, which is the one moment the radar can
+ * be put back without a frame of bare basemap flashing in between.
+ *
+ * Nothing to carry on the very first switch after a cold start, when the radar
+ * has not been added yet — setupRadarLayer adds it once the data arrives.
+ */
+function carryRadarOver(previous, next) {
+    const source = previous.sources?.radar;
+    const layer = previous.layers?.find((candidate) => candidate.id === 'radar-layer');
+    if (!source || !layer) return next;
+
+    const labels = labelLayerId(next.layers);
+    const at = labels ? next.layers.findIndex((candidate) => candidate.id === labels) : next.layers.length;
+    return {
+        ...next,
+        sources: { ...next.sources, radar: source },
+        layers: [...next.layers.slice(0, at), layer, ...next.layers.slice(at)],
+    };
+}
+
+/** Run `fn` once the current style is loaded, whether or not it already is. */
+function onStyleReady(fn) {
+    if (map.isStyleLoaded()) fn();
+    else map.once('styledata', fn);
+}
+
+const colourKey = (type) =>
+    type === 'background' ? 'background-color' : type === 'fill' ? 'fill-color' : 'line-color';
+
+const setPaint = (id, paint) => {
+    for (const [property, value] of Object.entries(paint)) {
+        map.setPaintProperty(id, property, value);
+    }
+};
+
+/**
+ * Repaint a freshly loaded vector style. Done with setPaintProperty against the
+ * live style rather than by rewriting the JSON on its way in, so the same call
+ * covers the initial load and every later switch.
+ */
+function applyPaintOverrides(config) {
+    if (!config.paint) return;
+    for (const layer of map.getStyle().layers) {
+        const ground = config.paint.ground[layer.id];
+        if (ground) {
+            map.setPaintProperty(layer.id, colourKey(layer.type), ground);
+        } else if (layer.id.startsWith('place_')) {
+            setPaint(layer.id, config.paint.place);
+        } else if (layer.id === 'water_name') {
+            setPaint(layer.id, config.paint.water);
+        }
+    }
+}
 
 /** Below this rate we call it dry, matching the bottom of the colour ramp. */
 const WET_THRESHOLD_MM_H = 0.1;
@@ -187,38 +324,22 @@ const initialConfig = BASEMAPS[initialBasemap];
 
 const map = new maplibregl.Map({
     container: 'map',
-    style: {
-        version: 8,
-        sources: {
-            basemap: {
-                type: 'raster',
-                tiles: [initialConfig.ground],
-                tileSize: 256,
-                attribution: attributionFor(initialConfig),
-            },
-            ...(initialConfig.labels
-                ? { labels: { type: 'raster', tiles: [initialConfig.labels], tileSize: 256 } }
-                : {}),
-        },
-        layers: [
-            {
-                id: 'basemap', type: 'raster', source: 'basemap',
-                ...(initialConfig.groundPaint ? { paint: initialConfig.groundPaint } : {}),
-            },
-            ...(initialConfig.labels
-                ? [{
-                    id: 'labels', type: 'raster', source: 'labels',
-                    ...(initialConfig.labelPaint ? { paint: initialConfig.labelPaint } : {}),
-                }]
-                : []),
-        ],
-    },
+    style: styleFor(initialConfig),
     center: [5.2913, 52.1326],
     zoom: 6.4,
-    attributionControl: { compact: true },
+    // Added by hand below instead: on MapLibre 3 this option is only read as a
+    // boolean, so the `{ compact: true }` it used to be given did nothing.
+    attributionControl: false,
 });
+// Our own credits are the same whichever basemap is showing, so they belong on
+// the control rather than being pasted onto every provider's line — which also
+// means they survive a vector style, whose sources we do not build.
+map.addControl(
+    new maplibregl.AttributionControl({ compact: true, customAttribution: OWN_CREDIT })
+);
 el.basemapSelect.value = initialBasemap;
 document.body.classList.toggle('theme-light', !!initialConfig.lightUi);
+onStyleReady(() => applyPaintOverrides(initialConfig));
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
 // ---------------------------------------------------------------- boot
@@ -238,7 +359,7 @@ async function boot() {
 
 async function load({ initial }) {
     try {
-        const response = await fetch('/api/config', { cache: 'no-store' });
+        const response = await apiFetch('/api/config', { cache: 'no-store' });
         if (response.status === 503) throw new DataNotReady();
         if (!response.ok) throw new Error(`Server returned ${response.status}`);
         const manifest = await response.json();
@@ -311,8 +432,10 @@ function clearWarmupRetry() {
 }
 
 function setupRadarLayer() {
+    // 'styledata' rather than 'load', because a basemap switch replaces the
+    // style without the map ever loading a second time.
     if (!map.isStyleLoaded()) {
-        map.once('load', setupRadarLayer);
+        map.once('styledata', setupRadarLayer);
         return;
     }
     if (map.getSource('radar')) {
@@ -335,8 +458,7 @@ function setupRadarLayer() {
                 'raster-fade-duration': 0,
             },
         },
-        // Under the place names, over the ground.
-        map.getLayer('labels') ? 'labels' : undefined
+        labelLayerId(map.getStyle().layers)
     );
 }
 
@@ -1077,42 +1199,23 @@ el.basemapSelect.addEventListener('change', (event) => {
     setBasemap(event.target.value);
 });
 
+/** The basemap whose style is loading, and the one chosen while it loaded. */
+let loadingBasemap = null;
+let queuedBasemap = null;
+
 /**
- * Swap the basemap. RasterTileSource.setTiles only exists from MapLibre 4
- * onwards, so rebuild the ground and label layers around the radar layer, which
- * stays put in the middle of the stack.
+ * Swap the basemap. Replacing the whole style is what lets a vector basemap sit
+ * in the same list as the raster ones — its ground is dozens of layers, not the
+ * one that swapping tile URLs in place could reach.
+ *
+ * Starting a second setStyle before the first has loaded leaves MapLibre unable
+ * to diff the two and, in practice, leaves the map blank — which is exactly what
+ * arrowing down the picker does. So a choice made mid-load is queued rather than
+ * applied, and only the last one is; the UI has already moved on regardless.
  */
 function setBasemap(name) {
     const config = BASEMAPS[name];
-    if (!config || !map.getSource('basemap')) return;
-
-    for (const id of ['labels', 'basemap']) {
-        if (map.getLayer(id)) map.removeLayer(id);
-        if (map.getSource(id)) map.removeSource(id);
-    }
-
-    map.addSource('basemap', {
-        type: 'raster',
-        tiles: [config.ground],
-        tileSize: 256,
-        attribution: attributionFor(config),
-    });
-    // Ground goes below everything that is left, i.e. below the radar.
-    map.addLayer(
-        {
-            id: 'basemap', type: 'raster', source: 'basemap',
-            ...(config.groundPaint ? { paint: config.groundPaint } : {}),
-        },
-        map.getStyle().layers[0]?.id
-    );
-
-    if (config.labels) {
-        map.addSource('labels', { type: 'raster', tiles: [config.labels], tileSize: 256 });
-        map.addLayer({
-            id: 'labels', type: 'raster', source: 'labels',
-            ...(config.labelPaint ? { paint: config.labelPaint } : {}),
-        });
-    }
+    if (!config) return;
 
     document.body.classList.toggle('theme-light', !!config.lightUi);
     try {
@@ -1120,6 +1223,24 @@ function setBasemap(name) {
     } catch {
         // Not being able to remember the choice is not worth an error.
     }
+
+    if (loadingBasemap) queuedBasemap = name;
+    else applyBasemap(name);
+}
+
+function applyBasemap(name) {
+    const config = BASEMAPS[name];
+    loadingBasemap = name;
+    map.setStyle(styleFor(config), { transformStyle: carryRadarOver });
+    // Not onStyleReady: right after setStyle the *old* style can still report
+    // itself loaded, which would repaint layers that are about to be replaced.
+    map.once('styledata', () => {
+        loadingBasemap = null;
+        applyPaintOverrides(config);
+        const queued = queuedBasemap;
+        queuedBasemap = null;
+        if (queued && queued !== name) applyBasemap(queued);
+    });
 }
 
 el.settingsBtn.addEventListener('click', () => togglePopover(el.settingsPopover, el.settingsBtn));

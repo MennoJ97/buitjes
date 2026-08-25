@@ -12,11 +12,12 @@
 
 import { conditionsFromEnsemble } from './ensemble.js';
 import { FrameStore } from './radar.js';
+import { apiFetch } from './key.js';
 
 const WET_THRESHOLD_MM_H = 0.1;
 
 export async function pointForName(name) {
-    const response = await fetch(`/api/point/${encodeURIComponent(name)}`, { cache: 'no-store' });
+    const response = await apiFetch(`/api/point/${encodeURIComponent(name)}`, { cache: 'no-store' });
     if (response.status === 401) throw new Error('this server requires an API key for point forecasts');
     if (response.status === 404) throw new Error(`no forecast is published for "${name}"`);
     if (!response.ok) throw new Error(`server returned ${response.status}`);
@@ -32,8 +33,8 @@ export async function pointForName(name) {
 export async function pointForCoordinates({ lat, lon }, options = {}) {
     const [manifest, ensemble] = await Promise.all([
         options.manifest
-            ?? fetch('/api/config', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
-        fetch(`/api/conditions?lat=${lat}&lon=${lon}`, { cache: 'no-store' })
+            ?? apiFetch('/api/config', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
+        apiFetch(`/api/conditions?lat=${lat}&lon=${lon}`, { cache: 'no-store' })
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null),
     ]);
