@@ -71,8 +71,12 @@ brew install --cask android-studio
 
 Open it once and let the setup wizard run — it installs the SDK to
 `~/Library/Android/sdk` and accepts the licences for you. Then **File → Open**
-this `android/` directory. Android Studio will offer to create the Gradle
-wrapper; let it.
+this `android/` directory and let the first Gradle sync finish; it downloads a
+Gradle distribution and every dependency, so a couple of minutes of apparently
+nothing happening is normal.
+
+The wrapper is already committed at the version AGP needs. If Studio offers to
+change it, decline — see the toolchain note at the end of this file.
 
 ### The small way — command-line tools only
 
@@ -93,25 +97,24 @@ export PATH="$ANDROID_HOME/platform-tools:$PATH"
 Install the packages this project builds against and accept the licences:
 
 ```bash
-sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+sdkmanager "platform-tools" "platforms;android-37" "build-tools;36.0.0"
 ```
 
 ```bash
 yes | sdkmanager --licenses
 ```
 
-You also need Gradle itself once, to generate the wrapper:
+The Gradle wrapper is committed, so `./gradlew` works without installing
+Gradle. It needs a JDK 17 or newer; Android Studio's bundled one does fine:
 
 ```bash
-brew install gradle && cd android && gradle wrapper
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ```
-
-After that `./gradlew` works and the global Gradle is no longer needed.
 
 ### Checking it took
 
 ```bash
-cd android && ANDROID_HOME="$ANDROID_HOME" gradle projects
+cd android && ./gradlew projects
 ```
 
 `:app` appearing in the list means the SDK was found. If only `:core` shows up,
@@ -137,22 +140,46 @@ against **real captured responses** from the server rather than hand-written
 approximations, since the two halves share nothing but that document and
 nothing else would catch them drifting apart.
 
-`:app` was written without an SDK present, so it has never been compiled.
-Expect to fix build errors on the first run. The places to look first, in
-rough order of how likely they are to be wrong:
+`:app` compiles and packages: `./gradlew :app:assembleDebug` produces a debug
+APK, with no warnings. What it has *not* had is a single second of runtime.
+Nothing below has been seen working on a device:
 
-1. **Glance 1.1.1's API surface**, which moves between versions:
-   `actionStartActivity`, `SizeMode.Exact` with `LocalSize`, the
-   `stateDefinition` override, `getAppWidgetState` / `updateAll`, and
-   `ContentScale`'s package.
-2. **`initialLayout="@layout/glance_default_loading_layout"`** in
-   `buitjes_widget_info.xml` assumes glance-appwidget exports that resource
-   under that name.
-3. **The 220k-pixel bitmap cap** in `ChartRenderer`, which guards the
-   RemoteViews Binder budget. The real limit is device-dependent; a large
-   tablet widget is the case to check.
-4. **`requestSingleUpdate` on API 26–29** in `LocationSource` — that branch can
-   only be exercised on an old device or emulator.
-5. `<monochrome>` in the adaptive icon and `targetCellWidth`/`targetCellHeight`
-   in the widget info are API 33/31 attributes compiled against SDK 35. They
-   are ignored on older devices, but worth an eyeball from AAPT.
+- whether the widget lays out sensibly at real sizes, and whether the chart
+  bitmap survives the RemoteViews Binder budget on a large tablet widget
+  (`ChartRenderer` caps itself at 220k pixels, which is a guess at a limit that
+  is device-dependent);
+- whether the refresh worker actually runs on a phone in Doze at anything like
+  fifteen minutes;
+- the API 26–29 branch of `LocationSource`, which needs an old device or an
+  emulator image to exercise at all;
+- whether an alert ever fires, which needs weather.
+
+### Toolchain
+
+Pinned to what Android Studio 2026.1.3 brings, because that is what builds this
+in practice: **AGP 9.3, Gradle 9.5, Kotlin 2.4.10, compileSdk 37**, minSdk 26.
+Two consequences worth knowing before changing any of them:
+
+- **AGP 9 compiles Kotlin itself.** `:app` must *not* apply
+  `org.jetbrains.kotlin.android` — doing so is a hard error, not a warning.
+  `:core` still applies `kotlin.jvm`, which is a different plugin for a module
+  AGP knows nothing about.
+- **AGP 9.3 requires Gradle 9.5 or newer.** Studio generated a 9.3 wrapper on
+  first open, which fails with a message naming the exact fix.
+
+Kotlin below 2.2 cannot run on Studio's bundled JDK 25 at all: its version
+parser throws `IllegalArgumentException: 25.0.2` before compiling anything.
+
+### A hazard of this checkout
+
+The repository lives inside a Nextcloud-synced folder, and Gradle's `build/`
+directories are not excluded from that sync. One symptom has already been seen:
+
+```
+Cannot access output property ... NoSuchFileException:
+  core/build/kotlin/compileKotlin/cacheable/caches-jvm
+```
+
+`rm -rf android/*/build android/build` and rebuild. Adding `build/` to
+Nextcloud's ignore list is the real fix, and is worth doing — the sync client
+otherwise uploads thousands of transient class files.

@@ -255,7 +255,7 @@ private fun footerText(snapshot: Snapshot, now: Long, stale: Boolean): String {
     return when {
         summary == null -> snapshot.problem?.text ?: "No forecast yet"
         stale -> "Stale — last checked ${age ?: "a while ago"}. $summary"
-        snapshot.problem != null -> "${snapshot.problem?.text}. Showing $age. $summary"
+        snapshot.problem != null -> "${snapshot.problem.text}. Showing $age. $summary"
         else -> "$summary  ·  ${age ?: ""}"
     }
 }

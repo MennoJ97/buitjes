@@ -196,7 +196,7 @@ private fun Provenance(snapshot: Snapshot?) {
         val staleness = when {
             snapshot == null -> null
             snapshot.isStale(now) -> "Stale — last checked ${age ?: "a while ago"}"
-            snapshot.problem != null -> "${snapshot.problem?.text}; showing data from $age"
+            snapshot.problem != null -> "${snapshot.problem.text}; showing data from $age"
             else -> "Updated $age"
         }
         staleness?.let {

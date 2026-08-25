@@ -1,17 +1,23 @@
 plugins {
+    // No `kotlin.android` here. AGP 9 compiles Kotlin itself, and applying the
+    // standalone plugin alongside it is a hard error rather than a warning.
+    // `:core` still applies `kotlin.jvm`, which is a different plugin for a
+    // module AGP knows nothing about.
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
-    // The catalog is on Kotlin 2.0, where the Compose compiler moved out of the
-    // Kotlin plugin into its own. Without this, `compose = true` below fails
-    // with a message about the compiler version that does not say "apply a
-    // plugin", which is a bad half-hour to spend.
+    // Compose's compiler has been its own plugin since Kotlin 2.0; `compose =
+    // true` below only turns the feature on, it does not bring a compiler.
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
     namespace = "nl.buitjes.android"
-    compileSdk = 35
+    // 37 because the AndroidX versions above refuse to be compiled against
+    // anything older, not because this app wants an API from it. Compiling
+    // against a newer SDK than you target is the normal arrangement: it decides
+    // which APIs exist to call, while `targetSdk` decides which runtime
+    // behaviours apply.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "nl.buitjes.android"
@@ -45,10 +51,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
     }
@@ -56,6 +58,14 @@ android {
     // Kotlin 1.9 way of pinning the Compose compiler, and on 2.0 the plugin
     // applied above owns the version instead. Setting both is how you get a
     // version conflict between two things that are trying to agree.
+}
+
+// `kotlinOptions` inside the android block is the old spelling and is gone in
+// AGP 9; the Kotlin plugin owns this now.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 dependencies {

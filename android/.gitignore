@@ -4,3 +4,5 @@ local.properties
 .idea/
 *.iml
 captures/
+# Kotlin 2.x scratch: compiler session ids and error dumps, per-machine.
+.kotlin/

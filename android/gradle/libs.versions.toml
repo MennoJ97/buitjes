@@ -1,16 +1,24 @@
 [versions]
-agp = "8.7.3"
-kotlin = "2.0.21"
-coreKtx = "1.15.0"
-lifecycle = "2.8.7"
-activityCompose = "1.9.3"
-composeBom = "2024.12.01"
+# Kept in step with Android Studio, which is the only thing that builds this in
+# practice. Studio 2026.1.3 ships Gradle 9.3 and advertises AGP 9.3.0 as its
+# latest known compatible version, and its bundled JDK is 25 — which is what
+# forced the move off Kotlin 2.0.21, whose version parser throws
+# `IllegalArgumentException: 25.0.2` before it compiles a line.
+agp = "9.3.0"
+kotlin = "2.4.10"
+coreKtx = "1.19.0"
+lifecycle = "2.11.0"
+activityCompose = "1.13.0"
+composeBom = "2026.08.00"
+# Still the newest stable; 1.3.0 is alpha and this is a widget people rely on.
 glance = "1.1.1"
-work = "2.10.0"
-datastore = "1.1.1"
+work = "2.11.2"
+datastore = "1.2.1"
+# Deliberately 4.x. OkHttp 5 makes `Response.body` non-null, which is a change
+# this client would have to be reworked for to gain nothing it needs.
 okhttp = "4.12.0"
-serialization = "1.7.3"
-coroutines = "1.9.0"
+serialization = "1.11.0"
+coroutines = "1.11.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

@@ -48,11 +48,11 @@ class ForecastParsingTest {
     fun `carries the hourly blocks alongside the rain series`() {
         val forecast = ForecastJson.parse(fixture("point_ad_hoc.json"))
         assertNotNull(forecast.temperature, "temperature comes from the ensemble proxy")
-        assertNotNull(forecast.precipitationOutlook)
+        val outlookBlock = assertNotNull(forecast.precipitationOutlook)
 
         // The outlook is a real ensemble, so unlike the sampled rain it does
         // have spread — this is the block a chart may legitimately band.
-        val outlook = forecast.precipitationOutlook!!.series.first()
+        val outlook = outlookBlock.series.first()
         assertTrue(outlook.p90 >= outlook.p10)
     }
 

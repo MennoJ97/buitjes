@@ -78,7 +78,11 @@ object LocationSource {
         add(LocationManager.PASSIVE_PROVIDER)
     }.filter { provider ->
         // getProvider rather than isProviderEnabled: a provider the device does
-        // not have at all throws from the latter on some vendor builds.
+        // not have at all throws from the latter on some vendor builds. It is
+        // deprecated in favour of the LocationProvider-less overloads, but the
+        // replacement only answers for providers that exist — which is the very
+        // question being asked here.
+        @Suppress("DEPRECATION")
         runCatching { manager.getProvider(provider) != null }.getOrDefault(false)
     }
 
@@ -165,6 +169,10 @@ object LocationSource {
                     if (continuation.isActive) continuation.resume(location)
                 }
 
+                // Deprecated on the interface itself, and implemented anyway:
+                // API 26–29 devices still call it, and a LocationListener that
+                // does not implement it fails to load on them.
+                @Deprecated("Required by LocationListener below API 30")
                 override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
                 override fun onProviderEnabled(provider: String) = Unit
                 override fun onProviderDisabled(provider: String) {
