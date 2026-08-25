@@ -77,7 +77,12 @@ class BuitjesWidget : GlanceAppWidget() {
         val target = WidgetTarget.parse(currentTarget(context, id))
         val snapshot = target?.let { ForecastRepository(context).cached(it) }
 
-        if (snapshot?.forecast == null) {
+        // Only for a configured widget with nothing to draw. An unconfigured one
+        // has no location to fetch for, and a widget with stale data already has
+        // something to show — enqueueing on every redraw would turn a rotation
+        // into a fetch. `refreshNow` is unique-KEEP, so the repeats that do get
+        // through collapse into one.
+        if (target != null && snapshot?.forecast == null) {
             RefreshWorker.schedule(context)
             RefreshWorker.refreshNow(context)
         }

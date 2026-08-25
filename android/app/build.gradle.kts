@@ -73,8 +73,12 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.material3)
 
+    // glance-material3 is deliberately absent. It would supply `GlanceTheme`,
+    // but the widget resolves day/night itself and passes the same palette to
+    // the chart renderer — otherwise the composed text and the baked bitmap
+    // could disagree about which theme they are in, which is exactly the sort
+    // of thing that only shows up on someone else's phone at dusk.
     implementation(libs.androidx.glance.appwidget)
-    implementation(libs.androidx.glance.material3)
 
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.datastore.preferences)
