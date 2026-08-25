@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The status-bar icon. Solid white with transparency as the only other value:
+    the system takes the alpha channel and throws the colours away, so anything
+    with a fill other than opaque white comes out as a grey blob. Drawn heavier
+    than the launcher icon for the same reason — it is shown at 24dp, next to
+    the clock.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M6.5,13.5 A3.6,3.6 0 0 1 6.9,6.4 A5,5 0 0 1 16.6,7.3 A3.4,3.4 0 0 1 16.2,13.5 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8.4,15.6 L7,19.4 A1.05,1.05 0 0 0 8.9,20.2 L10.3,16.4 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13.4,15.6 L12,19.4 A1.05,1.05 0 0 0 13.9,20.2 L15.3,16.4 Z" />
+</vector>

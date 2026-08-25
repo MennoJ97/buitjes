@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only the strings that something outside Kotlin has to reach live here: the
+    manifest, the widget metadata and the notification channels, which the
+    system reads and shows in its own settings screens. The in-app copy stays
+    inline in the Compose code it belongs to. There is no translation planned
+    for a personal client, so a resource id per sentence would buy indirection
+    and nothing else.
+-->
+<resources>
+    <string name="app_name">Buitjes</string>
+
+    <string name="widget_label">Buitjes rain</string>
+    <string name="widget_description">Six hours of rain for one place, on the home screen.</string>
+    <string name="widget_configure_title">Choose a location</string>
+
+    <!-- Shown in Settings > Notifications, so they have to stand on their own. -->
+    <string name="channel_alerts_name">Rain alerts</string>
+    <string name="channel_alerts_description">Rain arriving within your lead time.</string>
+    <string name="channel_issues_name">Problems</string>
+    <string name="channel_issues_description">Quiet notes when the app cannot check the forecast, or when you are outside radar coverage.</string>
+</resources>
