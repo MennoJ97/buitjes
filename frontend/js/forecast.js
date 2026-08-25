@@ -139,6 +139,7 @@ function showRadar(location) {
             timeEl: $('mini-time'),
             playBtn: $('mini-play'),
             statusEl: $('mini-status'),
+            scrubEl: $('mini-scrub'),
         });
     }
     minimap.show(location).catch((error) => {

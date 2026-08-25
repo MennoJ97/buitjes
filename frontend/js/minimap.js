@@ -34,7 +34,7 @@ const FRAME_MS = 260;
 const HOLD_LAST_MS = 1100;
 const REFRESH_MS = 5 * 60 * 1000;
 
-export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl }) {
+export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl, scrubEl }) {
     const store = new FrameStore();
     let renderer = null;
     let map = null;
@@ -52,6 +52,7 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl 
         const image = store.imageFor(current);
         if (image) renderer.draw(image); else renderer.clear();
         timeEl.textContent = formatClock(current.t);
+        scrubEl.value = String(index);
         timeEl.dateTime = new Date(current.t * 1000).toISOString();
         // The observed/nowcast split is the honest part of a radar loop, so say
         // which one is on screen rather than letting them blur together.
@@ -81,11 +82,35 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl 
 
     playBtn.addEventListener('click', () => setPlaying(!playing));
 
+    // Scrubbing is taking manual control, so it stops the loop rather than
+    // fighting it for the next frame. The button flips to ▶, which is the only
+    // hint needed that playback is now yours to restart.
+    scrubEl.addEventListener('input', () => {
+        if (playing) setPlaying(false);
+        index = Number(scrubEl.value);
+        paint();
+    });
+
     /** Pause while off screen. A loop nobody is looking at is just battery. */
     const visibility = new IntersectionObserver(([entry]) => {
         if (entry.isIntersecting) schedule(FRAME_MS);
         else clearTimeout(timer);
     }, { threshold: 0.1 });
+
+    /**
+     * Anything that goes wrong here says so in the card's own status line.
+     *
+     * The map is built inside MapLibre callbacks, so a throw would otherwise
+     * land nowhere the reader can see it — the card would just sit blank, which
+     * is indistinguishable from "no radar on this device" and impossible to
+     * report usefully. WebGL and canvas sources are exactly the things that
+     * differ between a desktop browser and a phone.
+     */
+    function fail(where, error) {
+        statusEl.textContent = `radar unavailable — ${where}`;
+        statusEl.title = String(error?.message ?? error);
+        console.error(`minimap: ${where}`, error);
+    }
 
     function buildMap() {
         const name = storedBasemap();
@@ -111,9 +136,14 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl 
             mapEl.querySelector('details.maplibregl-ctrl-attrib[open]')?.removeAttribute('open');
         });
         mapEl.classList.toggle('theme-light', !!config.lightUi);
+        map.on('error', (event) => fail('map error', event?.error));
         map.once('load', () => {
-            applyPaintOverrides(map, config);
-            addRadarLayer();
+            try {
+                applyPaintOverrides(map, config);
+                addRadarLayer();
+            } catch (error) {
+                fail('could not add the radar layer', error);
+            }
         });
     }
 
@@ -146,7 +176,12 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl 
         const previous = frame()?.t;
         store.setManifest({ ...manifest, frames });
         if (!renderer) {
-            renderer = new RadarRenderer(canvasEl);
+            try {
+                renderer = new RadarRenderer(canvasEl);
+            } catch (error) {
+                fail('no WebGL on this device', error);
+                throw error;
+            }
         }
         renderer.resize(store.width, store.height);
         renderer.setMaxPrecip(store.maxPrecip);
@@ -155,6 +190,7 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl 
         const held = store.frames.findIndex((f) => f.t === previous);
         index = held === -1 ? Math.max(0, store.frames.findIndex((f) => f.kind === 'nowcast') - 1) : held;
 
+        scrubEl.max = String(Math.max(0, store.frames.length - 1));
         await store.prefetch();
         if (!map) { buildMap(); visibility.observe(mapEl); } else { addRadarLayer(); }
         paint();

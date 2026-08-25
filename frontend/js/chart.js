@@ -42,12 +42,15 @@ function niceStep(range, target = 4) {
  * below zero would be nonsense) but wrong for temperature, where the interesting
  * variation is a few degrees somewhere well above it.
  */
+/** Floor for a chart with nothing to stretch into — a narrow single column. */
+const MIN_CHART_HEIGHT = 190;
+
 export function renderBandChart(container, series, options = {}) {
     const {
         unit = '',
         colour = '#3b82f6',
         zeroFloor = false,
-        height = 190,
+        height: fixedHeight = null,
         formatValue = (value) => String(value),
         now = null,
         minSpan = 1,
@@ -62,6 +65,13 @@ export function renderBandChart(container, series, options = {}) {
         return;
     }
 
+    // Height comes from the container for the same reason the width does: the
+    // cards are grid items that stretch to their row, and a fixed 190 left the
+    // chart beside the radar floating in 200px of empty card. Measured after
+    // the container is emptied, and the container is `flex: 1` so its height is
+    // the leftover space in the card rather than a function of its own content
+    // — otherwise this would feed back on itself and never settle.
+    const height = fixedHeight ?? Math.max(MIN_CHART_HEIGHT, Math.round(container.clientHeight) || MIN_CHART_HEIGHT);
     const width = Math.max(240, container.clientWidth || 480);
     const pad = { top: 10, right: 8, bottom: 22, left: 42 };
     const plotWidth = width - pad.left - pad.right;

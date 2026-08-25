@@ -908,6 +908,10 @@ body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
 /* ------------------------------------------------------------ charts */
 
 .chart { position: relative; width: 100%; }
+/* Only the forecast page's cards stretch their chart. The map's docked trend
+   panel reuses .chart with an explicit height: 120, and a min-height here would
+   have padded each of those out to 190 and left a gap under every one. */
+.chart-card > .chart { flex: 1; min-height: 190px; }
 .chart svg { display: block; overflow: visible; }
 .chart-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
 .chart-now { stroke: #f8fafc; stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.7; }
@@ -1001,7 +1005,13 @@ body.page-forecast {
 }
 
 .summary-card,
+/* A column so the chart can take whatever height the card was given. The cards
+   are grid items and stretch to the tallest in their row — which since the
+   radar card arrived is 396px, and a fixed-height chart beside it sat in a pool
+   of empty panel. */
 .chart-card {
+    display: flex;
+    flex-direction: column;
     background: var(--panel-solid);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -1252,6 +1262,47 @@ body.page-forecast {
     border-bottom: 7px solid transparent;
 }
 .mini-play.is-paused:hover::before { border-left-color: var(--accent-strong); }
+
+/* Deliberately understated. The map is the content; this is a control, and on
+   a card this size a full playback bar would read as the point of it. A hairline
+   track with a small thumb, sitting between the map and its note. */
+.mini-scrub {
+    width: 100%;
+    margin: 9px 0 0;
+    height: 14px;
+    background: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+    cursor: pointer;
+}
+.mini-scrub::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-strong);
+}
+.mini-scrub::-moz-range-track {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-strong);
+}
+.mini-scrub::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 11px;
+    height: 11px;
+    margin-top: -4px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+}
+.mini-scrub::-moz-range-thumb {
+    width: 11px;
+    height: 11px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+}
+.mini-scrub:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.6); }
 
 /* MapLibre paints its own canvas; the card supplies the rounded corner. */
 .mini-map .maplibregl-canvas { border-radius: 10px; }
