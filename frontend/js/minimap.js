@@ -34,7 +34,7 @@ const FRAME_MS = 260;
 const HOLD_LAST_MS = 1100;
 const REFRESH_MS = 5 * 60 * 1000;
 
-export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl, scrubEl }) {
+export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl, scrubEl, nowEl }) {
     const store = new FrameStore();
     let renderer = null;
     let map = null;
@@ -45,6 +45,29 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
     let point = null;
 
     const frame = () => store.frames[index];
+
+/** Matches the thumb width in the stylesheet; see .mini-track for why. */
+    const THUMB_PX = 11;
+
+    /**
+     * Put the "now" mark where the cycle's reference time falls.
+     *
+     * Taken from the manifest rather than the clock, and nearest-frame rather
+     * than interpolated, so it lands on the same instant the map page calls now
+     * and always sits exactly on a frame the scrubber can stop at.
+     */
+    function placeNow() {
+        const reference = store.manifest?.reference_time;
+        const last = store.frames.length - 1;
+        if (!reference || last < 1) return void (nowEl.hidden = true);
+        let nearest = 0;
+        store.frames.forEach((f, i) => {
+            if (Math.abs(f.t - reference) < Math.abs(store.frames[nearest].t - reference)) nearest = i;
+        });
+        nowEl.hidden = false;
+        nowEl.style.left =
+            `calc(${THUMB_PX / 2}px + (100% - ${THUMB_PX}px) * ${nearest / last})`;
+    }
 
     function paint() {
         const current = frame();
@@ -191,6 +214,7 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
         index = held === -1 ? Math.max(0, store.frames.findIndex((f) => f.kind === 'nowcast') - 1) : held;
 
         scrubEl.max = String(Math.max(0, store.frames.length - 1));
+        placeNow();
         await store.prefetch();
         if (!map) { buildMap(); visibility.observe(mapEl); } else { addRadarLayer(); }
         paint();

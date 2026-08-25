@@ -1266,9 +1266,35 @@ body.page-forecast {
 /* Deliberately understated. The map is the content; this is a control, and on
    a card this size a full playback bar would read as the point of it. A hairline
    track with a small thumb, sitting between the map and its note. */
+/* The scrub track and the "now" mark share a box so the mark can be placed
+   against it. The mark is inset by half a thumb at each end, matching the
+   main timeline: a range input's thumb centre never reaches the very edge, so
+   a marker laid out edge-to-edge drifts away from the thumb it should line up
+   with, worst at both ends. */
+.mini-track { position: relative; padding-top: 11px; }
+
+.mini-now {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 0.58rem;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted-dim);
+    pointer-events: none;
+    white-space: nowrap;
+}
+/* Reading order puts the word first; the tick belongs under it. */
+.mini-now { flex-direction: column-reverse; }
+.mini-now i { width: 1px; height: 7px; margin-top: 2px; background: var(--border-strong); }
+
 .mini-scrub {
     width: 100%;
-    margin: 9px 0 0;
+    margin: 2px 0 0;
     height: 14px;
     background: transparent;
     -webkit-appearance: none;

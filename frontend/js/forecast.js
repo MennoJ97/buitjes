@@ -140,6 +140,7 @@ function showRadar(location) {
             playBtn: $('mini-play'),
             statusEl: $('mini-status'),
             scrubEl: $('mini-scrub'),
+            nowEl: $('mini-now'),
         });
     }
     minimap.show(location).catch((error) => {
