@@ -9,6 +9,7 @@
 
 import { renderBandChart } from './chart.js';
 import { pointForName, pointForCoordinates } from './point.js';
+import { apiFetch, hasApiKey } from './key.js';
 
 const $ = (id) => document.getElementById(id);
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -72,7 +73,7 @@ function requestFromUrl() {
 }
 
 async function loadLocations() {
-    const response = await fetch('/api/config', { cache: 'no-store' });
+    const response = await apiFetch('/api/config', { cache: 'no-store' });
     if (!response.ok) return [];
     const manifest = await response.json();
     // Older manifests published bare names; accept both.
@@ -219,8 +220,20 @@ async function boot() {
     if (!points.length && request.name) points = [{ name: request.name, lat: null, lon: null }];
 
     if (!points.length) {
+        // Two different situations, and telling them apart is the difference
+        // between "fix your config" and "this list is not yours to see".
+        if (request.coords) {
+            select.hidden = true;
+            await load({ coords: request.coords });
+            return;
+        }
+        // An empty picker is worse than no picker: it looks like a broken
+        // control rather than an absent one.
+        select.hidden = true;
         showBanner(
-            'No point forecasts are published. Set WIDGET_LOCATIONS in the server .env to add one.',
+            hasApiKey()
+                ? 'No point forecasts are published. Set WIDGET_LOCATIONS in the server .env to add one.'
+                : 'Saved locations are private to this server. Open this page once with ?key=… to see them.',
             false
         );
         return;
@@ -241,7 +254,10 @@ async function boot() {
     }
 
     const byName = points.find((point) => point.name === request.name);
-    select.hidden = points.length < 2;
+    // Shown whenever there is anything to choose. It used to need two entries,
+    // which meant the picker vanished for the single-location setup that is the
+    // normal case — the one reader who has a saved location could not select it.
+    select.hidden = select.options.length === 0;
 
     if (!byName && request.coords) {
         // Honour the coordinate itself rather than snapping to a sampled point.

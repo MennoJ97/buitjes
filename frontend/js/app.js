@@ -2,6 +2,7 @@ import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
 import { renderBandChart } from './chart.js';
 import { pointForName, pointForCoordinates } from './point.js';
+import { apiFetch } from './key.js';
 
 /** How each timeline zone is described in the UI. */
 const ZONES = {
@@ -358,7 +359,7 @@ async function boot() {
 
 async function load({ initial }) {
     try {
-        const response = await fetch('/api/config', { cache: 'no-store' });
+        const response = await apiFetch('/api/config', { cache: 'no-store' });
         if (response.status === 503) throw new DataNotReady();
         if (!response.ok) throw new Error(`Server returned ${response.status}`);
         const manifest = await response.json();
