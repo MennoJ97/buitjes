@@ -127,11 +127,48 @@ cd android && ./gradlew projects
 cd android && ./gradlew :app:assembleDebug
 ```
 
-With a phone attached over USB (developer mode and USB debugging on):
+The APK lands in `app/build/outputs/apk/debug/app-debug.apk`.
+
+**Putting it on a phone.** Enable developer mode first: Settings → About phone
+→ tap *Build number* seven times, then Settings → System → Developer options →
+*USB debugging*. Plug the phone in and accept the "Allow USB debugging?" prompt
+it shows — until that is accepted `adb` reports the device as `unauthorized`
+and nothing will install.
+
+From Android Studio: pick the phone in the device dropdown and press Run.
+From a terminal:
 
 ```bash
 cd android && ./gradlew :app:installDebug
 ```
+
+Over Wi-Fi instead of a cable (Android 11+, both on the same network) — pair
+once using the code from Developer options → *Wireless debugging* → *Pair
+device with pairing code*:
+
+```bash
+adb pair PHONE_IP:PAIRING_PORT && adb connect PHONE_IP:DEBUG_PORT
+```
+
+### First run
+
+The app does nothing until it knows where the server is.
+
+1. Open it and enter the base URL of your Buitjes instance — the same one the
+   web map is served from — plus an API key if `API_KEYS` is set. Use *Test
+   connection*: it fetches `/api/config`, so a green result means the address,
+   the key and the network path are all good.
+2. Grant notifications and location when asked. Location has a second step
+   Android will not grant from a dialog: the alerts screen explains it and
+   deep-links to the system setting, where it has to be set to *Allow all the
+   time* for alerts to work while the app is closed.
+3. Long-press the home screen → Widgets → Buitjes, and drop the widget. It asks
+   which place to watch: one of the locations from `WIDGET_LOCATIONS`, or
+   "follow my location".
+
+If the phone reaches the server only over a LAN or WireGuard, remember it needs
+to be on that network for the widget to refresh — otherwise the widget greys
+out and labels itself stale, which is the intended behaviour rather than a bug.
 
 ## State of the code
 
