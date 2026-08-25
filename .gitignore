@@ -31,7 +31,11 @@ mqtt-client-id
 
 # Nextcloud sync conflict copies ("app 2.js", "main 3.py"). Three of these were
 # committed once by a broad `git add`, and an unreadable one blocked a build.
+# The second pattern is for directories, which the first misses because it
+# requires an extension: Gradle's output produced a "build 2" the first time
+# the Android project was built inside the synced folder.
 * [0-9].*
+* [0-9]
 *conflicted copy*
 
 # Vendored library sourcemaps (the libraries themselves are committed)
