@@ -1,6 +1,7 @@
 import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
 import { renderBandChart } from './chart.js';
+import { pointForName, pointForCoordinates } from './point.js';
 
 /** How each timeline zone is described in the UI. */
 const ZONES = {
@@ -471,6 +472,19 @@ function updateInspectPopup() {
     const series = inspectSeries;
     const current = series[currentIndex];
 
+    // "No value" has two causes and they are not the same thing: a frame that
+    // has not downloaded yet, and a point genuinely outside radar coverage.
+    // Reporting the first as the second is how Rotterdam came to look like open
+    // ocean while the prefetch was still running.
+    const frame = store.frames[currentIndex];
+    if (!store.isLoaded(frame)) {
+        const message = store.hasFailed(frame)
+            ? 'This frame could not be loaded.'
+            : 'Loading this frame…';
+        inspectPopup.setHTML(`<div class="popup-body"><p class="popup-empty">${message}</p></div>`);
+        return;
+    }
+
     if (current?.mmh === null) {
         inspectPopup.setHTML('<div class="popup-body"><p class="popup-empty">Outside radar coverage</p></div>');
         return;
@@ -500,20 +514,21 @@ function updateInspectPopup() {
 }
 
 /**
- * Link through to the full page for the published location nearest the click,
- * naming it so it is obvious the graphs are for there and not for the exact
- * pixel that was clicked.
+ * Link through to the full page for the point that was clicked.
+ *
+ * The label has to name whatever the link actually opens: it used to say the
+ * nearest sampled location while linking to the clicked coordinate, which read
+ * as though the graphs would be for somewhere else.
  */
 function trendLinkHtml() {
-    const point = nearestPublishedLocation(inspectPoint);
+    if (inspectPoint) {
+        const query = `lat=${inspectPoint.lat.toFixed(4)}&lon=${inspectPoint.lng.toFixed(4)}`;
+        return `<a class="popup-link" href="forecast.html?${query}">` +
+               'Full forecast for this point &rarr;</a>';
+    }
+    const point = nearestPublishedLocation(null);
     if (!point) return '';
-    // Send the coordinate, not the resolved name: the URL then says what the
-    // reader actually asked about, and the page can explain which sampled
-    // location it settled on and how far away that is.
-    const query = inspectPoint
-        ? `lat=${inspectPoint.lat.toFixed(4)}&lon=${inspectPoint.lng.toFixed(4)}`
-        : `location=${encodeURIComponent(point.name)}`;
-    return `<a class="popup-link" href="forecast.html?${query}">` +
+    return `<a class="popup-link" href="forecast.html?location=${encodeURIComponent(point.name)}">` +
            `Full forecast for ${point.name} &rarr;</a>`;
 }
 
@@ -618,18 +633,15 @@ function nearestPublishedLocation(lngLat) {
     return best;
 }
 
-async function loadTrend(name) {
-    const response = await fetch(`/api/point/${encodeURIComponent(name)}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`server returned ${response.status}`);
-    return response.json();
-}
-
 function renderTrend(document_) {
     trendPoint = document_;
-    el.trendTitle.textContent = document_.location.name;
+    const { name, lat, lon, ad_hoc: adHoc } = document_.location;
+    el.trendTitle.textContent = adHoc ? 'Clicked point' : name;
     el.trendSub.textContent = document_.summary?.text ?? '';
-    el.trendLink.href = `forecast.html?location=${encodeURIComponent(document_.location.name)}`;
-    el.trendSub.title = `${document_.location.lat.toFixed(4)}, ${document_.location.lon.toFixed(4)}`;
+    el.trendLink.href = adHoc
+        ? `forecast.html?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`
+        : `forecast.html?location=${encodeURIComponent(name)}`;
+    el.trendSub.title = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
 
     el.trendBody.innerHTML = '';
     for (const config of TREND_CHARTS) {
@@ -655,7 +667,25 @@ function renderTrend(document_) {
 }
 
 async function openTrend(lngLat = inspectPoint) {
-    const point = nearestPublishedLocation(lngLat);
+    // A click means that spot; with no click, fall back to a published location.
+    if (lngLat) {
+        el.trendPanel.hidden = false;
+        const key = `${lngLat.lng.toFixed(4)},${lngLat.lat.toFixed(4)}`;
+        if (trendLocation === key && trendPoint) return;
+        try {
+            trendLocation = key;
+            renderTrend(await pointForCoordinates(
+                { lat: lngLat.lat, lon: lngLat.lng },
+                { frames: store, manifest: store.manifest }
+            ));
+        } catch (error) {
+            trendLocation = null;
+            el.trendBody.innerHTML = `<p class="chart-empty">Could not load: ${error.message}</p>`;
+        }
+        return;
+    }
+
+    const point = nearestPublishedLocation(null);
     if (!point) {
         el.trendBody.innerHTML =
             '<p class="chart-empty">No point forecasts are published. ' +
@@ -669,7 +699,7 @@ async function openTrend(lngLat = inspectPoint) {
     if (trendLocation === point.name && trendPoint) return; // already showing it
     try {
         trendLocation = point.name;
-        renderTrend(await loadTrend(point.name));
+        renderTrend(await pointForName(point.name));
     } catch (error) {
         trendLocation = null;
         el.trendBody.innerHTML = `<p class="chart-empty">Could not load: ${error.message}</p>`;

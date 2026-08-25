@@ -183,6 +183,7 @@ export class FrameStore {
         this.manifest = null;
         this.frames = [];
         this.images = new Map(); // file -> HTMLImageElement
+        this.failed = new Set(); // files the server would not give us
         this._scratch = document.createElement('canvas');
         this._scratch.width = 1;
         this._scratch.height = 1;
@@ -214,10 +215,17 @@ export class FrameStore {
         for (const file of [...this.images.keys()]) {
             if (!live.has(file)) this.images.delete(file);
         }
+        for (const file of [...this.failed]) {
+            if (!live.has(file)) this.failed.delete(file);
+        }
     }
 
     isLoaded(frame) {
         return this.images.has(frame.file);
+    }
+
+    hasFailed(frame) {
+        return !!frame && this.failed.has(frame.file);
     }
 
     /** Fetch every frame that is not in memory yet, reporting progress 0..1. */
@@ -235,6 +243,9 @@ export class FrameStore {
                 try {
                     this.images.set(frame.file, await loadImage(`/api/frames/${frame.file}`));
                 } catch (err) {
+                    // Remembered so the UI can say "unavailable" rather than
+                    // waiting forever on a frame that is never coming.
+                    this.failed.add(frame.file);
                     failures.push(frame.file);
                 } finally {
                     done++;
