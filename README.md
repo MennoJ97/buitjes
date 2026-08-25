@@ -1,0 +1,105 @@
+# Buitjes
+
+Self-hosted precipitation radar and short-range nowcast for the Netherlands,
+built on KNMI's seamless ensemble. *Buitje* is Dutch for a passing shower.
+
+![The radar map, showing a rain band over the Rhineland](docs/images/map.png)
+
+It answers one question well — **is it going to rain on me, and when** — and
+answers it with the uncertainty intact, because a single number for something
+as twitchy as convective rain is a number that will be wrong.
+
+## What it does
+
+- **A radar map** covering the last hour of observations and the next six hours,
+  scrubbable on a timeline that marks which part is measured (`observed`), which
+  is extrapolated (`nowcast`), and which is model (`forecast`). The distinction
+  matters more than the pixels do.
+- **Hover anywhere** for the rain rate under the cursor; click for a full
+  forecast at that exact coordinate rather than snapping to a preset location.
+- **Point forecasts with real ensemble spread** for locations you configure —
+  p10/p25/median/p75/p90 and a probability of rain per five-minute step, taken
+  by sampling all 20 KNMI members while the timestep is in memory.
+- **Alerts.** "Tell me when it is about to rain at home", delivered to any
+  webhook — ntfy, Gotify, Home Assistant, a two-line script. Fires on the edge
+  and then stays quiet, because an alerting system's real failure mode is
+  crying wolf twelve times for one shower.
+- **A JSON API** shaped for a homepage dashboard widget.
+- **Five basemaps**, dark through high-contrast, none needing an API key.
+
+![The forecast detail page, with ensemble spread on every series](docs/images/forecast.png)
+
+## How it works
+
+```
+┌──────────────────────── docker compose ────────────────────────┐
+│                                                                │
+│  ingestor (Python)                weather-app (Rust / axum)    │
+│  ─ subscribes to KNMI's MQTT      ─ serves the frontend        │
+│    notification service           ─ /api/config   the manifest │
+│  ─ decodes NetCDF4 (h5py)         ─ /api/frames/<file>.webp    │
+│  ─ 20 members → one field         ─ /api/point/<name>          │
+│  ─ resamples rows to Mercator     ─ /api/current/<name>        │
+│  ─ encodes 16-bit WebP frames     ─ /healthz  data freshness   │
+│           │                                ▲                   │
+│           ▼                                │                   │
+│   docker volume "frames": *.webp + manifest.json (ro for the   │
+│   server, which never writes)                                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Why two languages.** The scientific formats have mature Python tooling (h5py,
+pyproj) and nothing worth using in Rust. So Python does the science once per
+cycle and the Rust server stays a dumb, fast file server of pre-baked frames.
+The halves share nothing but a volume, and **the manifest is the contract** —
+written last and atomically, so a reader gets either the whole old cycle or the
+whole new one, never a mixture.
+
+**The frame format.** Lossless WebP, with rain rate as a 16-bit fraction of
+full scale split across R (high byte) and G (low byte), alpha zero where dry.
+The frontend recombines the bytes in a WebGL shader and applies the colour ramp
+on the GPU, so changing the palette costs no refetching. Dry pixels are fully
+zeroed rather than merely transparent — the long uniform runs are what keep a
+780×780 frame around 30 KB.
+
+**Why rows get resampled.** MapLibre stretches an image across four corners
+linearly *in Web Mercator space*. KNMI's grid is regular in latitude, and
+latitude is not linear in Mercator, so handing the grid over unchanged would
+misplace rain by kilometres away from the middle of the domain.
+
+## Running it
+
+Needs Docker and a free [KNMI Open Data](https://dataplatform.knmi.nl/) API key.
+
+```bash
+git clone https://github.com/MennoJ97/buitjes.git && cd buitjes
+cp .env.example .env      # then put your KNMI key in it
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+Open <http://localhost:3000>. The first cycle takes a minute or two to arrive;
+the page says so rather than showing an empty map.
+
+Everything is configured through `.env`, which documents each option and why it
+has the default it does — including which locations get point forecasts, the
+alert rules, and what CORS, API keys and rate limiting each actually protect
+you from.
+
+For a real deployment behind a reverse proxy — resource limits, choosing a
+middleware chain, wiring alerts to a local ntfy, and a dashboard widget that
+fetches server-side so no key ships in a web page — see
+**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+
+## Data
+
+| | |
+|---|---|
+| Forecast | KNMI `seamless_precipitation_ensemble_forecast_members` 1.0 — a pySTEPS/NWP blend, 20 members, 5-minute steps to +6 h |
+| Observed | KNMI `nl_rdr_data_rtcor_5m` real-time corrected radar composite |
+| Conditions | [Open-Meteo](https://open-meteo.com/) ensemble, for temperature, wind, solar and the beyond-6-hour rain outlook |
+| Basemaps | [CARTO](https://carto.com/), [OpenFreeMap](https://openfreemap.org/) and [OpenStreetMap](https://www.openstreetmap.org/) |
+
+KNMI open data is CC BY 4.0. This is a hobby project and not an official KNMI
+product — for warnings, go to [KNMI](https://www.knmi.nl/) itself.
+
+Inspired by [Nimbus](https://nimbus.yannick.cloud).
