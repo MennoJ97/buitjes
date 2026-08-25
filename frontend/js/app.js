@@ -4,6 +4,7 @@ import { renderBandChart } from './chart.js';
 import { pointForName, pointForCoordinates } from './point.js';
 import { apiFetch } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
+import { formatClock } from './time.js';
 
 /** How each timeline zone is described in the UI. */
 const ZONES = {
@@ -1322,13 +1323,6 @@ function updateSliderFill(input) {
 }
 
 // ---------------------------------------------------------------- formatting
-
-function formatClock(seconds) {
-    return new Date(seconds * 1000).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-    });
-}
 
 function formatOffset(diffSeconds) {
     if (diffSeconds === 0) return 'now';

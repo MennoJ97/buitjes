@@ -11,6 +11,7 @@ import { renderBandChart } from './chart.js';
 import { pointForName, pointForCoordinates } from './point.js';
 import { apiFetch, hasApiKey } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
+import { formatClock } from './time.js';
 
 const $ = (id) => document.getElementById(id);
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -122,8 +123,7 @@ function render(document_) {
     currentDocument = document_;
     const reference = document_.reference_time;
 
-    $('ref-time').textContent = new Date(reference * 1000)
-        .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    $('ref-time').textContent = formatClock(reference);
     $('summary-text').textContent = document_.summary?.text ?? '';
     $('location-coords').textContent =
         `${document_.location.lat.toFixed(4)}, ${document_.location.lon.toFixed(4)}`;

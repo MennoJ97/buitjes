@@ -12,6 +12,8 @@
  * is reading values off a graph.
  */
 
+import { formatClock, formatDayClock, formatWeekday } from './time.js';
+
 const NS = 'http://www.w3.org/2000/svg';
 
 function element(name, attributes = {}) {
@@ -169,13 +171,12 @@ export function renderBandChart(container, series, options = {}) {
         if (placed.some((other) => Math.abs(other - position) < minGap)) continue;
         placed.push(position);
 
-        const date = new Date(entry.t * 1000);
-        const clock = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const clock = formatClock(entry.t);
         const label = element('text', {
             x: position, y: height - 7, class: 'chart-axis chart-axis--time',
         });
         label.textContent = multiDay && anchors.has(index)
-            ? `${date.toLocaleDateString([], { weekday: 'short' })} ${clock}`
+            ? `${formatWeekday(entry.t)} ${clock}`
             : clock;
         svg.appendChild(label);
     }
@@ -241,10 +242,7 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
         marker.setAttribute('cy', y(entry.median));
         marker.style.display = '';
 
-        const when = new Date(entry.t * 1000);
-        const stamp = span > 18 * 3600
-            ? when.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })
-            : when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const stamp = span > 18 * 3600 ? formatDayClock(entry.t) : formatClock(entry.t);
         // The axis formatter is deliberately coarse; reusing it here would round
         // a sub-degree spread away and show both bands as the same numbers.
         const precise = (value) =>
