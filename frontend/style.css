@@ -1021,12 +1021,16 @@ body.page-forecast {
 .summary-card { grid-column: 1 / -1; }
 .summary-text { margin: 0 0 14px; font-size: 1.15rem; font-weight: 600; line-height: 1.4; }
 
+/* A grid of equal columns, one per stat. auto-fit rather than a fixed count so
+   the same rule gives five across on a desktop and two on a phone, with each
+   label still sitting directly above its own number. */
 .summary-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px 30px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    gap: 14px 24px;
     margin: 0;
 }
+.summary-stat { min-width: 0; }
 .summary-stats dt {
     font-size: 0.62rem;
     font-weight: 700;
@@ -1040,9 +1044,7 @@ body.page-forecast {
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }
-/* Each stat is a dt/dd pair stacked into its own column. */
-.summary-stats dt { flex: 0 0 auto; }
-.summary-stats dd { flex: 0 0 auto; margin-right: 20px; }
+
 
 .chart-head {
     display: flex;

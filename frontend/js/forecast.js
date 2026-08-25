@@ -231,12 +231,19 @@ function renderSummaryStats(document_) {
         ]);
     }
 
+    // Each pair goes in its own wrapper — a <div> inside a <dl> is valid and
+    // keeps the dt/dd association. Without it the two are separate flex items
+    // that merely happen to sit next to each other, and the first line that
+    // wraps leaves a label on one row and its number on the next.
     for (const [label, value] of items) {
+        const cell = document.createElement('div');
+        cell.className = 'summary-stat';
         const term = document.createElement('dt');
         term.textContent = label;
         const definition = document.createElement('dd');
         definition.textContent = value;
-        stats.append(term, definition);
+        cell.append(term, definition);
+        stats.append(cell);
     }
 }
 
