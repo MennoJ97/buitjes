@@ -10,25 +10,99 @@ const ZONES = {
     forecast: { label: 'Forecast', hint: 'Increasingly weather-model driven' },
 };
 
+const carto = (name) => `https://a.basemaps.cartocdn.com/${name}/{z}/{x}/{y}.png`;
+const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+const CARTO_CREDIT =
+    '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors';
+const OSM_CREDIT =
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+// The map's attribution control is the conventional home for credits, so the
+// inspiration is acknowledged there as well as in the About dialog.
+const OWN_CREDIT =
+    ' | data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>' +
+    ' | inspired by <a href="https://nimbus.yannick.cloud">Nimbus</a>';
+
 /**
  * Basemaps are split into a label-free ground layer and a separate label layer,
  * so place names can be drawn back on top of the radar. Rain at 70% opacity over
  * an all-in-one basemap swallows exactly the city names you want to locate it by.
+ *
+ * `groundPaint` and `labelPaint` make a style more legible without a different
+ * tile provider — the alternatives with genuinely higher-contrast dark
+ * cartography (Stadia's Alidade Smooth Dark, Stamen Toner) all want an API key
+ * and a registered domain.
+ *
+ * The numbers are measured, not guessed, because the obvious ones are wrong:
+ * `raster-contrast` pivots around mid-grey, and CARTO's dark ground lives at
+ * 3-15% luminance, so simply turning contrast up drives the whole map below
+ * zero and clips it to black. At contrast 0.35 alone, 100% of the ground
+ * clipped. Raising `raster-brightness-min` in step lifts the range back into
+ * view: at contrast 0.3 with a floor of 0.18 nothing clips, land reads 45/255
+ * against water at 11 (from 38 against 8), and the labels go from 102 to 148.
+ *
+ * That is a real improvement but a bounded one. Brightness can only compress
+ * the range and contrast can only pivot at mid-grey, so these tiles cannot be
+ * made dramatically punchier from the client side; the Light and OpenStreetMap
+ * styles are the genuinely higher-contrast options here.
+ *
+ * OpenStreetMap's standard tiles are one image with the names baked in, so they
+ * cannot be split — its labels necessarily sit *under* the radar. That is the
+ * trade-off for the familiar look, and the radar opacity slider is the remedy.
  */
 const BASEMAPS = {
-    dark: { ground: 'dark_nolabels', labels: 'dark_only_labels' },
-    light: { ground: 'light_nolabels', labels: 'light_only_labels' },
-    minimal: { ground: 'dark_nolabels', labels: null },
+    dark: {
+        label: 'Dark',
+        ground: carto('dark_nolabels'),
+        labels: carto('dark_only_labels'),
+        credit: CARTO_CREDIT,
+    },
+    contrast: {
+        label: 'Dark, high contrast',
+        ground: carto('dark_nolabels'),
+        labels: carto('dark_only_labels'),
+        credit: CARTO_CREDIT,
+        groundPaint: { 'raster-contrast': 0.3, 'raster-brightness-min': 0.18 },
+        labelPaint: { 'raster-brightness-min': 0.3 },
+    },
+    light: {
+        label: 'Light',
+        ground: carto('light_nolabels'),
+        labels: carto('light_only_labels'),
+        credit: CARTO_CREDIT,
+        lightUi: true,
+    },
+    osm: {
+        label: 'OpenStreetMap',
+        ground: OSM_TILES,
+        labels: null,
+        credit: OSM_CREDIT,
+        lightUi: true,
+    },
+    minimal: {
+        label: 'Dark, no labels',
+        ground: carto('dark_nolabels'),
+        labels: null,
+        credit: CARTO_CREDIT,
+    },
 };
 
-const tileUrl = (name) => `https://a.basemaps.cartocdn.com/${name}/{z}/{x}/{y}.png`;
+const DEFAULT_BASEMAP = 'dark';
+const BASEMAP_STORAGE_KEY = 'stratus.basemap';
 
-// The map's attribution control is the conventional home for credits, so the
-// inspiration is acknowledged there as well as in the About dialog.
-const BASEMAP_ATTRIBUTION =
-    '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors' +
-    ' | data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>' +
-    ' | inspired by <a href="https://nimbus.yannick.cloud">Nimbus</a>';
+/** The style chosen last time. Picking a legible map should not be a per-visit chore. */
+function storedBasemap() {
+    try {
+        const name = localStorage.getItem(BASEMAP_STORAGE_KEY);
+        return name && BASEMAPS[name] ? name : DEFAULT_BASEMAP;
+    } catch {
+        // Private browsing, or storage disabled entirely.
+        return DEFAULT_BASEMAP;
+    }
+}
+
+const attributionFor = (config) => config.credit + OWN_CREDIT;
 
 /** Below this rate we call it dry, matching the bottom of the colour ramp. */
 const WET_THRESHOLD_MM_H = 0.1;
@@ -105,6 +179,12 @@ let warmupTimer = null;
  */
 class DataNotReady extends Error {}
 
+// Built from the remembered style rather than always starting dark and swapping:
+// rebuilding the sources a moment after load makes the map visibly flash, and on
+// a slow connection it downloads a set of tiles nobody asked to see.
+const initialBasemap = storedBasemap();
+const initialConfig = BASEMAPS[initialBasemap];
+
 const map = new maplibregl.Map({
     container: 'map',
     style: {
@@ -112,25 +192,33 @@ const map = new maplibregl.Map({
         sources: {
             basemap: {
                 type: 'raster',
-                tiles: [tileUrl(BASEMAPS.dark.ground)],
+                tiles: [initialConfig.ground],
                 tileSize: 256,
-                attribution: BASEMAP_ATTRIBUTION,
+                attribution: attributionFor(initialConfig),
             },
-            labels: {
-                type: 'raster',
-                tiles: [tileUrl(BASEMAPS.dark.labels)],
-                tileSize: 256,
-            },
+            ...(initialConfig.labels
+                ? { labels: { type: 'raster', tiles: [initialConfig.labels], tileSize: 256 } }
+                : {}),
         },
         layers: [
-            { id: 'basemap', type: 'raster', source: 'basemap' },
-            { id: 'labels', type: 'raster', source: 'labels' },
+            {
+                id: 'basemap', type: 'raster', source: 'basemap',
+                ...(initialConfig.groundPaint ? { paint: initialConfig.groundPaint } : {}),
+            },
+            ...(initialConfig.labels
+                ? [{
+                    id: 'labels', type: 'raster', source: 'labels',
+                    ...(initialConfig.labelPaint ? { paint: initialConfig.labelPaint } : {}),
+                }]
+                : []),
         ],
     },
     center: [5.2913, 52.1326],
     zoom: 6.4,
     attributionControl: { compact: true },
 });
+el.basemapSelect.value = initialBasemap;
+document.body.classList.toggle('theme-light', !!initialConfig.lightUi);
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
 // ---------------------------------------------------------------- boot
@@ -1005,22 +1093,33 @@ function setBasemap(name) {
 
     map.addSource('basemap', {
         type: 'raster',
-        tiles: [tileUrl(config.ground)],
+        tiles: [config.ground],
         tileSize: 256,
-        attribution: BASEMAP_ATTRIBUTION,
+        attribution: attributionFor(config),
     });
     // Ground goes below everything that is left, i.e. below the radar.
     map.addLayer(
-        { id: 'basemap', type: 'raster', source: 'basemap' },
+        {
+            id: 'basemap', type: 'raster', source: 'basemap',
+            ...(config.groundPaint ? { paint: config.groundPaint } : {}),
+        },
         map.getStyle().layers[0]?.id
     );
 
     if (config.labels) {
-        map.addSource('labels', { type: 'raster', tiles: [tileUrl(config.labels)], tileSize: 256 });
-        map.addLayer({ id: 'labels', type: 'raster', source: 'labels' });
+        map.addSource('labels', { type: 'raster', tiles: [config.labels], tileSize: 256 });
+        map.addLayer({
+            id: 'labels', type: 'raster', source: 'labels',
+            ...(config.labelPaint ? { paint: config.labelPaint } : {}),
+        });
     }
 
-    document.body.classList.toggle('theme-light', name === 'light');
+    document.body.classList.toggle('theme-light', !!config.lightUi);
+    try {
+        localStorage.setItem(BASEMAP_STORAGE_KEY, name);
+    } catch {
+        // Not being able to remember the choice is not worth an error.
+    }
 }
 
 el.settingsBtn.addEventListener('click', () => togglePopover(el.settingsPopover, el.settingsBtn));

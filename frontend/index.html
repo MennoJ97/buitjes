@@ -135,7 +135,16 @@
                         <p>Ground and label layers drawn separately so place names stay readable
                            through the rain. Built from
                            <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
-                           data.</p>
+                           data. The high-contrast dark style is these tiles with their
+                           tonal range widened, since the darker cartography that would
+                           give it directly is all behind an API key.</p>
+                    </li>
+                    <li>
+                        <a href="https://www.openstreetmap.org/" target="_blank" rel="noopener">OpenStreetMap standard tiles</a>
+                        <span class="about-kind">tiles</span>
+                        <p>The familiar OSM rendering, served by the OpenStreetMap Foundation.
+                           One image with the names drawn into it, so on this style they sit
+                           under the rain rather than over it.</p>
                     </li>
                 </ul>
             </section>
@@ -266,7 +275,9 @@
             <span class="field-label">Map style</span>
             <select id="basemap-select">
                 <option value="dark">Dark</option>
+                <option value="contrast">Dark, high contrast</option>
                 <option value="light">Light</option>
+                <option value="osm">OpenStreetMap</option>
                 <option value="minimal">Dark, no labels</option>
             </select>
         </label>
