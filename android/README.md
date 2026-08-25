@@ -138,5 +138,21 @@ approximations, since the two halves share nothing but that document and
 nothing else would catch them drifting apart.
 
 `:app` was written without an SDK present, so it has never been compiled.
-Expect to fix build errors on the first run — most likely in the Glance and
-WorkManager API surface, which move between versions.
+Expect to fix build errors on the first run. The places to look first, in
+rough order of how likely they are to be wrong:
+
+1. **Glance 1.1.1's API surface**, which moves between versions:
+   `actionStartActivity`, `SizeMode.Exact` with `LocalSize`, the
+   `stateDefinition` override, `getAppWidgetState` / `updateAll`, and
+   `ContentScale`'s package.
+2. **`initialLayout="@layout/glance_default_loading_layout"`** in
+   `buitjes_widget_info.xml` assumes glance-appwidget exports that resource
+   under that name.
+3. **The 220k-pixel bitmap cap** in `ChartRenderer`, which guards the
+   RemoteViews Binder budget. The real limit is device-dependent; a large
+   tablet widget is the case to check.
+4. **`requestSingleUpdate` on API 26–29** in `LocationSource` — that branch can
+   only be exercised on an old device or emulator.
+5. `<monochrome>` in the adaptive icon and `targetCellWidth`/`targetCellHeight`
+   in the widget info are API 33/31 attributes compiled against SDK 35. They
+   are ignored on older devices, but worth an eyeball from AAPT.
