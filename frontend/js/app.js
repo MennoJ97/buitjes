@@ -1001,24 +1001,77 @@ function drawSparkline(canvas, series) {
     ctx.fillRect(currentIndex * barWidth, 0, Math.max(1.5, barWidth - 1), height);
 }
 
-/** Plain-language read of the point series — the same logic the widget needs. */
+/**
+ * Plain-language read of the point series.
+ *
+ * Describes the *spell* — the contiguous run of wet steps — rather than the
+ * moment it begins. The onset rate alone is close to useless: it is by
+ * construction the instant the rate crosses the wet threshold, so it is always
+ * a small number whether what follows is a five-minute drizzle or the leading
+ * edge of a downpour. The peak, and how far ahead of the onset it sits, is what
+ * says which.
+ *
+ * The peak is taken from the current spell only, not the whole series. A second
+ * shower three hours later is a different event and should not be quoted as
+ * this one's severity.
+ */
 function summarise(series, reference) {
     const future = series.filter((p) => p.t >= reference && p.mmh !== null);
     if (!future.length) return 'No forecast for this point.';
 
-    const rainingNow = (future[0].mmh ?? 0) >= WET_THRESHOLD_MM_H;
-    if (rainingNow) {
-        const clearing = future.find((p) => (p.mmh ?? 0) < WET_THRESHOLD_MM_H);
-        return clearing
-            ? `Raining now, easing off around ${formatClock(clearing.t)}.`
-            : 'Raining for the rest of the forecast.';
+    const onsetIndex = future.findIndex((p) => (p.mmh ?? 0) >= WET_THRESHOLD_MM_H);
+    if (onsetIndex === -1) return 'Staying dry for the whole forecast.';
+
+    const dryAfter = future.findIndex(
+        (p, i) => i > onsetIndex && (p.mmh ?? 0) < WET_THRESHOLD_MM_H
+    );
+    const spell = future.slice(onsetIndex, dryAfter === -1 ? undefined : dryAfter);
+    const clearsAt = dryAfter === -1 ? null : future[dryAfter].t;
+
+    const onset = spell[0];
+    const peak = spell.reduce((best, p) => ((p.mmh ?? 0) > (best.mmh ?? 0) ? p : best), spell[0]);
+
+    // Only worth its own clause if it is meaningfully heavier than the start —
+    // otherwise it is the same number printed twice.
+    const peakMatters = peak.t !== onset.t && (peak.mmh ?? 0) >= (onset.mmh ?? 0) * 1.5 + 0.05;
+
+    const leadMinutes = Math.round((onset.t - reference) / 60);
+    // Whether the sentence is counting minutes from now or naming clock times.
+    // Mixing the two is what makes "rain at 11:25, up to 4 mm/h within 30 min"
+    // ambiguous — thirty minutes from now, or from the onset two hours away?
+    const relative = onsetIndex === 0 || leadMinutes < 90;
+
+    const parts = [];
+    if (onsetIndex === 0) {
+        // "now" is load-bearing: while the timeline is scrubbed, the line above
+        // this one shows the rate at the frame being looked at, and the two are
+        // different numbers. Without it they read as a contradiction.
+        parts.push(`Raining now at ${formatRate(onset.mmh)} mm/h`);
+    } else {
+        const when = relative ? `in ${leadMinutes} min` : `at ${formatClock(onset.t)}`;
+        // With no peak clause coming, the onset rate is the only figure there
+        // is, so it stays. With one, it would just be the smaller of two.
+        parts.push(peakMatters
+            ? `Dry now — rain ${when}`
+            : `Dry now — rain ${when} at ${formatRate(onset.mmh)} mm/h`);
     }
 
-    const onset = future.find((p) => (p.mmh ?? 0) >= WET_THRESHOLD_MM_H);
-    if (!onset) return 'Staying dry for the whole forecast.';
-    const minutes = Math.round((onset.t - reference) / 60);
-    const when = minutes < 90 ? `in ${minutes} min` : `at ${formatClock(onset.t)}`;
-    return `Dry now — rain expected ${when} (${formatRate(onset.mmh)} mm/h).`;
+    if (peakMatters) {
+        // How fast it builds is the other half of the question, and it is the
+        // gap between onset and peak — so say it in minutes when the sentence
+        // is already relative and the gap is short, rather than making the
+        // reader subtract two clock times.
+        const climb = Math.round((peak.t - onset.t) / 60);
+        parts.push(relative && climb <= 30
+            ? `up to ${formatRate(peak.mmh)} mm/h within ${climb} min`
+            : `peaking ${formatRate(peak.mmh)} mm/h around ${formatClock(peak.t)}`);
+    }
+
+    parts.push(clearsAt
+        ? `easing off around ${formatClock(clearsAt)}`
+        : 'lasting past the end of the forecast');
+
+    return `${parts.join(', ')}.`;
 }
 
 // ---------------------------------------------------------------- trend panel
