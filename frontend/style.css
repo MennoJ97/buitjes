@@ -834,6 +834,36 @@ body.theme-light {
     --panel: rgba(12, 14, 20, 0.86);
 }
 
+/* The top bar is the one piece of chrome with nothing behind it — brand and
+   clock sit directly on the map, lit for a dark basemap: near-white text with
+   a dark glow. Over OpenStreetMap's water that measures about 1.4:1, which is
+   not a matter of taste, it is unreadable.
+ *
+ * Dark text with a white halo instead. The halo matters as much as the colour:
+ * a light basemap is not uniformly light, and dark text alone would disappear
+ * over a motorway casing or a forest.
+ *
+ * Scoped to these two rather than done by redefining --text and --muted,
+ * because the panel, the popups and the icon buttons keep their dark
+ * backgrounds in this theme and still want the light-on-dark tokens. */
+body.theme-light .brand,
+body.theme-light .ref-time {
+    text-shadow: 0 1px 10px rgba(255, 255, 255, 0.95), 0 0 3px rgba(255, 255, 255, 0.9);
+}
+body.theme-light .brand { color: #0f172a; }
+body.theme-light .brand-mark { color: #1d4ed8; }
+body.theme-light .ref-time { color: #334155; }
+body.theme-light .ref-time time { color: #0f172a; }
+
+/* The stale amber is picked for a dark background; on a light one it needs to
+   go darker rather than brighter to gain the same separation. #92400e was the
+   first attempt and measured 4.45:1 against OSM's water — close enough to look
+   fine and still under the 4.5:1 line, which is exactly the kind of miss that
+   only shows up if you measure it. */
+body.theme-light .ref-time.is-stale,
+body.theme-light .ref-time.is-stale time { color: #7c2d12; }
+body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
+
 /* ------------------------------------------------------------ responsive */
 
 @media (max-width: 760px) {
