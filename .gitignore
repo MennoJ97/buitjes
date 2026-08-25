@@ -29,5 +29,10 @@ mqtt-client-id
 .DS_Store
 **/.DS_Store
 
+# Nextcloud sync conflict copies ("app 2.js", "main 3.py"). Three of these were
+# committed once by a broad `git add`, and an unreadable one blocked a build.
+* [0-9].*
+*conflicted copy*
+
 # Vendored library sourcemaps (the libraries themselves are committed)
 frontend/vendor/**/*.map
