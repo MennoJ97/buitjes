@@ -226,6 +226,33 @@ async fn require_api_key(
 ///
 /// The homepage widget is served from a different origin, so *some* CORS is
 /// required. `CORS_ALLOWED_ORIGINS` is a comma-separated allowlist; the literal
+/// The frontend, served so that a redeploy actually reaches open browsers.
+///
+/// `ServeDir` alone sends only `Last-Modified`, which is not an instruction but
+/// a hint: with no `Cache-Control` a browser applies its own heuristic and may
+/// reuse a script for hours without asking. After a deploy that leaves it
+/// running the previous JavaScript against the current HTML — a mismatch that
+/// fails in whatever way those two versions happen to disagree, far from the
+/// change that caused it.
+///
+/// `no-cache` does not mean "do not store"; it means "revalidate before use",
+/// so the file stays cached and the usual request is a conditional one that
+/// `ServeDir` answers with an empty 304. The frames keep their own long-lived
+/// immutable caching — they are named by timestamp and never change.
+fn static_files() -> Router {
+    Router::new()
+        .fallback_service(ServeDir::new("frontend"))
+        .layer(axum::middleware::from_fn(revalidate))
+}
+
+async fn revalidate(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response
+}
+
 /// `*` keeps the old permissive behaviour for anyone who wants it. Unset means
 /// same-origin only, which is the right default for a server on the public
 /// internet — the widget's origin has to be named deliberately.
@@ -297,7 +324,7 @@ async fn main() {
         .route("/api/point/:name", get(serve_point))
         .route("/api/current/:name", get(serve_current))
         .route("/api/conditions", get(serve_conditions))
-        .fallback_service(ServeDir::new("frontend"))
+        .fallback_service(static_files())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_api_key,
