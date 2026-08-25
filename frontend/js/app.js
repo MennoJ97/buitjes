@@ -25,9 +25,11 @@ const OSM_CREDIT =
 // The map's attribution control is the conventional home for credits, so the
 // inspiration is acknowledged there as well as in the About dialog.
 // MapLibre inserts its own separator between this and the basemap's own credit.
-const OWN_CREDIT =
-    'data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>' +
-    ' | inspired by <a href="https://nimbus.yannick.cloud">Nimbus</a>';
+// Only what the licences require. The tile credits come and go with the style,
+// so this is just the data: KNMI is CC BY 4.0, which asks to be named wherever
+// its data is shown. The nod to Nimbus is a courtesy rather than an obligation
+// and lives in the About dialog, where there is room to say why.
+const OWN_CREDIT = 'data &copy; <a href="https://dataplatform.knmi.nl/">KNMI</a>';
 
 /**
  * The recolouring that turns OpenFreeMap's Dark into a style you can read rain
@@ -1237,6 +1239,8 @@ function applyBasemap(name) {
     map.once('styledata', () => {
         loadingBasemap = null;
         applyPaintOverrides(config);
+        // A new style brings a new credits line, opened by MapLibre again.
+        collapseAttribution();
         const queued = queuedBasemap;
         queuedBasemap = null;
         if (queued && queued !== name) applyBasemap(queued);
@@ -1378,10 +1382,52 @@ function updateControlClearance() {
     }
 }
 
+/**
+ * Start the credits collapsed to their ⓘ.
+ *
+ * MapLibre's `compact` attribution is a <details> that it opens on load, so the
+ * "compact" control is a 400-500px bar across the bottom of the map — wide
+ * enough to run under the panel on any normal window. Collapsed it is a single
+ * button, and one click still shows every credit in full, which is what the
+ * licences ask for.
+ *
+ * Re-applied on styledata because switching basemaps rebuilds the control.
+ */
+function collapseAttribution() {
+    for (const node of document.querySelectorAll('details.maplibregl-ctrl-attrib[open]')) {
+        node.removeAttribute('open');
+    }
+}
+
 new ResizeObserver(updateControlClearance).observe(el.panel);
 window.addEventListener('resize', updateControlClearance);
+
+/**
+ * Watch the corner containers themselves, not just the panel.
+ *
+ * A vector style's credits are assembled from its TileJSON once the source
+ * loads, which is long after the page settles and never resizes the panel — so
+ * a one-off measurement decided "no collision" against a chip that had not yet
+ * grown to its full width. Observing the corners catches that, and catches the
+ * reader expanding the credits by hand.
+ */
+const clearanceObserver = new ResizeObserver(updateControlClearance);
+for (const corner of ['left', 'right']) {
+    const node = document.querySelector(`.maplibregl-ctrl-bottom-${corner}`);
+    if (node) clearanceObserver.observe(node);
+}
+
+// Deliberately not on `map.on('styledata')`: that fires repeatedly as sources
+// settle, so collapsing there would snap the credits shut under a reader who
+// had just opened them. Collapsing belongs to the moment a style is *applied* —
+// see applyBasemap — and to first load, below.
+map.on('styledata', updateControlClearance);
+
 // The controls are created by MapLibre, so wait until they exist.
-requestAnimationFrame(updateControlClearance);
+requestAnimationFrame(() => {
+    collapseAttribution();
+    updateControlClearance();
+});
 
 updateSliderFill(el.speedSlider);
 updateSliderFill(el.opacitySlider);
