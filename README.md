@@ -33,7 +33,7 @@ as twitchy as convective rain is a number that will be wrong.
 - **A JSON API** shaped for a homepage dashboard widget.
 - **Five basemaps**, dark through high-contrast, none needing an API key.
 
-![The forecast detail page, with ensemble spread on every series](docs/images/forecast.png)
+![The forecast detail page: the looping radar, and ensemble spread on every series](docs/images/forecast.png)
 
 ## How it works
 

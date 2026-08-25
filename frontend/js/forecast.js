@@ -205,7 +205,16 @@ function renderSummaryStats(document_) {
     const stats = $('summary-stats');
     stats.innerHTML = '';
 
-    const rain = document_.precipitation?.series ?? [];
+    // Every series here starts before now — the rain chart carries the last
+    // hour of radar, the conditions charts a few hours of history — and these
+    // stats are a forecast, so they count from the reference time forward.
+    // They used to span the whole series, which put "Peak rate 1.9 mm/h" under
+    // a sentence saying "peaking at 0.7 mm/h": both true, one describing a
+    // shower that had already passed.
+    const reference = document_.reference_time;
+    const ahead = (block) => (block?.series ?? []).filter((entry) => entry.t >= reference);
+
+    const rain = ahead(document_.precipitation);
     const peak = rain.length ? Math.max(...rain.map((entry) => entry.median)) : 0;
     // 5-minute steps, so a rate in mm/h contributes a twelfth of an hour.
     const total = rain.reduce((sum, entry) => sum + entry.median / 12, 0);
@@ -214,12 +223,11 @@ function renderSummaryStats(document_) {
         ['Total expected', `${total.toFixed(1)} mm`],
     ];
     for (const key of ['temperature', 'wind', 'solar']) {
-        const block = document_[key];
-        if (!block?.series?.length) continue;
-        const medians = block.series.map((entry) => entry.median);
+        const medians = ahead(document_[key]).map((entry) => entry.median);
+        if (!medians.length) continue;
         items.push([
             key === 'solar' ? 'Peak solar' : key === 'wind' ? 'Peak wind' : 'Max temp',
-            `${Math.max(...medians)} ${block.unit}`,
+            `${Math.max(...medians)} ${document_[key].unit}`,
         ]);
     }
 
