@@ -36,3 +36,10 @@ mqtt-client-id
 
 # Vendored library sourcemaps (the libraries themselves are committed)
 frontend/vendor/**/*.map
+
+# Private notes, deliberately not published. DEPLOYMENT.md is a runbook for one
+# specific server — its middleware names, directory layout and container names
+# describe that machine — and IMPLEMENTATION_PLAN.md is the working record
+# behind it. Neither is needed to run this; .env.example documents every option.
+docs/DEPLOYMENT.md
+docs/IMPLEMENTATION_PLAN.md

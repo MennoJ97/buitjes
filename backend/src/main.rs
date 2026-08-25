@@ -280,7 +280,7 @@ async fn revalidate(request: axum::extract::Request, next: axum::middleware::Nex
 /// same-origin only, which is the right default for a server on the public
 /// internet — the widget's origin has to be named deliberately.
 ///
-/// A widget that fetches server-side (a dashboard `custom-api` template asking
+/// A widget that fetches server-side (a dashboard template asking
 /// `http://buitjes-weather-app:3000` over the shared Docker network) is not a
 /// browser request at all, so it needs none of this. Leave the variable unset
 /// unless something in a page's JavaScript really does call the API.

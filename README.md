@@ -87,10 +87,20 @@ has the default it does — including which locations get point forecasts, the
 alert rules, and what CORS, API keys and rate limiting each actually protect
 you from.
 
-For a real deployment behind a reverse proxy — resource limits, choosing a
-middleware chain, wiring alerts to a local ntfy, and a dashboard widget that
-fetches server-side so no key ships in a web page — see
-**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+For a real deployment, put it behind a reverse proxy rather than publishing
+port 3000: `docker-compose.yml` carries Traefik labels and a rate limiter, and
+`BUITJES_HOST` and `BUITJES_MIDDLEWARES` in `.env` set the hostname and the
+middleware chain. Two things worth knowing before you do:
+
+- Put an auth middleware in front and you can leave both `API_KEYS` and
+  `CORS_ALLOWED_ORIGINS` empty. The key was only ever an identifier — a string
+  shipped inside a web page is readable by anyone who opens devtools — and a
+  dashboard widget that renders **server-side** never makes a browser request
+  at all, so it consults neither.
+- `/healthz` reports on the *data*, not on whether the process can serve: it
+  returns 503 once the newest forecast passes `MAX_MANIFEST_AGE_SECONDS`. Don't
+  wire it into a load balancer health check, or an upstream outage will take the
+  whole site down instead of showing the stale-data banner it was built for.
 
 ## Data
 
