@@ -190,7 +190,9 @@ private fun Provenance(snapshot: Snapshot?) {
             style = MaterialTheme.typography.bodyLarge,
         )
 
-        val age = snapshot?.fetchedAt?.takeIf { it > 0 }?.let { formatAge(snapshot.ageSeconds(now)) }
+        val age = snapshot
+            ?.takeIf { it.fetchedAt > 0 }
+            ?.let { formatAge(it.ageSeconds(now)) }
         val staleness = when {
             snapshot == null -> null
             snapshot.isStale(now) -> "Stale — last checked ${age ?: "a while ago"}"
