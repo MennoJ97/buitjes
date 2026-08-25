@@ -6,6 +6,14 @@
     <meta name="color-scheme" content="dark light">
     <!-- See robots.txt. -->
     <meta name="robots" content="noindex, nofollow">
+    <!-- Only the map page, and only because OpenStreetMap's tile servers reject
+         requests with no Referer. A reverse proxy sending Referrer-Policy:
+         same-origin — a reasonable default, and what this runs behind — strips
+         it on cross-origin requests, so the OSM basemap 403s while every other
+         basemap is unaffected. A document-level meta overrides the header.
+         strict-origin-when-cross-origin is the browsers' own default: the tile
+         host is told which site is asking, and nothing more. -->
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>Buitjes — Precipitation radar</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
