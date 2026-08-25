@@ -1,0 +1,362 @@
+"""Telling someone rain is coming, without becoming a nuisance.
+
+An alert is only useful if it is rare enough to still mean something. The
+forecast is republished every five minutes, so the naive rule — "notify while
+rain is in the window" — would fire a dozen times an hour for a single shower.
+What is worth a notification is the *edge*: rain appearing in the window when it
+was not there a moment ago. Everything in this module exists to find that edge
+and then keep quiet until it has genuinely passed.
+
+Three mechanisms, because one is not enough:
+
+* **Latching.** Once a rule fires it is `active`, and an active rule stays
+  silent no matter how many cycles keep matching.
+* **Hysteresis.** It re-arms only when the window drops clearly below the
+  threshold — not merely below it — so a shower hovering either side of 0.5
+  mm/h cannot ring twice.
+* **A quiet period.** A floor on how often one rule may speak at all, for the
+  case the other two did not anticipate.
+
+Evaluation runs in the ingestor because that is where the forecast already is:
+no extra service, no second copy of the data, and the alert is considered the
+moment a cycle is published rather than on a timer of its own.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from dataclasses import dataclass
+from datetime import datetime
+
+import requests
+
+log = logging.getLogger('ingestor.alerts')
+
+DEFAULT_THRESHOLD_MM_H = 0.5
+DEFAULT_WITHIN_MINUTES = 60
+DEFAULT_QUIET_MINUTES = 60
+
+# A rule re-arms when the window falls to this fraction of its threshold. Below
+# 1.0 on purpose: re-arming at exactly the threshold means a shower sitting on
+# the line re-arms and re-fires on alternating cycles.
+REARM_FRACTION = 0.6
+
+DELIVERY_TIMEOUT_SECONDS = 10
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One "tell me when" for one published location."""
+
+    location: str
+    threshold: float
+    within: int          # seconds of lead time to look ahead
+    probability: float   # minimum share of members; 0 accepts the median alone
+    quiet: int           # seconds before this rule may fire again
+
+    @property
+    def key(self) -> str:
+        """Identity in the state file.
+
+        Includes the thresholds, so editing a rule re-arms it rather than
+        inheriting the latch of the rule it replaced — an edited rule is a new
+        question, and the reader is entitled to an answer to it.
+        """
+        return f'{self.location}:{self.threshold}:{self.within}:{self.probability}'
+
+
+def parse_rules(raw: str) -> tuple[Rule, ...]:
+    """Parse ``ALERT_RULES``: ``name:threshold:within[:probability[:quiet]]``.
+
+    Semicolon-separated, matching WIDGET_LOCATIONS. Every field except the name
+    may be left empty to take the default, so ``home`` and ``home:::0.4`` are
+    both valid.
+    """
+    rules = []
+    for chunk in (raw or '').split(';'):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parts = [part.strip() for part in chunk.split(':')]
+        if len(parts) > 5:
+            raise ValueError(f'too many fields in alert rule {chunk!r}')
+        name = parts[0]
+        if not name:
+            raise ValueError(f'alert rule {chunk!r} has no location name')
+
+        def field(index, default, convert):
+            if index >= len(parts) or parts[index] == '':
+                return default
+            return convert(parts[index])
+
+        try:
+            rule = Rule(
+                location=name,
+                threshold=field(1, DEFAULT_THRESHOLD_MM_H, float),
+                within=int(field(2, DEFAULT_WITHIN_MINUTES, float) * 60),
+                probability=field(3, 0.0, float),
+                quiet=int(field(4, DEFAULT_QUIET_MINUTES, float) * 60),
+            )
+        except ValueError as error:
+            raise ValueError(f'bad alert rule {chunk!r}: {error}') from error
+
+        if rule.threshold <= 0:
+            raise ValueError(f'alert rule {chunk!r} needs a threshold above zero')
+        if rule.within <= 0:
+            raise ValueError(f'alert rule {chunk!r} needs a lead time above zero')
+        if not 0.0 <= rule.probability <= 1.0:
+            raise ValueError(f'alert rule {chunk!r}: probability is a fraction, 0 to 1')
+        rules.append(rule)
+    return tuple(rules)
+
+
+@dataclass(frozen=True)
+class Event:
+    """A rule's answer for one cycle: what the window holds."""
+
+    rule: Rule
+    onset: int | None       # when it crosses the threshold, or None if it never does
+    peak: float             # highest median in the window
+    peak_at: int | None
+    probability: float      # share of members at the onset step
+    raining_now: bool
+
+    @property
+    def matched(self) -> bool:
+        return self.onset is not None
+
+
+def evaluate(document: dict, rule: Rule, now: float) -> Event:
+    """Read one published point forecast through one rule.
+
+    Only the window between *now* and *now + within* is considered: rain the
+    forecast places beyond the lead time is not yet news, and rain in the past
+    is not news at all.
+    """
+    series = (document.get('precipitation') or {}).get('series') or []
+    window = [
+        entry for entry in series
+        if now - 300 <= entry['t'] <= now + rule.within
+    ]
+    if not window:
+        return Event(rule, None, 0.0, None, 0.0, False)
+
+    peak_entry = max(window, key=lambda entry: entry['median'])
+    onset = next(
+        (entry for entry in window
+         if entry['median'] >= rule.threshold
+         and entry.get('probability', 1.0) >= rule.probability),
+        None,
+    )
+    return Event(
+        rule=rule,
+        onset=onset['t'] if onset else None,
+        peak=peak_entry['median'],
+        peak_at=peak_entry['t'],
+        probability=(onset or {}).get('probability', 0.0),
+        raining_now=bool(onset and onset['t'] <= now + 300),
+    )
+
+
+def describe(event: Event, now: float) -> tuple[str, str]:
+    """A title and a body, for whatever ends up displaying them."""
+    where = event.rule.location
+    peak = f'{event.peak:.1f} mm/h'
+    if event.raining_now:
+        return (f'Rain at {where}', f'Raining now, peaking around {peak}.')
+
+    minutes = max(1, round((event.onset - now) / 60))
+    clock = datetime.fromtimestamp(event.onset).strftime('%H:%M')
+    chance = (f' ({round(event.probability * 100)}% of members)'
+              if event.rule.probability else '')
+    return (
+        f'Rain at {where} in {minutes} min',
+        f'Starting around {clock}, peaking around {peak}{chance}.',
+    )
+
+
+class AlertState:
+    """Which rules are latched, persisted so a restart is not a fresh start.
+
+    Without this, every `docker compose up` would re-announce rain that was
+    announced an hour ago — and restarts happen at exactly the times someone is
+    already looking at the thing.
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self.rules: dict[str, dict] = {}
+        try:
+            with open(path, 'r', encoding='utf-8') as handle:
+                stored = json.load(handle)
+            self.rules = stored.get('rules', {})
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as error:
+            # A corrupt state file must not stop the ingest loop; the cost of
+            # starting over is at worst one duplicate notification.
+            log.warning('alert state at %s unreadable (%s), starting fresh', path, error)
+
+    def entry(self, rule: Rule) -> dict:
+        return self.rules.setdefault(rule.key, {'active': False, 'last_fired': 0})
+
+    def prune(self, rules) -> None:
+        """Forget rules that are no longer configured."""
+        live = {rule.key for rule in rules}
+        for key in [key for key in self.rules if key not in live]:
+            del self.rules[key]
+
+    def save(self) -> None:
+        payload = json.dumps({'rules': self.rules}).encode()
+        directory = os.path.dirname(self.path) or '.'
+        try:
+            temporary = f'{self.path}.tmp'
+            with open(temporary, 'wb') as handle:
+                handle.write(payload)
+            os.replace(temporary, self.path)
+        except OSError as error:
+            log.warning('could not save alert state to %s: %s', directory, error)
+
+
+class Notifier:
+    """Delivery to one webhook.
+
+    A webhook rather than a built-in integration with any particular service:
+    ntfy, Gotify, Home Assistant, Discord and a two-line script all accept one,
+    and none of them need code here. `format` picks between a JSON body and
+    ntfy's plain-text-plus-headers convention.
+    """
+
+    def __init__(self, url: str, fmt: str = 'json', auth: str = ''):
+        self.url = url
+        self.format = fmt
+        self.auth = auth
+
+    def send(self, event: Event, now: float) -> bool:
+        """Deliver one alert. Returns whether it was accepted.
+
+        The return value decides whether the rule latches, so a webhook that is
+        down means the alert is retried on the next cycle rather than silently
+        swallowed.
+        """
+        title, body = describe(event, now)
+        headers = {}
+        if self.auth:
+            headers['Authorization'] = self.auth
+
+        try:
+            if self.format == 'ntfy':
+                headers.update({
+                    'Title': title,
+                    'Priority': 'default',
+                    'Tags': 'cloud_with_rain',
+                })
+                response = requests.post(
+                    self.url, data=body.encode('utf-8'), headers=headers,
+                    timeout=DELIVERY_TIMEOUT_SECONDS,
+                )
+            else:
+                response = requests.post(
+                    self.url,
+                    json={
+                        'title': title,
+                        'message': body,
+                        'location': event.rule.location,
+                        'onset': event.onset,
+                        'peak_mm_h': round(event.peak, 2),
+                        'peak_at': event.peak_at,
+                        'probability': round(event.probability, 3),
+                        'threshold_mm_h': event.rule.threshold,
+                    },
+                    headers=headers,
+                    timeout=DELIVERY_TIMEOUT_SECONDS,
+                )
+            response.raise_for_status()
+            return True
+        except requests.RequestException as error:
+            log.warning('alert delivery failed (%s); will retry next cycle', error)
+            return False
+
+
+class AlertRunner:
+    """Rules, latch state and delivery as one collaborator.
+
+    Bundled so the ingest path threads a single optional object instead of
+    three, and so `None` cleanly means "alerts are not configured".
+    """
+
+    def __init__(self, rules, state: AlertState, notifier: Notifier | None):
+        self.rules = rules
+        self.state = state
+        self.notifier = notifier
+        self.state.prune(rules)
+
+    @classmethod
+    def from_config(cls, config) -> 'AlertRunner | None':
+        if not config.alert_rules:
+            return None
+        notifier = None
+        if config.alert_webhook:
+            notifier = Notifier(config.alert_webhook, config.alert_format, config.alert_auth)
+        else:
+            # Worth saying out loud: rules with nowhere to deliver still latch
+            # and log, which is useful for a dry run and useless as an alarm.
+            log.warning('alert rules are configured but ALERT_WEBHOOK_URL is not; '
+                        'alerts will be logged only')
+        return cls(config.alert_rules, AlertState(config.alert_state_file), notifier)
+
+    def consider(self, document: dict) -> list[Event]:
+        """Evaluate one published document. Never raises: an alert is not worth
+        losing a forecast cycle over."""
+        try:
+            return process(document, self.rules, self.state, self.notifier)
+        except Exception:  # noqa: BLE001
+            log.exception('alert evaluation failed')
+            return []
+
+    def save(self) -> None:
+        self.state.save()
+
+
+def process(document: dict, rules, state: AlertState, notifier: Notifier | None,
+            now: float | None = None) -> list[Event]:
+    """Evaluate every rule for one location's document; fire what has changed.
+
+    Returns the events that were actually delivered, which is what the caller
+    should log — the ones that matched but stayed quiet are the normal case and
+    would drown the log.
+    """
+    now = time.time() if now is None else now
+    location = (document.get('location') or {}).get('name')
+    fired = []
+
+    for rule in rules:
+        if rule.location != location:
+            continue
+
+        event = evaluate(document, rule, now)
+        entry = state.entry(rule)
+
+        if not event.matched:
+            # Re-arm only once the window is clearly dry, not merely under the
+            # threshold, so a shower sitting on the line cannot ring twice.
+            if entry['active'] and event.peak < rule.threshold * REARM_FRACTION:
+                entry['active'] = False
+                log.info('alert rule %s re-armed', rule.key)
+            continue
+
+        if entry['active']:
+            continue
+        if now - entry.get('last_fired', 0) < rule.quiet:
+            continue
+
+        if notifier is None or notifier.send(event, now):
+            entry['active'] = True
+            entry['last_fired'] = int(now)
+            entry['last_onset'] = event.onset
+            fired.append(event)
+
+    return fired

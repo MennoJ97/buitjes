@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from .alerts import parse_rules
 from .points import parse_locations
 
 
@@ -43,6 +44,11 @@ class Config:
     conditions_past_hours: int
     conditions_forecast_hours: int
     conditions_refresh: int
+    alert_rules: tuple
+    alert_webhook: str
+    alert_format: str
+    alert_auth: str
+    alert_state_file: str
 
     @classmethod
     def from_env(cls) -> 'Config':
@@ -51,6 +57,25 @@ class Config:
             raise SystemExit(
                 'KNMI_API_KEY is not set. Request a key at '
                 'https://developer.dataplatform.knmi.nl/open-data-api#token'
+            )
+
+        alert_format = os.environ.get('ALERT_FORMAT', 'json').strip().lower()
+        if alert_format not in ('json', 'ntfy'):
+            raise SystemExit(f'ALERT_FORMAT must be json or ntfy (got {alert_format!r})')
+        try:
+            alert_rules = parse_rules(os.environ.get('ALERT_RULES', ''))
+        except ValueError as error:
+            # A misspelt rule is silence exactly when the alert was wanted, so
+            # refuse to start rather than run with a rule that will never fire.
+            raise SystemExit(str(error)) from error
+
+        known = {location.name for location in
+                 parse_locations(os.environ.get('WIDGET_LOCATIONS', ''))}
+        unknown = sorted({rule.location for rule in alert_rules} - known)
+        if unknown:
+            raise SystemExit(
+                f'ALERT_RULES names {", ".join(unknown)}, which WIDGET_LOCATIONS does not '
+                'publish. Alerts can only watch a location with a point forecast.'
             )
 
         crop = os.environ.get('CROP_BOUNDS', '').strip()
@@ -112,4 +137,18 @@ class Config:
             # Temperature is hourly and slow-moving; no need to refetch it on
             # every 5-minute precipitation cycle.
             conditions_refresh=int(os.environ.get('CONDITIONS_REFRESH_MINUTES', '30')) * 60,
+            # "tell me when it is about to rain at X", as
+            # name:threshold_mm_h:lead_minutes[:probability[:quiet_minutes]],
+            # semicolons between rules. Delivered to one webhook, which is what
+            # ntfy, Gotify, Home Assistant and a shell script all accept.
+            alert_rules=alert_rules,
+            alert_webhook=os.environ.get('ALERT_WEBHOOK_URL', '').strip(),
+            alert_format=alert_format,
+            # For an ntfy access token: "Bearer tk_...".
+            alert_auth=os.environ.get('ALERT_WEBHOOK_AUTH', '').strip(),
+            # Lives beside the frames so it survives a restart on the same volume.
+            alert_state_file=os.environ.get(
+                'ALERT_STATE_FILE',
+                os.path.join(os.environ.get('FRAME_DIR', '/data'), 'alerts.json'),
+            ),
         )
