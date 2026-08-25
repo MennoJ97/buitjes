@@ -3,6 +3,8 @@
 Self-hosted precipitation radar and short-range nowcast for the Netherlands,
 built on KNMI's seamless ensemble. *Buitje* is Dutch for a passing shower.
 
+*Mostly written by an AI coding assistant — see [Built with AI assistance](#built-with-ai-assistance).*
+
 ![The radar map, showing a rain band over the Rhineland](docs/images/map.png)
 
 It answers one question well — **is it going to rain on me, and when** — and
@@ -103,3 +105,19 @@ KNMI open data is CC BY 4.0. This is a hobby project and not an official KNMI
 product — for warnings, go to [KNMI](https://www.knmi.nl/) itself.
 
 Inspired by [Nimbus](https://nimbus.yannick.cloud).
+
+## Built with AI assistance
+
+Most of the code here was written by [Claude Code](https://claude.com/claude-code),
+working from my direction and against my review. `git log` is the precise record:
+21 of the 22 non-merge commits carry a `Co-Authored-By` trailer naming the model —
+the exception is the initial commit — and the messages set out the reasoning and
+the measurements behind each change.
+
+Saying so because you should know what you are reading, not as an apology for it.
+Read it the way you would read any code whose author you have not met.
+
+## License
+
+[MIT](LICENSE). KNMI's data has its own terms — CC BY 4.0 — which this licence
+does not cover or override.
