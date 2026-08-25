@@ -38,6 +38,45 @@ body {
 .icon-sprite { position: absolute; width: 0; height: 0; }
 .offscreen { position: absolute; left: -10000px; top: 0; }
 
+/* ------------------------------------------------- cursor rain readout */
+
+/* Positioned in JS from the pointer. `pointer-events: none` is load-bearing:
+   a chip that sat under the cursor would take the mousemove that positions it
+   and chase itself around the map. */
+.hover-readout {
+    /* Fixed, so the coordinates JS gets from the pointer can be used directly.
+       z-index sits below the panels (10+) - a readout must never cover a
+       control the reader is trying to reach. */
+    position: fixed;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px;
+    border-radius: 8px;
+    background: rgba(12, 16, 24, 0.86);
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(6px);
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    transition: opacity 90ms ease-out;
+}
+
+.hover-readout[hidden] { display: none; }
+.hover-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.hover-swatch[hidden] { display: none; }
+.hover-value { font-weight: 600; color: var(--text); }
+.hover-readout--muted .hover-value { font-weight: 500; color: var(--muted); }
+
+/* Touch has no hover: the chip would appear on tap and then stick. */
+@media (hover: none) {
+    .hover-readout { display: none !important; }
+}
+
 button { font: inherit; }
 
 /* ------------------------------------------------------------ surfaces */
