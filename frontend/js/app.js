@@ -316,6 +316,12 @@ let inspectMarker = null;
 let inspectPopup = null;
 let inspectPoint = null;
 let inspectSeries = null;
+/** Elements inside the open popup, so a frame change can write to them
+ *  instead of replacing them. Null whenever the body is not the graph. */
+let inspectDom = null;
+/** Which body is currently rendered: 'graph', 'loading', 'failed' or
+ *  'uncovered'. Only a change of mode justifies rebuilding the DOM. */
+let inspectMode = null;
 let refreshTimer = null;
 let warmupTimer = null;
 let healthTimer = null;
@@ -454,8 +460,12 @@ async function load({ initial }) {
         });
         el.loading.hidden = true;
 
-        // The frame list just changed, so any cached point series is stale.
-        if (inspectPoint) inspectSeries = store.series(inspectPoint.lng, inspectPoint.lat);
+        // The frame list just changed, so any cached point series is stale —
+        // and with it the summary and the bars, which are built once per series.
+        if (inspectPoint) {
+            inspectSeries = store.series(inspectPoint.lng, inspectPoint.lat);
+            inspectMode = null;
+        }
 
         showFrame(currentIndex);
         // After hideBanner() above, so a stale reading can claim the banner
@@ -818,6 +828,8 @@ function inspect(lngLat) {
         inspectPopup.on('close', () => {
             inspectPoint = null;
             inspectSeries = null;
+            inspectDom = null;
+            inspectMode = null;
             inspectMarker?.remove();
             inspectMarker = null;
         });
@@ -840,54 +852,98 @@ function inspect(lngLat) {
     // Sampling every frame is the expensive part, and it only depends on the
     // point - so do it once here rather than on every frame during playback.
     inspectSeries = store.series(lngLat.lng, lngLat.lat);
+    // The summary and the bars belong to the series, not the frame, so a new
+    // point is the one case that genuinely has to rebuild the body.
+    inspectMode = null;
     updateInspectPopup();
 }
 
+/**
+ * Reflect the current frame in the open popup.
+ *
+ * Called on every frame change, which during a timeline drag is dozens of times
+ * a second — so this must not rebuild the popup. It used to: one `setHTML` per
+ * frame, throwing away the body and building a fresh `<canvas>` each time, with
+ * the redraw deferred to `requestAnimationFrame`. That leaves at least one
+ * painted frame where the canvas is in the DOM but has not been drawn yet, and
+ * a `<canvas>` with no width attribute defaults to 300x150 — so the sparkline
+ * blanked and re-appeared on every step. Scrubbing strobed instead of moving.
+ *
+ * Now the body is built once and only the four things that actually depend on
+ * the frame are written: the swatch, the rate, the clock, and the marker.
+ */
 function updateInspectPopup() {
     if (!inspectPoint || !inspectPopup || !inspectSeries) return;
 
-    const series = inspectSeries;
-    const current = series[currentIndex];
+    const frame = store.frames[currentIndex];
+    const current = inspectSeries[currentIndex];
 
     // "No value" has two causes and they are not the same thing: a frame that
     // has not downloaded yet, and a point genuinely outside radar coverage.
     // Reporting the first as the second is how Rotterdam came to look like open
     // ocean while the prefetch was still running.
-    const frame = store.frames[currentIndex];
-    if (!store.isLoaded(frame)) {
-        const message = store.hasFailed(frame)
-            ? 'This frame could not be loaded.'
-            : 'Loading this frame…';
-        inspectPopup.setHTML(`<div class="popup-body"><p class="popup-empty">${message}</p></div>`);
-        return;
-    }
+    const mode = !store.isLoaded(frame)
+        ? (store.hasFailed(frame) ? 'failed' : 'loading')
+        : current?.mmh === null ? 'uncovered' : 'graph';
 
-    if (current?.mmh === null) {
-        inspectPopup.setHTML('<div class="popup-body"><p class="popup-empty">Outside radar coverage</p></div>');
+    if (mode !== inspectMode) {
+        buildInspectBody(mode);
+        inspectMode = mode;
+    }
+    if (mode !== 'graph') return;
+
+    const rate = current?.mmh ?? 0;
+    inspectDom.swatch.style.background = colorForRate(Math.max(rate, 0.1));
+    inspectDom.rate.textContent =
+        rate < WET_THRESHOLD_MM_H ? 'Dry' : `${rate.toFixed(1)} mm/h`;
+    inspectDom.at.textContent = `at ${formatClock(current.t)}`;
+    drawSparkline(inspectDom.spark, inspectSeries);
+}
+
+const INSPECT_MESSAGES = {
+    loading: 'Loading this frame…',
+    failed: 'This frame could not be loaded.',
+    uncovered: 'Outside radar coverage',
+};
+
+/**
+ * Replace the popup body. Only on a mode change or a new point.
+ *
+ * The elements are looked up straight after `setHTML` rather than in a
+ * `requestAnimationFrame`: MapLibre inserts the markup synchronously, so they
+ * are already there, and drawing now means the sparkline is never painted
+ * blank — not even on the first frame after a click.
+ */
+function buildInspectBody(mode) {
+    if (mode !== 'graph') {
+        inspectDom = null;
+        inspectPopup.setHTML(
+            `<div class="popup-body"><p class="popup-empty">${INSPECT_MESSAGES[mode]}</p></div>`
+        );
         return;
     }
 
     const reference = store.manifest.reference_time ?? store.frames[0].t;
-    const rate = current?.mmh ?? 0;
-
     inspectPopup.setHTML(`
         <div class="popup-body">
             <div class="popup-rate">
-                <span class="popup-swatch" style="background:${colorForRate(Math.max(rate, 0.1))}"></span>
-                <strong>${rate < WET_THRESHOLD_MM_H ? 'Dry' : `${rate.toFixed(1)} mm/h`}</strong>
-                <span class="popup-at">at ${formatClock(current.t)}</span>
+                <span class="popup-swatch" id="popup-swatch"></span>
+                <strong id="popup-rate-value"></strong>
+                <span class="popup-at" id="popup-at"></span>
             </div>
             <canvas class="popup-spark" id="popup-spark" height="44"></canvas>
-            <p class="popup-summary">${summarise(series, reference)}</p>
+            <p class="popup-summary">${summarise(inspectSeries, reference)}</p>
             ${trendLinkHtml()}
         </div>
     `);
 
-    // The popup element only exists after setHTML, so draw the sparkline now.
-    requestAnimationFrame(() => {
-        const canvas = document.getElementById('popup-spark');
-        if (canvas) drawSparkline(canvas, series);
-    });
+    const element = inspectPopup.getElement();
+    inspectDom = {
+        swatch: element.querySelector('#popup-swatch'),
+        rate: element.querySelector('#popup-rate-value'),
+        at: element.querySelector('#popup-at'),
+        spark: element.querySelector('#popup-spark'),
+    };
 }
 
 /**
@@ -913,8 +969,13 @@ function drawSparkline(canvas, series) {
     const width = canvas.clientWidth || 240;
     const height = canvas.clientHeight || 44;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
+    // Assigning width or height resets the backing store even when the value
+    // is unchanged, and this now runs on every frame of a drag rather than
+    // once per popup. Only pay for it when the size has actually changed.
+    const backingWidth = Math.round(width * dpr);
+    const backingHeight = Math.round(height * dpr);
+    if (canvas.width !== backingWidth) canvas.width = backingWidth;
+    if (canvas.height !== backingHeight) canvas.height = backingHeight;
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
