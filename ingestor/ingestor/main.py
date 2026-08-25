@@ -31,6 +31,7 @@ from .encode import encode_frame
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
+from .alerts import AlertRunner, describe as describe_alert
 from .conditions import ATTRIBUTION as CONDITIONS_ATTRIBUTION, ConditionsSource
 from .raster import MercatorResampler, StereographicResampler, TargetGrid
 
@@ -72,7 +73,7 @@ def write_atomic(directory: str, name: str, payload: bytes) -> None:
 # ------------------------------------------------------------------ forecast
 
 
-def build_forecast(path: str, config: Config, conditions=None):
+def build_forecast(path: str, config: Config, conditions=None, alert_runner=None):
     """Decode one forecast cycle into frames. Returns (frames, meta, grid)."""
     with BlendFile(path) as source:
         resampler = MercatorResampler(
@@ -108,7 +109,7 @@ def build_forecast(path: str, config: Config, conditions=None):
         log.info('forecast %s: wrote %d frames, %.1f MiB',
                  source.reference_time, len(frames), written / 1024 / 1024)
 
-        publish_points(config, source, extractor, conditions)
+        publish_points(config, source, extractor, conditions, alert_runner)
 
         meta = {
             'reference_time': source.reference_time,
@@ -132,8 +133,8 @@ def current_file_name(name: str) -> str:
 
 
 def publish_points(config: Config, source, extractor: PointExtractor,
-                   conditions=None) -> None:
-    """Write one point forecast per configured location."""
+                   conditions=None, alert_runner=None) -> None:
+    """Write one point forecast per configured location, and act on alert rules."""
     if not extractor:
         return
 
@@ -184,6 +185,17 @@ def publish_points(config: Config, source, extractor: PointExtractor,
             config.frame_dir, current_file_name(location.name),
             json.dumps(current_conditions(document)).encode(),
         )
+
+        # After the write, not before: an alert that arrives while the forecast
+        # it describes is still half-published sends the reader to a page that
+        # disagrees with it.
+        if alert_runner is not None:
+            for event in alert_runner.consider(document):
+                title, body = describe_alert(event, time.time())
+                log.info('alert sent: %s — %s', title, body)
+
+    if alert_runner is not None:
+        alert_runner.save()
 
     log.info('point forecasts published for %s',
              ', '.join(location.name for location in extractor.locations))
@@ -394,7 +406,7 @@ def seconds_until_next_publication(config: Config, state: State, now: float) -> 
 
 
 def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
-             check_forecast: bool = True) -> None:
+             check_forecast: bool = True, alert_runner=None) -> None:
     # A radar-only notification means the forecast cannot have moved, so looking
     # it up would spend a request to learn nothing.
     if not check_forecast and state.grid is not None:
@@ -411,7 +423,7 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
             downloaded = client.download(
                 config.dataset, config.version, filename, os.path.join(scratch, filename)
             )
-            frames, meta, grid = build_forecast(downloaded, config, conditions)
+            frames, meta, grid = build_forecast(downloaded, config, conditions, alert_runner)
         state.last_forecast_file = filename
         state.forecast_frames, state.meta, state.grid = frames, meta, grid
         reconcile_grid(config, grid)
@@ -488,11 +500,18 @@ def main() -> None:
                  ', '.join(l.name for l in config.widget_locations),
                  config.conditions_model or 'disabled')
 
+    alert_runner = AlertRunner.from_config(config)
+    if alert_runner:
+        log.info('alert rules: %s; delivery: %s',
+                 ', '.join(rule.key for rule in config.alert_rules),
+                 f'{config.alert_format} webhook' if config.alert_webhook else 'log only')
+
     state = State()
     continue_kwargs = {'check_forecast': True}
     while True:
         try:
-            run_once(client, config, state, conditions, **continue_kwargs)
+            run_once(client, config, state, conditions,
+                     alert_runner=alert_runner, **continue_kwargs)
             continue_kwargs = {'check_forecast': True}
             delay = seconds_until_next_publication(config, state, time.time())
         except RateLimited as exc:

@@ -41,6 +41,13 @@
 
     <div id="map"></div>
 
+    <!-- Follows the cursor with the rain rate under it. Pointer-only, and
+         deliberately outside #map so MapLibre never treats it as a target. -->
+    <div class="hover-readout" id="hover-readout" aria-hidden="true" hidden>
+        <span class="hover-swatch" id="hover-swatch"></span>
+        <span class="hover-value" id="hover-value"></span>
+    </div>
+
     <div class="banner" id="banner" role="alert" hidden>
         <svg class="banner-icon" aria-hidden="true"><use href="#icon-alert"/></svg>
         <span class="banner-spinner" aria-hidden="true"></span>

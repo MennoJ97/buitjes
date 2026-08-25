@@ -81,6 +81,9 @@ const el = {
     trendSub: $('trend-sub'),
     trendLink: $('trend-link'),
     glcanvas: $('glcanvas'),
+    hoverReadout: $('hover-readout'),
+    hoverSwatch: $('hover-swatch'),
+    hoverValue: $('hover-value'),
 };
 
 const store = new FrameStore();
@@ -371,6 +374,8 @@ function renderCurrentFrame() {
     }
 
     if (inspectPoint) updateInspectPopup();
+    // The cursor has not moved, but the rain under it has.
+    if (hoverPixel) updateHoverReadout();
 }
 
 function clampIndex(index) {
@@ -426,6 +431,109 @@ function setPlaying(playing) {
     playTimer = setInterval(() => {
         showFrame((currentIndex + 1) % store.frames.length);
     }, 1000 / fps);
+}
+
+// ---------------------------------------------------------- hover readout
+
+/**
+ * The rain rate under the cursor, without having to click.
+ *
+ * Clicking pins a point and opens the popup with its whole time series; this is
+ * the cheap continuous version — one pixel of the frame on screen, so the map
+ * can be read by sweeping across it. The popup answers "what happens here?",
+ * the readout answers "where is the rain right now?".
+ *
+ * The pointer position is kept in *screen* pixels rather than as a coordinate,
+ * because the ground moves under a stationary cursor: zooming, or a frame
+ * changing during playback, both have to re-read the same pixel.
+ */
+const CAN_HOVER = window.matchMedia('(hover: hover)').matches;
+
+let hoverPixel = null;
+let hoverHandle = null;
+let isPanning = false;
+
+function setupHoverReadout() {
+    if (!CAN_HOVER) return;
+    map.on('mousemove', (event) => {
+        hoverPixel = event.point;
+        scheduleHoverUpdate();
+    });
+    map.on('mouseout', hideHoverReadout);
+    // While panning, the value under the cursor is whatever is being dragged
+    // past it — briefly true and not worth reading, so stay out of the way.
+    map.on('dragstart', () => { isPanning = true; hideHoverReadout(); });
+    map.on('dragend', () => { isPanning = false; scheduleHoverUpdate(); });
+    // Zooming keeps the cursor still and moves the ground beneath it.
+    map.on('move', () => { if (hoverPixel) scheduleHoverUpdate(); });
+}
+
+function scheduleHoverUpdate() {
+    if (hoverHandle !== null) return;
+    hoverHandle = requestAnimationFrame(() => {
+        hoverHandle = null;
+        updateHoverReadout();
+    });
+}
+
+function hideHoverReadout() {
+    hoverPixel = null;
+    el.hoverReadout.hidden = true;
+}
+
+function updateHoverReadout() {
+    if (!hoverPixel || isPanning || !store.frames.length) {
+        el.hoverReadout.hidden = true;
+        return;
+    }
+
+    const frame = store.frames[currentIndex];
+    const { lng, lat } = map.unproject(hoverPixel);
+
+    // The same three states the popup distinguishes, in about three words each:
+    // a frame still downloading is not the same as a point with no radar over it.
+    let text;
+    let colour = null;
+    if (!store.isLoaded(frame)) {
+        text = store.hasFailed(frame) ? 'unavailable' : 'loading…';
+    } else {
+        const mmh = store.sample(frame, lng, lat);
+        if (mmh === null) {
+            text = 'no radar here';
+        } else if (mmh < WET_THRESHOLD_MM_H) {
+            text = 'dry';
+        } else {
+            text = `${formatRate(mmh)} mm/h`;
+            colour = colorForRate(mmh);
+        }
+    }
+
+    el.hoverValue.textContent = text;
+    el.hoverSwatch.hidden = colour === null;
+    if (colour) el.hoverSwatch.style.background = colour;
+    el.hoverReadout.classList.toggle('hover-readout--muted', colour === null);
+    el.hoverReadout.hidden = false;
+
+    positionHoverReadout();
+}
+
+/** Offset from the cursor, flipped near an edge so it stays fully on screen. */
+function positionHoverReadout() {
+    const rect = map.getContainer().getBoundingClientRect();
+    const chip = el.hoverReadout.getBoundingClientRect();
+    const gap = 16;
+
+    let left = rect.left + hoverPixel.x + gap;
+    let top = rect.top + hoverPixel.y + gap;
+    if (left + chip.width > window.innerWidth - 8) {
+        left = rect.left + hoverPixel.x - chip.width - gap;
+    }
+    if (top + chip.height > window.innerHeight - 8) {
+        top = rect.top + hoverPixel.y - chip.height - gap;
+    }
+
+    el.hoverReadout.style.left = `${Math.max(8, left)}px`;
+    el.hoverReadout.style.top = `${Math.max(8, top)}px`;
 }
 
 // ---------------------------------------------------------------- inspect
@@ -960,6 +1068,10 @@ map.on('click', (event) => {
 map.on('load', () => {
     if (store.manifest) setupRadarLayer();
 });
+// Registered directly rather than from 'load': nothing here needs the style, and
+// 'load' can simply never arrive - it did not in a sandbox where the basemap
+// tiles were unreachable, which would have silently cost the readout entirely.
+setupHoverReadout();
 
 document.addEventListener('click', (event) => {
     if (event.target.closest('.popover') || event.target.closest('.icon-btn')) return;
