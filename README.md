@@ -120,9 +120,9 @@ Inspired by [Nimbus](https://nimbus.yannick.cloud).
 
 Most of the code here was written by [Claude Code](https://claude.com/claude-code),
 working from my direction and against my review. `git log` is the precise record:
-21 of the 22 non-merge commits carry a `Co-Authored-By` trailer naming the model —
-the exception is the initial commit — and the messages set out the reasoning and
-the measurements behind each change.
+every non-merge commit but the first carries a `Co-Authored-By` trailer naming the
+model, and the messages set out the reasoning and the measurements behind each
+change.
 
 Saying so because you should know what you are reading, not as an apology for it.
 Read it the way you would read any code whose author you have not met.
