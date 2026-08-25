@@ -41,5 +41,8 @@ frontend/vendor/**/*.map
 # specific server — its middleware names, directory layout and container names
 # describe that machine — and IMPLEMENTATION_PLAN.md is the working record
 # behind it. Neither is needed to run this; .env.example documents every option.
+# ANDROID_PLAN.md is the same kind of thing for the Android client: the working
+# record, not the documentation. The app's own README describes what shipped.
 docs/DEPLOYMENT.md
 docs/IMPLEMENTATION_PLAN.md
+docs/ANDROID_PLAN.md

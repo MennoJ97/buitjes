@@ -20,6 +20,8 @@ use tower_http::{
 };
 use tracing::{error, info, warn, Level};
 
+mod point;
+
 /// Frames and the manifest are produced by the ingestor sidecar and shared
 /// through a volume; this server only hands them out.
 const MANIFEST_NAME: &str = "manifest.json";
@@ -35,6 +37,10 @@ struct AppState {
     api_keys: Arc<Vec<String>>,
     protected_prefixes: Arc<Vec<String>>,
     conditions: ConditionsProxy,
+    /// Ad-hoc point forecasts, so a phone asking every quarter of an hour about
+    /// the same kilometre does not re-decode a cycle of frames to be told the
+    /// same thing.
+    documents: point::DocumentCache,
     /// Whether the newest forecast was stale the last time anyone asked.
     ///
     /// Only so that going stale — and coming back — is logged once each, on the
@@ -362,6 +368,7 @@ async fn main() {
             DEFAULT_PROTECTED_PREFIXES,
         )),
         conditions: ConditionsProxy::from_env(),
+        documents: point::DocumentCache::new(),
         was_stale: Arc::new(AtomicBool::new(false)),
     };
 
@@ -378,6 +385,7 @@ async fn main() {
     let served = Router::new()
         .route("/api/config", get(serve_manifest))
         .route("/api/frames/:file", get(serve_frame))
+        .route("/api/point", get(serve_point_at))
         .route("/api/point/:name", get(serve_point))
         .route("/api/current/:name", get(serve_current))
         .route("/api/conditions", get(serve_conditions))
@@ -650,6 +658,176 @@ async fn serve_point_document(state: &AppState, name: &str, prefix: &str) -> Res
     }
 }
 
+/// The two coordinates every ad-hoc endpoint takes, validated once.
+fn coordinates(params: &HashMap<String, String>) -> Result<(f64, f64), Response> {
+    let bad_request = |detail: &'static [u8]| -> Response {
+        (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            detail.to_vec(),
+        )
+            .into_response()
+    };
+
+    let latitude = params.get("lat").and_then(|v| v.parse::<f64>().ok());
+    let longitude = params.get("lon").and_then(|v| v.parse::<f64>().ok());
+    let (Some(latitude), Some(longitude)) = (latitude, longitude) else {
+        return Err(bad_request(br#"{"error":"lat and lon are required"}"#));
+    };
+    if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+        return Err(bad_request(br#"{"error":"lat or lon is out of range"}"#));
+    }
+    Ok((latitude, longitude))
+}
+
+/// A point forecast for a coordinate nobody configured.
+///
+/// The named-location endpoint above serves a file the ingestor wrote while
+/// KNMI's members were in memory. This one assembles the same document shape
+/// on demand, for callers that cannot be a configured location — a phone
+/// widget, a background worker asking whether to raise a notification.
+///
+/// Two sources, fetched together because neither waits on the other: the rain
+/// series is sampled out of the published frames, and everything else comes
+/// from the ensemble proxy. Either may fail on its own without emptying the
+/// answer — outside the domain there are no frames but the conditions still
+/// hold, and with Open-Meteo unreachable the next six hours of rain are still
+/// the thing that was actually asked for.
+async fn serve_point_at(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
+    let (latitude, longitude) = match coordinates(&params) {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+
+    let Ok(raw) = tokio::fs::read(state.frame_dir.join(MANIFEST_NAME)).await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::RETRY_AFTER, "10"),
+            ],
+            br#"{"status":"warming_up","error":"no forecast has been published yet"}"#.to_vec(),
+        )
+            .into_response();
+    };
+    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+        error!("manifest is not valid JSON");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            br#"{"error":"the published manifest could not be read"}"#.to_vec(),
+        )
+            .into_response();
+    };
+
+    // The manifest is rewritten whenever the frame list changes, so its
+    // `generated_at` is exactly the token that says whether a cached answer is
+    // still the current one.
+    let published = manifest
+        .get("generated_at")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_default();
+    if let Some(body) = state.documents.get(latitude, longitude, published) {
+        return point_response(body.to_vec());
+    }
+
+    // Sampling reads and decodes images, so it goes to a blocking thread while
+    // the conditions request is in flight.
+    let sampling = {
+        let frame_dir = state.frame_dir.clone();
+        let manifest = manifest.clone();
+        tokio::task::spawn_blocking(move || {
+            let Some(grid) = point::Grid::from_manifest(&manifest) else {
+                warn!("manifest carries no usable grid");
+                return Vec::new();
+            };
+            let Some(pixel) = grid.pixel(latitude, longitude) else {
+                return Vec::new(); // Outside the domain; assemble() says so.
+            };
+            let frames = manifest
+                .get("frames")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            point::sample_series(&frame_dir, &grid, &frames, pixel)
+        })
+    };
+
+    let (sampled, conditions) =
+        tokio::join!(sampling, state.conditions.fetch(latitude, longitude));
+
+    let rain = sampled.unwrap_or_else(|error| {
+        error!("sampling the frames panicked: {error}");
+        Vec::new()
+    });
+    let conditions = match conditions {
+        Ok(body) => serde_json::from_slice::<serde_json::Value>(&body).ok(),
+        Err(error) => {
+            // Worth a line, not worth a failed request: the rain series is the
+            // part a caller at this endpoint actually came for.
+            warn!("conditions unavailable for an ad-hoc point: {error}");
+            None
+        }
+    };
+
+    if rain.is_empty() && conditions.is_none() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            br#"{"error":"no forecast could be assembled for that point"}"#.to_vec(),
+        )
+            .into_response();
+    }
+
+    let generated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or_default();
+    let document = point::assemble(
+        &manifest,
+        latitude,
+        longitude,
+        rain,
+        conditions.as_ref(),
+        generated_at,
+    );
+    let body = serde_json::to_vec(&document).unwrap_or_default();
+
+    // Only worth remembering an answer that was assembled from both halves. A
+    // document built while Open-Meteo was down would otherwise be repeated for
+    // the rest of the cycle, long after the outage ended.
+    if conditions.is_some() {
+        state
+            .documents
+            .insert(latitude, longitude, published, Arc::new(body.clone()));
+    }
+    point_response(body)
+}
+
+fn point_response(body: Vec<u8>) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            // Matches the named-location endpoint: the cycle underneath only
+            // moves every five minutes.
+            (header::CACHE_CONTROL, "public, max-age=120"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 /// Conditions for any coordinate inside the served domain.
 ///
 /// Returns Open-Meteo's ensemble response unchanged: the client already knows
@@ -659,26 +837,10 @@ async fn serve_conditions(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Response {
-    let latitude = params.get("lat").and_then(|v| v.parse::<f64>().ok());
-    let longitude = params.get("lon").and_then(|v| v.parse::<f64>().ok());
-
-    let (Some(latitude), Some(longitude)) = (latitude, longitude) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            [(header::CONTENT_TYPE, "application/json")],
-            br#"{"error":"lat and lon are required"}"#.to_vec(),
-        )
-            .into_response();
+    let (latitude, longitude) = match coordinates(&params) {
+        Ok(pair) => pair,
+        Err(response) => return response,
     };
-
-    if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
-        return (
-            StatusCode::BAD_REQUEST,
-            [(header::CONTENT_TYPE, "application/json")],
-            br#"{"error":"lat or lon is out of range"}"#.to_vec(),
-        )
-            .into_response();
-    }
 
     match state.conditions.fetch(latitude, longitude).await {
         Ok(body) => (

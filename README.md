@@ -30,7 +30,12 @@ as twitchy as convective rain is a number that will be wrong.
   webhook — ntfy, Gotify, Home Assistant, a two-line script. Fires on the edge
   and then stays quiet, because an alerting system's real failure mode is
   crying wolf twelve times for one shower.
-- **A JSON API** shaped for a homepage dashboard widget.
+- **A JSON API** shaped for a homepage dashboard widget — and, for a client
+  that cannot be a configured location, the same document for any coordinate:
+  `/api/point?lat=52.37&lon=4.90` samples the published frames on demand. It
+  says `median_only`, because the members are gone by then, and it says
+  `out_of_coverage` rather than a confident line of zeros once you leave the
+  radar's domain.
 - **Five basemaps**, dark through high-contrast, none needing an API key.
 
 ![The forecast detail page: the looping radar, and ensemble spread on every series](docs/images/forecast.png)
@@ -45,8 +50,9 @@ as twitchy as convective rain is a number that will be wrong.
 │    notification service           ─ /api/config   the manifest │
 │  ─ decodes NetCDF4 (h5py)         ─ /api/frames/<file>.webp    │
 │  ─ 20 members → one field         ─ /api/point/<name>          │
-│  ─ resamples rows to Mercator     ─ /api/current/<name>        │
-│  ─ encodes 16-bit WebP frames     ─ /healthz  data freshness   │
+│  ─ resamples rows to Mercator     ─ /api/point?lat=&lon=       │
+│  ─ encodes 16-bit WebP frames     ─ /api/current/<name>        │
+│                                   ─ /healthz  data freshness   │
 │           │                                ▲                   │
 │           ▼                                │                   │
 │   docker volume "frames": *.webp + manifest.json (ro for the   │
