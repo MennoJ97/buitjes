@@ -32,3 +32,8 @@ mqtt-client-id
 
 .DS_Store
 **/.DS_Store
+
+# Nextcloud sync conflict copies. Keeping them out of the context matters more
+# than the bytes: one that the FUSE mount could no longer read stalled a build.
+* [0-9].*
+*conflicted copy*

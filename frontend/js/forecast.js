@@ -40,6 +40,14 @@ const CHARTS = [
     },
 ];
 
+/**
+ * What the page is showing, and enough to ask for it again.
+ *
+ * The dropdown cannot answer that second part: a coordinate arriving from the
+ * map has no name, so anything re-deriving the target from `select.value` asks
+ * the server for a location called "". Retry and the periodic refresh both did.
+ */
+let currentRequest = null;
 let currentDocument = null;
 
 function showBanner(message, retryable, tone = 'warn') {
@@ -158,35 +166,42 @@ function renderSummaryStats(document_) {
 }
 
 /**
- * `explicit` means the reader chose this location from the dropdown, so the URL
- * becomes a request for that location and the coordinate that led here is
- * dropped. Arriving from a map click leaves `?lat=&lon=` alone: the URL keeps
- * saying which point was of interest, and the page says which one it resolved
- * to. Carrying both would be redundant, with the name silently winning.
+ * Load one request — `{name}` or `{coords}` — and show it.
+ *
+ * Recorded before the fetch rather than after, so a failure leaves Retry aimed
+ * at what the reader actually asked for instead of at whatever the dropdown
+ * happens to say.
+ *
+ * `explicit` means the reader chose this from the dropdown, so the URL is
+ * rewritten to match. Arriving from a map click leaves `?lat=&lon=` alone: the
+ * URL keeps saying which point was of interest, and the page says which one it
+ * resolved to. Carrying both would be redundant, with the name silently winning.
  */
-async function selectCoordinates(coords) {
+async function load(request, { explicit = false } = {}) {
+    currentRequest = request;
     try {
-        render(await pointForCoordinates(coords));
+        render(request.coords
+            ? await pointForCoordinates(request.coords)
+            : await pointForName(request.name));
         hideBanner();
+        if (explicit) rewriteUrl(request);
     } catch (error) {
         showBanner(`Could not load the forecast — ${error.message}`, true);
     }
 }
 
-async function selectLocation(name, { explicit = false } = {}) {
-    try {
-        render(await pointForName(name));
-        hideBanner();
-        if (explicit) {
-            const url = new URL(window.location.href);
-            url.searchParams.set('location', name);
-            url.searchParams.delete('lat');
-            url.searchParams.delete('lon');
-            history.replaceState(null, '', url);
-        }
-    } catch (error) {
-        showBanner(`Could not load the forecast — ${error.message}`, true);
+function rewriteUrl(request) {
+    const url = new URL(window.location.href);
+    if (request.coords) {
+        url.searchParams.set('lat', request.coords.lat);
+        url.searchParams.set('lon', request.coords.lon);
+        url.searchParams.delete('location');
+    } else {
+        url.searchParams.set('location', request.name);
+        url.searchParams.delete('lat');
+        url.searchParams.delete('lon');
     }
+    history.replaceState(null, '', url);
 }
 
 const byNameEarly = (points, name) => points.find((point) => point.name === name);
@@ -231,19 +246,30 @@ async function boot() {
     if (!byName && request.coords) {
         // Honour the coordinate itself rather than snapping to a sampled point.
         select.value = '';
-        await selectCoordinates(request.coords);
+        await load({ coords: request.coords });
     } else {
+        // An unknown ?location= falls back to the first published point rather
+        // than erroring, but then the URL has to say so - otherwise it goes on
+        // naming a location the page is not showing.
         const chosen = byName ?? points[0];
         select.value = chosen.name;
-        await selectLocation(chosen.name);
+        await load({ name: chosen.name }, { explicit: !byName });
     }
 
-    select.addEventListener('change', () => selectLocation(select.value, { explicit: true }));
+    // The empty value is the ad-hoc "clicked point" option, which only exists
+    // when a coordinate brought us here.
+    select.addEventListener('change', () => {
+        const name = select.value;
+        if (!name && !request.coords) return;
+        load(name ? { name } : { coords: request.coords }, { explicit: true });
+    });
 }
 
+// Retry re-runs the request that failed. With nothing loaded at all — the
+// manifest was unreachable, so there is no request yet — it starts over.
 $('banner-retry').addEventListener('click', () => {
     hideBanner();
-    selectLocation($('location-select').value);
+    if (currentRequest) load(currentRequest); else boot();
 });
 
 // Re-render on resize: the charts are laid out in pixels for the current width.
@@ -254,8 +280,7 @@ window.addEventListener('resize', () => {
 });
 
 setInterval(() => {
-    const name = $('location-select').value;
-    if (name) selectLocation(name);
+    if (currentRequest) load(currentRequest);
 }, REFRESH_INTERVAL_MS);
 
 boot();
