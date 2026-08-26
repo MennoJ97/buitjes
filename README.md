@@ -63,7 +63,9 @@ written last and atomically, so a reader gets either the whole old cycle or the
 whole new one, never a mixture.
 
 **The frame format.** Lossless WebP, with rain rate as a 16-bit fraction of
-full scale split across R (high byte) and G (low byte), alpha zero where dry.
+full scale split across R (high byte) and G (low byte), alpha zero where dry,
+and blue flagging the pixels no radar measured — about a quarter of an observed
+frame, which used to be published as though it were dry.
 The frontend recombines the bytes in a WebGL shader and applies the colour ramp
 on the GPU, so changing the palette costs no refetching. Dry pixels are fully
 zeroed rather than merely transparent — the long uniform runs are what keep a

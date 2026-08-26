@@ -5,6 +5,11 @@
  * full-scale rain rate, split high byte -> R, low byte -> G, with alpha 0 where
  * it is dry. Colour is applied on the GPU, so the same frame can be recoloured
  * without refetching it.
+ *
+ * Blue is a flag, not data: 255 marks a pixel no radar measured. The shader
+ * ignores it, because there is nothing to draw either way, but `sample` does
+ * not — "no radar here" and "dry" are different answers and the readout under
+ * the cursor already distinguishes them.
  */
 
 import {
@@ -12,6 +17,9 @@ import {
     SHADER_LOG_MIN,
     SHADER_LOG_RANGE,
 } from './ramp.js';
+
+/** Blue-channel value marking a pixel no radar looked at. */
+const NO_DATA_FLAG = 255;
 
 const VERTEX_SHADER = `
     attribute vec2 a_position;
@@ -265,7 +273,8 @@ export class FrameStore {
 
     /**
      * Rain rate in mm/h at a geographic point for one frame, or null if the
-     * point falls outside the frame or the frame is not loaded yet.
+     * point falls outside the frame, the frame is not loaded yet, or no radar
+     * measured that pixel.
      *
      * MapLibre stretches the frame linearly across its corner coordinates in
      * Web Mercator, so the vertical lookup has to be mercator too — treating it
@@ -287,7 +296,10 @@ export class FrameStore {
 
         this._scratchCtx.clearRect(0, 0, 1, 1);
         this._scratchCtx.drawImage(image, px, py, 1, 1, 0, 0, 1, 1);
-        const [r, g, , a] = this._scratchCtx.getImageData(0, 0, 1, 1).data;
+        const [r, g, b, a] = this._scratchCtx.getImageData(0, 0, 1, 1).data;
+        // Checked before the dry case: an unmeasured pixel is transparent too,
+        // and reporting it as 0 mm/h is the whole bug this flag exists to fix.
+        if (b >= NO_DATA_FLAG) return null;
         if (a === 0) return 0;
         return ((r * 256 + g) / 65535) * this.maxPrecip;
     }

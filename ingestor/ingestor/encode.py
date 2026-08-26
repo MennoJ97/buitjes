@@ -5,8 +5,15 @@ into R and low byte into G, with alpha 0 where it is dry. The frontend
 recombines the bytes in a shader and applies the colour ramp on the GPU, so a
 frame can be recoloured without refetching it.
 
+Blue carries a flag rather than data: 255 marks a pixel no radar measured, as
+distinct from one measured and found dry. Both are invisible on the map - there
+is nothing to draw either way - but they are different answers to "is it raining
+there", and the readout under the cursor says so. Observed frames are the ones
+that need it; a forecast covers its whole domain by construction.
+
 Dry pixels are written as fully zeroed RGBA rather than just transparent: large
-uniform runs are what make the lossless WebP small.
+uniform runs are what make the lossless WebP small. Unmeasured pixels are a
+uniform run of their own, so the flag costs essentially nothing.
 """
 
 from __future__ import annotations
@@ -20,11 +27,21 @@ from PIL import Image
 #: colour ramp (0.1 mm/h), so nothing visible is discarded.
 DRY_THRESHOLD_MM_H = 0.05
 
+#: Blue channel value marking a pixel no radar looked at.
+NO_DATA_FLAG = 255
 
-def encode_frame(values_mm_h, max_precip_mm_h: float) -> bytes:
-    """Encode a (h, w) array of mm/h into a lossless WebP frame."""
+
+def encode_frame(values_mm_h, max_precip_mm_h: float, measured=None) -> bytes:
+    """Encode a (h, w) array of mm/h into a lossless WebP frame.
+
+    ``measured`` is an optional boolean mask; where it is False the pixel is
+    flagged as unmeasured instead of dry.
+    """
     values = np.asarray(values_mm_h, dtype=np.float32)
     wet = values >= DRY_THRESHOLD_MM_H
+    if measured is not None:
+        measured = np.asarray(measured, dtype=bool)
+        wet = wet & measured
 
     scaled = np.rint(np.clip(values / max_precip_mm_h, 0.0, 1.0) * 65535.0)
     packed = np.where(wet, scaled, 0).astype(np.uint16)
@@ -33,16 +50,28 @@ def encode_frame(values_mm_h, max_precip_mm_h: float) -> bytes:
     rgba = np.zeros((height, width, 4), dtype=np.uint8)
     rgba[:, :, 0] = (packed >> 8).astype(np.uint8)
     rgba[:, :, 1] = (packed & 0xFF).astype(np.uint8)
+    if measured is not None:
+        rgba[:, :, 2] = np.where(measured, 0, NO_DATA_FLAG).astype(np.uint8)
     rgba[:, :, 3] = np.where(wet, 255, 0).astype(np.uint8)
 
     buffer = io.BytesIO()
-    Image.fromarray(rgba, 'RGBA').save(buffer, format='WEBP', lossless=True, quality=100, method=4)
+    # exact=True, or WebP rewrites the colour under fully transparent pixels to
+    # whatever compresses best - which is a fine trade for a picture and a
+    # silent data loss for us, since the no-data flag lives in exactly those
+    # pixels. It costs a percent or two of frame size.
+    Image.fromarray(rgba, 'RGBA').save(
+        buffer, format='WEBP', lossless=True, quality=100, method=4, exact=True
+    )
     return buffer.getvalue()
 
 
 def decode_frame(data: bytes, max_precip_mm_h: float):
-    """Inverse of :func:`encode_frame`, for tests and verification."""
+    """Inverse of :func:`encode_frame`, for tests and verification.
+
+    Returns ``(values, measured)``, matching what was encoded.
+    """
     rgba = np.array(Image.open(io.BytesIO(data)).convert('RGBA'))
     packed = rgba[:, :, 0].astype(np.uint32) * 256 + rgba[:, :, 1].astype(np.uint32)
     values = packed.astype(np.float32) / 65535.0 * max_precip_mm_h
-    return np.where(rgba[:, :, 3] == 0, 0.0, values)
+    measured = rgba[:, :, 2] < NO_DATA_FLAG
+    return np.where(rgba[:, :, 3] == 0, 0.0, values), measured

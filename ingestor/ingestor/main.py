@@ -272,8 +272,8 @@ def fetch_observed(client: KnmiClient, config: Config, grid: TargetGrid,
                     log.info('observed: radar covers %.0f%% of the output grid',
                              resampler.coverage * 100)
                 rate, valid = source.rate_and_validity()
-                field = resampler(rate, valid)
-                payload = encode_frame(field, config.max_precip)
+                field, measured = resampler(rate, valid)
+                payload = encode_frame(field, config.max_precip, measured)
                 write_atomic(config.frame_dir, observed_frame_name(source.valid_time), payload)
                 added += 1
 

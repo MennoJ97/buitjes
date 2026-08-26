@@ -223,12 +223,19 @@ class StereographicResampler:
     def __call__(self, field, valid=None):
         """Resample a (rows, columns) source field onto the target grid.
 
-        ``valid`` is an optional boolean mask of usable source pixels; anything
-        outside it, or outside the radar grid, comes back as 0 (encoded as dry,
-        which the frontend renders transparent).
+        Returns ``(values, measured)``: the rain rate, and a mask of the output
+        pixels a radar actually looked at. The two are separate on purpose. The
+        radar composite is a smaller box than the forecast domain the map is
+        drawn on, and it has holes of its own, so a good part of the frame is
+        somewhere no radar can see. Folding that into a zero would publish "no
+        rain" for a place we know nothing about, which is the one thing an
+        observation frame must never claim - the frontend already has words for
+        "no radar here" and could not reach them.
+
+        ``valid`` is an optional boolean mask of usable source pixels.
         """
         gathered = np.asarray(field)[self._rows, self._columns].astype(np.float32)
-        usable = self._inside
+        measured = self._inside
         if valid is not None:
-            usable = usable & np.asarray(valid)[self._rows, self._columns]
-        return np.where(usable, gathered, 0.0)
+            measured = measured & np.asarray(valid)[self._rows, self._columns]
+        return np.where(measured, gathered, 0.0), measured
