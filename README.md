@@ -32,11 +32,17 @@ as twitchy as convective rain is a number that will be wrong.
   will hit you or pass five kilometres north.
 - **Point forecasts with real ensemble spread** for locations you configure —
   p10/p25/median/p75/p90 and a probability of rain per five-minute step, taken
-  by sampling all 20 KNMI members while the timestep is in memory.
+  by sampling all 20 KNMI members while the timestep is in memory. Probability
+  comes in two flavours: on your square kilometre, and within ten of them. The
+  second is usually what you meant, because members disagree about where a
+  shower will land long before they disagree that one is coming.
 - **Alerts.** "Tell me when it is about to rain at home", delivered to any
   webhook — ntfy, Gotify, Home Assistant, a two-line script. Fires on the edge
   and then stays quiet, because an alerting system's real failure mode is
-  crying wolf twelve times for one shower.
+  crying wolf twelve times for one shower. A rule can watch the median, a
+  percentile, or the probability itself — the median never crosses for a shower
+  only a third of the ensemble puts on your street, so for those it is the
+  wrong question rather than a stricter one.
 - **A JSON API** shaped for a homepage dashboard widget.
 - **Five basemaps**, dark through high-contrast, none needing an API key.
 

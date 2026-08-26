@@ -1,17 +1,23 @@
 """Point forecasts with real uncertainty, for the homepage widget.
 
 The map only ever needs one number per pixel, so the ingestor collapses the 20
-ensemble members to a median and discards the rest. A widget showing a line with
-error bars needs the spread that was thrown away.
+ensemble members to a single field and discards the rest. A widget showing a
+line with error bars needs the spread that was thrown away.
 
 Rather than storing extra rasters, the members are sampled at a handful of
 configured locations *while the timestep is already in memory* during the normal
 ingest loop. That costs essentially nothing, and unlike sampling a quantised
 frame afterwards it uses the exact member values.
 
+Percentiles are taken at the location's own square kilometre, because that is
+what a percentile of rain rate *here* means. Probability of rain is published
+twice: once at that same cell, and once over a radius around it, which is a
+different and usually more honest number - see :meth:`PointExtractor.observe`.
+
 Only configured locations get this treatment. Arbitrary points would mean either
 keeping every member on disk or decoding rasters per request; the map's
-click-to-inspect popup already covers arbitrary points using the median frames.
+click-to-inspect popup already covers arbitrary points using the published
+frames, which carry one reduced number per pixel and no spread at all.
 """
 
 from __future__ import annotations
@@ -29,6 +35,15 @@ PERCENTILES = (10, 25, 50, 75, 90)
 #: A member counts as "raining" at or above this rate, matching the bottom of
 #: the colour ramp used on the map.
 WET_THRESHOLD_MM_H = 0.1
+
+#: Radius for the neighbourhood probability, in kilometres. See
+#: :meth:`PointExtractor.observe` for why a point probability is not enough.
+#: Ten is the usual choice for convective-scale ensembles and is roughly the
+#: distance at which "it rained near me" stops meaning "it rained on me".
+NEIGHBOURHOOD_KM = 10.0
+
+#: Degrees of latitude per kilometre, near enough over a domain this size.
+_KM_PER_DEGREE = 111.32
 
 
 @dataclass(frozen=True)
@@ -67,14 +82,16 @@ class PointExtractor:
     plain arithmetic — no interpolation, which would blur an ensemble's spread.
     """
 
-    def __init__(self, locations, lat, lon):
+    def __init__(self, locations, lat, lon, neighbourhood_km: float = NEIGHBOURHOOD_KM):
         lat = np.asarray(lat, dtype=np.float64)
         lon = np.asarray(lon, dtype=np.float64)
         lat0, dlat = float(lat[0]), float(lat[1] - lat[0])
         lon0, dlon = float(lon[0]), float(lon[1] - lon[0])
 
+        self.neighbourhood_km = float(neighbourhood_km)
         self.locations = []
         self._cells = []
+        self._discs = []
         for location in locations:
             row = int(round((location.lat - lat0) / dlat))
             column = int(round((location.lon - lon0) / dlon))
@@ -85,15 +102,31 @@ class PointExtractor:
                 )
             self.locations.append(location)
             self._cells.append((row, column))
+            self._discs.append(
+                _disc(row, column, len(lat), len(lon), dlat, dlon,
+                      location.lat, self.neighbourhood_km)
+            )
 
         self._times: list[int] = []
         self._samples: list[np.ndarray] = []  # one (locations, members) array per step
+        self._nearby: list[np.ndarray] = []   # one (locations,) array of NEP per step
 
     def __bool__(self):
         return bool(self.locations)
 
     def observe(self, valid_time: int, members) -> None:
-        """Record every member's value at each location for one timestep."""
+        """Record every member's value at each location for one timestep.
+
+        Two probabilities come out of this, and the difference between them is
+        the whole reason for the second. Counting the members that are wet on
+        one square kilometre asks whether they agree on the *position* of a
+        shower, which for anything convective they do not: twenty members can
+        all forecast the same shower and each put it somewhere slightly
+        different, and the count at your address comes out low for a shower
+        nobody doubts. The neighbourhood count asks the question a reader
+        actually means - how many members put rain anywhere near here - by
+        letting each member be wet within a radius before counting it.
+        """
         if not self.locations:
             return
         members = np.asarray(members)
@@ -101,11 +134,15 @@ class PointExtractor:
         self._samples.append(
             np.stack([members[:, row, column] for row, column in self._cells])
         )
+        self._nearby.append(np.array([
+            float((members[:, rows, columns] >= WET_THRESHOLD_MM_H).any(axis=1).mean())
+            for rows, columns in self._discs
+        ]))
 
     def series_for(self, index: int) -> list[dict]:
         """The published series for one location, one entry per timestep."""
         entries = []
-        for valid_time, sample in zip(self._times, self._samples):
+        for valid_time, sample, nearby in zip(self._times, self._samples, self._nearby):
             values = np.asarray(sample[index], dtype=np.float64)
             quantiles = np.percentile(values, PERCENTILES)
             entry = {'t': int(valid_time)}
@@ -115,8 +152,43 @@ class PointExtractor:
             entry['mean'] = _round(values.mean())
             # What the ensemble is really for: how many members say it rains.
             entry['probability'] = round(float((values >= WET_THRESHOLD_MM_H).mean()), 2)
+            entry['probability_nearby'] = round(float(nearby[index]), 2)
             entries.append(entry)
         return entries
+
+
+def _disc(row, column, rows, columns, dlat, dlon, latitude, radius_km):
+    """Flat index arrays for the cells within ``radius_km`` of one cell.
+
+    Returned pre-flattened so a member's neighbourhood is one fancy-index gather
+    rather than a slice plus a mask, which is what keeps this affordable inside
+    the ingest loop: it runs once per location per timestep, 72 times a cycle.
+    """
+    # Longitude degrees are shorter than latitude ones, by more at 53 N than at
+    # 50 N. Getting this wrong would stretch the disc into an ellipse.
+    row_reach = max(1, int(math.ceil(radius_km / (abs(dlat) * _KM_PER_DEGREE))))
+    lon_km = abs(dlon) * _KM_PER_DEGREE * math.cos(math.radians(latitude))
+    column_reach = max(1, int(math.ceil(radius_km / lon_km)))
+
+    offsets_y = np.arange(-row_reach, row_reach + 1)
+    offsets_x = np.arange(-column_reach, column_reach + 1)
+    grid_y, grid_x = np.meshgrid(offsets_y, offsets_x, indexing='ij')
+
+    distance_km = np.hypot(
+        grid_y * abs(dlat) * _KM_PER_DEGREE,
+        grid_x * lon_km,
+    )
+    inside = distance_km <= radius_km
+
+    absolute_y = row + grid_y
+    absolute_x = column + grid_x
+    # Clipped at the domain edge rather than wrapped, so a location near the
+    # border counts the cells that exist instead of cells on the far side.
+    inside &= (
+        (absolute_y >= 0) & (absolute_y < rows)
+        & (absolute_x >= 0) & (absolute_x < columns)
+    )
+    return absolute_y[inside], absolute_x[inside]
 
 
 def _round(value: float) -> float:
@@ -124,7 +196,8 @@ def _round(value: float) -> float:
     return round(float(value), 2)
 
 
-def summarise(series: list[dict], reference_time: int) -> dict:
+def summarise(series: list[dict], reference_time: int,
+              radius_km: float | None = None) -> dict:
     """A plain-language read of the series, for a widget with one line of room.
 
     Describes the *spell* — the contiguous run of wet steps — rather than the
@@ -139,6 +212,9 @@ def summarise(series: list[dict], reference_time: int) -> dict:
     The structured fields carry the same facts as ``text``, so a caller with
     less room than a sentence can compose its own line instead of parsing this
     one.
+
+    ``radius_km`` is only used to name the neighbourhood in the sentence; with
+    it left out the text says "nearby" instead.
     """
     future = [entry for entry in series if entry['t'] >= reference_time]
     if not future:
@@ -150,15 +226,30 @@ def summarise(series: list[dict], reference_time: int) -> dict:
     )
 
     if onset_index is None:
-        # Even with a dry median, the ensemble may still be hinting at rain.
-        best_chance = max(future, key=lambda entry: entry['probability'])
-        if best_chance['probability'] >= 0.3:
-            return {
-                'raining_now': False,
-                'starts_at': None,
-                'text': (f'Probably dry, but a {round(best_chance["probability"] * 100)}% '
-                         f'chance of rain around {_clock(best_chance["t"])}.'),
-            }
+        # Even with a dry median, the ensemble may still be hinting at rain -
+        # and this is exactly the case the neighbourhood probability was added
+        # for. A median that never crosses the threshold means the members did
+        # not agree on one square kilometre, which is the normal state of
+        # affairs for showers and says nothing about whether it will rain here.
+        best_chance = max(future, key=_nearby_probability)
+        chance = _nearby_probability(best_chance)
+        if chance >= 0.3:
+            # Two sentences, not one with a percentage swapped in. A dry median
+            # and a near-certain neighbourhood are not a contradiction - it is
+            # what "showers about, one of them may be yours" looks like in
+            # numbers - but "probably dry, 100% chance of rain" reads as a bug.
+            where = f'within {round(radius_km)} km' if radius_km else 'nearby'
+            when = _clock(best_chance['t'])
+            text = (
+                f'Showers about — {round(chance * 100)}% of members put rain '
+                f'{where} around {when}, though it may miss you.'
+                if chance >= 0.7 else
+                f'Probably dry, but a {round(chance * 100)}% chance of a shower '
+                f'{where} around {when}.'
+            )
+            return {'raining_now': False, 'starts_at': None,
+                    'chance_nearby': round(chance, 2), 'chance_at': best_chance['t'],
+                    'text': text}
         return {'raining_now': False, 'starts_at': None, 'text': 'Staying dry.'}
 
     dry_after = next(
@@ -216,6 +307,16 @@ def summarise(series: list[dict], reference_time: int) -> dict:
     }
 
 
+def _nearby_probability(entry: dict) -> float:
+    """The neighbourhood probability, falling back to the point one.
+
+    The fallback is for documents written before the neighbourhood count
+    existed, which a running container can still be holding.
+    """
+    value = entry.get('probability_nearby')
+    return float(entry.get('probability', 0.0) if value is None else value)
+
+
 def _rate(mmh: float) -> str:
     """Match the frontend's rate formatting, so the two never disagree."""
     if mmh >= 10:
@@ -266,6 +367,7 @@ def current_conditions(document: dict) -> dict:
             'p10': rain['p10'],
             'p90': rain['p90'],
             'probability': rain['probability'],
+            'probability_nearby': _nearby_probability(rain),
         }
 
     for key in ('temperature', 'wind', 'solar'):

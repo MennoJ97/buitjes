@@ -85,7 +85,9 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             resampler.width, resampler.height,
         )
 
-        extractor = PointExtractor(config.widget_locations, source.lat, source.lon)
+        extractor = PointExtractor(
+            config.widget_locations, source.lat, source.lon, config.neighbourhood_km
+        )
 
         nowcast_until = source.reference_time + config.nowcast_minutes * 60
         frames = []
@@ -154,9 +156,12 @@ def publish_points(config: Config, source, extractor: PointExtractor,
                 'unit': 'mm/h',
                 'members': source.member_count,
                 'percentiles': list(PERCENTILES),
+                # What `probability_nearby` in each entry is the radius of.
+                'neighbourhood_km': extractor.neighbourhood_km,
                 'series': series,
             },
-            'summary': summarise(series, source.reference_time),
+            'summary': summarise(series, source.reference_time,
+                                 extractor.neighbourhood_km),
             'source': {
                 'dataset': config.dataset,
                 'version': config.version,

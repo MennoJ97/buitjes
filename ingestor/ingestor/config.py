@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 from .alerts import parse_rules
-from .points import parse_locations
+from .points import NEIGHBOURHOOD_KM, parse_locations
 
 
 def _float_list(raw: str):
@@ -32,6 +32,7 @@ class Config:
     crop_bounds: tuple | None
     output_height: int | None
     ensemble_stat: str
+    neighbourhood_km: float
     max_precip: float
     nowcast_minutes: int
     keep_cycles: int
@@ -87,6 +88,10 @@ class Config:
                 f'ENSEMBLE_STAT must be pmm, median, mean or max (got {stat!r})'
             )
 
+        neighbourhood = float(os.environ.get('NEIGHBOURHOOD_KM', NEIGHBOURHOOD_KM))
+        if neighbourhood < 0:
+            raise SystemExit('NEIGHBOURHOOD_KM cannot be negative')
+
         return cls(
             api_key=api_key,
             dataset=os.environ.get('KNMI_DATASET', 'seamless_precipitation_ensemble_forecast_members'),
@@ -113,6 +118,7 @@ class Config:
             crop_bounds=_float_list(crop) if crop else None,
             output_height=int(height) if height else None,
             ensemble_stat=stat,
+            neighbourhood_km=neighbourhood,
             max_precip=float(os.environ.get('MAX_PRECIP_MM_H', '100')),
             # Where the timeline stops calling the blend a nowcast. The product
             # itself is seamless; this is a presentation cue, not a data boundary.
@@ -141,7 +147,7 @@ class Config:
             # every 5-minute precipitation cycle.
             conditions_refresh=int(os.environ.get('CONDITIONS_REFRESH_MINUTES', '30')) * 60,
             # "tell me when it is about to rain at X", as
-            # name:threshold_mm_h:lead_minutes[:probability[:quiet_minutes]],
+            # name:[metric@]threshold:lead_minutes[:probability[:quiet_minutes]],
             # semicolons between rules. Delivered to one webhook, which is what
             # ntfy, Gotify, Home Assistant and a shell script all accept.
             alert_rules=alert_rules,

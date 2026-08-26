@@ -46,16 +46,53 @@ REARM_FRACTION = 0.6
 
 DELIVERY_TIMEOUT_SECONDS = 10
 
+#: Which number in a published series a rule watches.
+#:
+#: The default is the median, and for a lot of weather that is the right
+#: question. It is the wrong one for showers. The median is dry unless half the
+#: members put rain on one square kilometre, and members disagree about position
+#: long before they disagree about whether it will rain at all — so a shower
+#: eight of twenty members drop on your street produces a median of zero and an
+#: alert that never fires, no matter how the probability floor is set. Watching
+#: `p90`, or the neighbourhood probability directly, asks a question that has an
+#: answer in that case.
+RATE_METRICS = ('median', 'mean', 'p10', 'p25', 'p75', 'p90')
+PROBABILITY_METRICS = ('prob', 'prob_nearby')
+METRICS = RATE_METRICS + PROBABILITY_METRICS
+
+#: The series key each metric reads.
+_SERIES_KEY = {'prob': 'probability', 'prob_nearby': 'probability_nearby'}
+
 
 @dataclass(frozen=True)
 class Rule:
     """One "tell me when" for one published location."""
 
     location: str
+    metric: str          # which number the threshold applies to; see METRICS
     threshold: float
     within: int          # seconds of lead time to look ahead
-    probability: float   # minimum share of members; 0 accepts the median alone
+    probability: float   # minimum share of members; 0 accepts the metric alone
     quiet: int           # seconds before this rule may fire again
+
+    @property
+    def is_probability(self) -> bool:
+        return self.metric in PROBABILITY_METRICS
+
+    @property
+    def series_key(self) -> str:
+        return _SERIES_KEY.get(self.metric, self.metric)
+
+    def value(self, entry: dict) -> float:
+        """This rule's number, out of one published timestep.
+
+        Falls back to the point probability for `prob_nearby`, so a document
+        written before neighbourhood counting existed still evaluates rather
+        than reading as zero and re-arming every latched rule at once.
+        """
+        if self.metric == 'prob_nearby' and entry.get('probability_nearby') is None:
+            return float(entry.get('probability', 0.0))
+        return float(entry.get(self.series_key, 0.0))
 
     @property
     def key(self) -> str:
@@ -65,15 +102,25 @@ class Rule:
         inheriting the latch of the rule it replaced — an edited rule is a new
         question, and the reader is entitled to an answer to it.
         """
-        return f'{self.location}:{self.threshold}:{self.within}:{self.probability}'
+        return (f'{self.location}:{self.metric}:{self.threshold}:'
+                f'{self.within}:{self.probability}')
 
 
 def parse_rules(raw: str) -> tuple[Rule, ...]:
-    """Parse ``ALERT_RULES``: ``name:threshold:within[:probability[:quiet]]``.
+    """Parse ``ALERT_RULES``: ``name:[metric@]threshold:within[:probability[:quiet]]``.
 
     Semicolon-separated, matching WIDGET_LOCATIONS. Every field except the name
     may be left empty to take the default, so ``home`` and ``home:::0.4`` are
     both valid.
+
+    The metric rides on the threshold field rather than taking a field of its
+    own, because it qualifies that number and belongs beside it: ``p90@0.5``
+    reads as "the ninetieth percentile reaching 0.5 mm/h". It also leaves every
+    rule written before metrics existed parsing exactly as it did.
+
+    For ``prob`` and ``prob_nearby`` the threshold is a fraction rather than a
+    rate — ``home:prob_nearby@0.4:30`` is "when two in five members put rain
+    within ten kilometres in the next half hour".
     """
     rules = []
     for chunk in (raw or '').split(';'):
@@ -92,10 +139,20 @@ def parse_rules(raw: str) -> tuple[Rule, ...]:
                 return default
             return convert(parts[index])
 
+        metric, _, threshold_text = field(1, '', str).rpartition('@')
+        metric = metric.strip().lower() or 'median'
+        if metric not in METRICS:
+            raise ValueError(
+                f'alert rule {chunk!r}: unknown metric {metric!r}; '
+                f'expected one of {", ".join(METRICS)}'
+            )
+
         try:
             rule = Rule(
                 location=name,
-                threshold=field(1, DEFAULT_THRESHOLD_MM_H, float),
+                metric=metric,
+                threshold=(float(threshold_text) if threshold_text.strip()
+                           else DEFAULT_THRESHOLD_MM_H),
                 within=int(field(2, DEFAULT_WITHIN_MINUTES, float) * 60),
                 probability=field(3, 0.0, float),
                 quiet=int(field(4, DEFAULT_QUIET_MINUTES, float) * 60),
@@ -105,6 +162,10 @@ def parse_rules(raw: str) -> tuple[Rule, ...]:
 
         if rule.threshold <= 0:
             raise ValueError(f'alert rule {chunk!r} needs a threshold above zero')
+        if rule.is_probability and rule.threshold > 1.0:
+            raise ValueError(
+                f'alert rule {chunk!r}: a {metric} threshold is a fraction, 0 to 1'
+            )
         if rule.within <= 0:
             raise ValueError(f'alert rule {chunk!r} needs a lead time above zero')
         if not 0.0 <= rule.probability <= 1.0:
@@ -119,7 +180,7 @@ class Event:
 
     rule: Rule
     onset: int | None       # when it crosses the threshold, or None if it never does
-    peak: float             # highest median in the window
+    peak: float             # highest value of the rule's metric in the window
     peak_at: int | None
     probability: float      # share of members at the onset step
     raining_now: bool
@@ -127,6 +188,13 @@ class Event:
     @property
     def matched(self) -> bool:
         return self.onset is not None
+
+    @property
+    def peak_text(self) -> str:
+        """The peak in the units of whatever the rule is watching."""
+        if self.rule.is_probability:
+            return f'{round(self.peak * 100)}% of members'
+        return f'{self.peak:.1f} mm/h'
 
 
 def evaluate(document: dict, rule: Rule, now: float) -> Event:
@@ -144,34 +212,53 @@ def evaluate(document: dict, rule: Rule, now: float) -> Event:
     if not window:
         return Event(rule, None, 0.0, None, 0.0, False)
 
-    peak_entry = max(window, key=lambda entry: entry['median'])
+    # The peak is taken in the rule's own metric, because it is what the
+    # hysteresis in `process` compares against the rule's own threshold. Mixing
+    # the two - latching on p90 and re-arming on the median - would re-arm a
+    # rule while the thing it fired about was still in the window.
+    peak_entry = max(window, key=rule.value)
+    # The probability floor reads the neighbourhood count where there is one:
+    # asked as a secondary gate on a rate threshold, "how likely is this" means
+    # "how many members see this shower", not "how many put it on this pixel".
     onset = next(
         (entry for entry in window
-         if entry['median'] >= rule.threshold
-         and entry.get('probability', 1.0) >= rule.probability),
+         if rule.value(entry) >= rule.threshold
+         and _floor_probability(entry) >= rule.probability),
         None,
     )
     return Event(
         rule=rule,
         onset=onset['t'] if onset else None,
-        peak=peak_entry['median'],
+        peak=rule.value(peak_entry),
         peak_at=peak_entry['t'],
-        probability=(onset or {}).get('probability', 0.0),
+        probability=_floor_probability(onset) if onset else 0.0,
         raining_now=bool(onset and onset['t'] <= now + 300),
     )
+
+
+def _floor_probability(entry: dict | None) -> float:
+    """The probability a rule's `probability` floor is compared against."""
+    if not entry:
+        return 0.0
+    nearby = entry.get('probability_nearby')
+    if nearby is not None:
+        return float(nearby)
+    return float(entry.get('probability', 1.0))
 
 
 def describe(event: Event, now: float) -> tuple[str, str]:
     """A title and a body, for whatever ends up displaying them."""
     where = event.rule.location
-    peak = f'{event.peak:.1f} mm/h'
+    peak = event.peak_text
     if event.raining_now:
         return (f'Rain at {where}', f'Raining now, peaking around {peak}.')
 
     minutes = max(1, round((event.onset - now) / 60))
     clock = datetime.fromtimestamp(event.onset).strftime('%H:%M')
+    # Suppressed for a rule already watching a probability: the body would
+    # otherwise quote the same percentage twice in one sentence.
     chance = (f' ({round(event.probability * 100)}% of members)'
-              if event.rule.probability else '')
+              if event.rule.probability and not event.rule.is_probability else '')
     return (
         f'Rain at {where} in {minutes} min',
         f'Starting around {clock}, peaking around {peak}{chance}.',
@@ -243,14 +330,22 @@ class Notifier:
         swallowed.
         """
         title, body = describe(event, now)
-        return self.deliver(title, body, tags='cloud_with_rain', payload={
+        payload = {
             'location': event.rule.location,
             'onset': event.onset,
-            'peak_mm_h': round(event.peak, 2),
             'peak_at': event.peak_at,
             'probability': round(event.probability, 3),
-            'threshold_mm_h': event.rule.threshold,
-        })
+            'metric': event.rule.metric,
+            'peak': round(event.peak, 3),
+            'threshold': event.rule.threshold,
+        }
+        if not event.rule.is_probability:
+            # Kept under their old names as well: a webhook consumer written
+            # against the previous payload should not break for a rule that
+            # still means exactly what it used to.
+            payload['peak_mm_h'] = round(event.peak, 2)
+            payload['threshold_mm_h'] = event.rule.threshold
+        return self.deliver(title, body, tags='cloud_with_rain', payload=payload)
 
     def deliver(self, title: str, body: str, tags: str = 'cloud_with_rain',
                 payload: dict | None = None) -> bool:
