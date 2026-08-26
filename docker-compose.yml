@@ -96,11 +96,52 @@ services:
       # average = sustained requests/second per client IP, burst = allowance.
       # A map page load fetches ~85 frames at once, hence the generous burst.
       - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.average=20"
-      - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.burst=120"
+      - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.burst=240"
       - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.period=1s"
+      # "per client IP" is only true because of this line. Traefik's default
+      # sourceCriterion is the DIRECT PEER's address, and behind a tunnel that
+      # peer is the tunnel daemon — so without it every internet visitor shares
+      # ONE bucket and two simultaneous map loads 429 each other. depth=1 takes
+      # the right-most X-Forwarded-For entry, which is the one the CDN appends
+      # itself, so a client cannot spoof it by sending its own XFF. Do NOT raise
+      # depth: entry 2 from the right is attacker-controlled. This needs the
+      # entrypoint to trust XFF from the proxy network
+      # (`forwardedHeaders.trustedIPs`), which is what makes the header present
+      # and reliable here at all.
+      - "traefik.http.middlewares.buitjes-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1"
+      # ^ has a cost on the LAN: if split-horizon DNS points BUITJES_HOST at the
+      # server directly, those requests reach Traefik with NO X-Forwarded-For at
+      # all — depth=1 then yields an empty client IP and every internal device
+      # shares a single bucket. They also miss the CDN edge cache, so an
+      # internal map load is ~85 origin requests where a public one is mostly
+      # cache hits. That is why burst is 240 above and not the 120 it once was:
+      # two internal devices loading the map at once must not 429 each other.
+
+      # /api/conditions is the only endpoint that makes this server call someone
+      # else's API, and it is deliberately not behind API_KEYS because the map
+      # needs it for click-anywhere. So it gets its own router and a limit an
+      # order of magnitude tighter than the rest of the site: a person clicking
+      # around produces a click every second or two, while a coordinate sweep
+      # produces thousands. The in-process budget in serve_conditions is the
+      # second half of this — that one caps the total across all callers, which
+      # is the number the upstream free tier actually counts.
+      - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.average=2"
+      - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.burst=10"
+      - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.period=1s"
+      - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1"
+      # Traefik ranks routers by rule length, so this one wins over the Host-only
+      # router above without needing an explicit priority. It reuses that
+      # router's service rather than declaring a second one.
+      - "traefik.http.routers.buitjes-conditions.rule=Host(`${BUITJES_HOST:-weather.example.com}`) && PathPrefix(`/api/conditions`)"
+      - "traefik.http.routers.buitjes-conditions.entrypoints=websecure"
+      - "traefik.http.routers.buitjes-conditions.tls=true"
+      - "traefik.http.routers.buitjes-conditions.service=buitjes"
       # Order matters and the list replaces rather than appends, so an auth
       # middleware has to be named here explicitly — see .env.example.
       - "traefik.http.routers.buitjes.middlewares=${BUITJES_MIDDLEWARES:-buitjes-ratelimit@docker}"
+      # The conditions router carries the same chain plus its own limit, so a
+      # click still counts against the site-wide bucket as well as this one.
+      - "traefik.http.routers.buitjes-conditions.middlewares=${BUITJES_MIDDLEWARES:-buitjes-ratelimit@docker},buitjes-conditions-ratelimit@docker"
     networks:
       - proxy
       - default
