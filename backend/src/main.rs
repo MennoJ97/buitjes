@@ -785,6 +785,17 @@ async fn serve_point_document(state: &AppState, name: &str, prefix: &str) -> Res
             [
                 (header::CONTENT_TYPE, "application/json"),
                 (header::CACHE_CONTROL, "public, max-age=120"),
+                // This body is only served to a request that presented a key,
+                // and it carries the location's coordinates - so a shared cache
+                // must not be free to hand it to the next caller who presents
+                // none. Same reasoning as /api/config, which has always said
+                // this; these two were the pair that did not.
+                //
+                // Only on the 200: the unauthorised answer is a 401 from
+                // require_api_key and the not-found answer below are both
+                // no-store, and a response that is never stored has nothing to
+                // key on.
+                (header::VARY, "x-api-key"),
             ],
             body,
         )
