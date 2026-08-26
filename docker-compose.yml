@@ -141,12 +141,36 @@ services:
       - "traefik.http.routers.buitjes-conditions.entrypoints=websecure"
       - "traefik.http.routers.buitjes-conditions.tls=true"
       - "traefik.http.routers.buitjes-conditions.service=buitjes"
+      # Headers this stack needs on top of whatever shared chain is configured.
+      # Kept here rather than added to a shared `sec-headers` middleware because
+      # the policy below names *this* app's tile providers; another service
+      # borrowing that middleware should not inherit them.
+      #
+      # frameDeny sends X-Frame-Options: DENY, which frame-ancestors already
+      # covers for current browsers. Nothing embeds this page - the dashboard
+      # widget renders server-side against the container name and the homepage
+      # only links to it - so denying outright costs nothing.
+      - "traefik.http.middlewares.buitjes-headers.headers.frameDeny=true"
+      # The map is the whole reason this policy is not just default-src 'self':
+      #   - MapLibre builds its workers from blob: URLs, so worker-src blob: is
+      #     load-bearing; without it the map renders nothing at all.
+      #   - the three tile origins are the only external hosts the page loads.
+      #     Every other URL in the markup is an attribution link, not a fetch.
+      #   - raster tiles arrive as images and vector tiles/style/glyphs over
+      #     fetch, hence the origins appearing under both img-src and
+      #     connect-src.
+      # There are no inline scripts or styles in the pages, so neither
+      # 'unsafe-inline' nor a hash list is needed - keep it that way.
+      - "traefik.http.middlewares.buitjes-headers.headers.contentSecurityPolicy=default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://tiles.openfreemap.org https://a.basemaps.cartocdn.com https://tile.openstreetmap.org; connect-src 'self' https://tiles.openfreemap.org https://a.basemaps.cartocdn.com https://tile.openstreetmap.org; font-src 'self' https://tiles.openfreemap.org; worker-src blob:; child-src blob:"
+
       # Order matters and the list replaces rather than appends, so an auth
       # middleware has to be named here explicitly — see .env.example.
-      - "traefik.http.routers.buitjes.middlewares=${BUITJES_MIDDLEWARES:-buitjes-ratelimit@docker}"
+      # buitjes-headers is appended rather than left to that variable so the
+      # policy travels with the stack that the policy describes.
+      - "traefik.http.routers.buitjes.middlewares=${BUITJES_MIDDLEWARES:-buitjes-ratelimit@docker},buitjes-headers@docker"
       # The conditions router carries the same chain plus its own limit, so a
       # click still counts against the site-wide bucket as well as this one.
-      - "traefik.http.routers.buitjes-conditions.middlewares=${BUITJES_MIDDLEWARES:-buitjes-ratelimit@docker},buitjes-conditions-ratelimit@docker"
+      - "traefik.http.routers.buitjes-conditions.middlewares=${BUITJES_MIDDLEWARES:-buitjes-ratelimit@docker},buitjes-conditions-ratelimit@docker,buitjes-headers@docker"
     networks:
       - proxy
       - default
