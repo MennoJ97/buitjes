@@ -386,10 +386,13 @@ class Notifier:
 class StallWatch:
     """Has the upstream gone quiet?
 
-    Separate from the rain rules on purpose. It fires on the *absence* of data,
-    it has no location to name, and it has to work for a deployment that
-    configured a webhook without ever asking to be told about rain — so it is
-    built from ALERT_WEBHOOK_URL alone, not from ALERT_RULES.
+    Separate from the rain rules on purpose, and separately configured. It
+    fires on the *absence* of data, it has no location to name, and it has to
+    work for a deployment that never asked to be told about rain — so it is
+    built from STALL_WEBHOOK_URL and never from ALERT_RULES. That URL is its
+    own so the two can go to different ntfy topics, or different services
+    entirely; it falls back to ALERT_WEBHOOK_URL for a deployment that wants
+    one webhook for both.
 
     This became necessary when the container healthcheck stopped reading
     /healthz. That was the wrong place to notice a stall — it answered by
@@ -411,9 +414,9 @@ class StallWatch:
 
     @classmethod
     def from_config(cls, config) -> 'StallWatch | None':
-        if not config.alert_webhook or config.stall_alert <= 0:
+        if not config.stall_webhook or config.stall_alert <= 0:
             return None
-        notifier = Notifier(config.alert_webhook, config.alert_format, config.alert_auth)
+        notifier = Notifier(config.stall_webhook, config.stall_format, config.stall_auth)
         return cls(notifier, config.stall_alert)
 
     def cycle(self, now: float) -> None:

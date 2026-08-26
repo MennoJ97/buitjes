@@ -51,6 +51,9 @@ class Config:
     alert_auth: str
     alert_state_file: str
     stall_alert: int
+    stall_webhook: str
+    stall_format: str
+    stall_auth: str
 
     @classmethod
     def from_env(cls) -> 'Config':
@@ -64,6 +67,10 @@ class Config:
         alert_format = os.environ.get('ALERT_FORMAT', 'json').strip().lower()
         if alert_format not in ('json', 'ntfy'):
             raise SystemExit(f'ALERT_FORMAT must be json or ntfy (got {alert_format!r})')
+        stall_format = os.environ.get('STALL_ALERT_FORMAT', alert_format).strip().lower()
+        if stall_format not in ('json', 'ntfy'):
+            raise SystemExit(
+                f'STALL_ALERT_FORMAT must be json or ntfy (got {stall_format!r})')
         try:
             alert_rules = parse_rules(os.environ.get('ALERT_RULES', ''))
         except ValueError as error:
@@ -165,4 +172,16 @@ class Config:
             # pipeline, not the weather, so it is useful to someone who
             # configured no rain rules at all. 0 disables it.
             stall_alert=int(os.environ.get('STALL_ALERT_SECONDS', '1800')),
+            # Its own webhook rather than the rain rules'. A stall is a
+            # different kind of news — it is about the pipeline, not the
+            # weather — and it usually wants a different ntfy topic, sometimes
+            # a different service, and often a reader who set no rain rules at
+            # all. Each of the three falls back to its ALERT_* equivalent, so a
+            # deployment that wants one webhook for both still gets it by
+            # setting only those.
+            stall_webhook=(os.environ.get('STALL_WEBHOOK_URL', '').strip()
+                           or os.environ.get('ALERT_WEBHOOK_URL', '').strip()),
+            stall_format=stall_format,
+            stall_auth=(os.environ.get('STALL_WEBHOOK_AUTH', '').strip()
+                        or os.environ.get('ALERT_WEBHOOK_AUTH', '').strip()),
         )

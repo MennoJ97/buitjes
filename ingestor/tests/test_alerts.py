@@ -339,20 +339,60 @@ check('a failed delivery is not retried every cycle', failing.attempts == 1,
       f'{failing.attempts} attempts')
 
 print('stall: built from the webhook alone, not from the rules')
-os.environ.pop('ALERT_RULES', None)
-os.environ['ALERT_WEBHOOK_URL'] = 'http://example.invalid/topic'
-sys.modules.pop('ingestor.config', None)
-from ingestor.config import Config as StallConfig  # noqa: E402
 
-config = StallConfig.from_env()
+
+def reread():
+    """Config.from_env against whatever os.environ currently says."""
+    sys.modules.pop('ingestor.config', None)
+    import importlib
+    return importlib.import_module('ingestor.config').Config.from_env()
+
+
+os.environ.pop('ALERT_RULES', None)
+os.environ['ALERT_WEBHOOK_URL'] = 'http://example.invalid/rain'
+config = reread()
 check('no rain rules still gets a stall watch', StallWatch.from_config(config) is not None)
 check('and no alert runner', AlertRunner.from_config(config) is None)
+check('with no STALL_WEBHOOK_URL it falls back to the rain one',
+      config.stall_webhook == 'http://example.invalid/rain')
+
+# The separation this exists for: a stall goes to its own topic, and the rain
+# rules keep theirs. Sharing one URL was the earlier behaviour and is still
+# reachable by leaving STALL_WEBHOOK_URL unset, above.
+print('stall: its own webhook, format and auth')
+os.environ['STALL_WEBHOOK_URL'] = 'http://ntfy/alerts'
+os.environ['STALL_ALERT_FORMAT'] = 'ntfy'
+os.environ['STALL_WEBHOOK_AUTH'] = 'Bearer tk_stall'
+os.environ['ALERT_FORMAT'] = 'json'
+os.environ['ALERT_WEBHOOK_AUTH'] = 'Bearer tk_rain'
+config = reread()
+watch = StallWatch.from_config(config)
+check('stall takes its own url', watch.notifier.url == 'http://ntfy/alerts')
+check('stall takes its own format', watch.notifier.format == 'ntfy')
+check('stall takes its own auth', watch.notifier.auth == 'Bearer tk_stall')
+check('the rain settings are untouched',
+      config.alert_format == 'json' and config.alert_auth == 'Bearer tk_rain'
+      and config.alert_webhook == 'http://example.invalid/rain')
+
+# A webhook for the stall and nothing for the rain: the reader who only wants
+# to know when the pipeline dies.
+os.environ.pop('ALERT_WEBHOOK_URL', None)
+os.environ.pop('ALERT_WEBHOOK_AUTH', None)
+config = reread()
+check('stall works with no rain webhook at all',
+      StallWatch.from_config(config) is not None)
+
+os.environ['STALL_ALERT_FORMAT'] = 'smoke-signal'
+try:
+    reread()
+    check('a bad stall format is refused at startup', False, '(accepted)')
+except SystemExit as error:
+    check('a bad stall format is refused at startup',
+          'STALL_ALERT_FORMAT' in str(error), str(error))
+os.environ['STALL_ALERT_FORMAT'] = 'ntfy'
 
 os.environ['STALL_ALERT_SECONDS'] = '0'
-sys.modules.pop('ingestor.config', None)
-from ingestor.config import Config as ZeroConfig  # noqa: E402
-
-check('zero disables it', StallWatch.from_config(ZeroConfig.from_env()) is None)
+check('zero disables it', StallWatch.from_config(reread()) is None)
 
 print()
 if failures:
