@@ -126,7 +126,12 @@ services:
       # second half of this — that one caps the total across all callers, which
       # is the number the upstream free tier actually counts.
       - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.average=2"
-      - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.burst=10"
+      # Burst 30 rather than the 10 this started at, for the same reason the
+      # site-wide burst is 240: the depth=1 strategy below yields an empty
+      # client IP for a request that arrives with no X-Forwarded-For, so every
+      # LAN and WireGuard device shares one bucket. At 10 that was shallow
+      # enough for two people clicking around the map at once to 429 each other.
+      - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.burst=30"
       - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.period=1s"
       - "traefik.http.middlewares.buitjes-conditions-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1"
       # Traefik ranks routers by rule length, so this one wins over the Host-only
