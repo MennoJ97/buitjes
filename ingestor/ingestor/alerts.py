@@ -236,13 +236,29 @@ class Notifier:
         self.auth = auth
 
     def send(self, event: Event, now: float) -> bool:
-        """Deliver one alert. Returns whether it was accepted.
+        """Deliver one rain alert. Returns whether it was accepted.
 
         The return value decides whether the rule latches, so a webhook that is
         down means the alert is retried on the next cycle rather than silently
         swallowed.
         """
         title, body = describe(event, now)
+        return self.deliver(title, body, tags='cloud_with_rain', payload={
+            'location': event.rule.location,
+            'onset': event.onset,
+            'peak_mm_h': round(event.peak, 2),
+            'peak_at': event.peak_at,
+            'probability': round(event.probability, 3),
+            'threshold_mm_h': event.rule.threshold,
+        })
+
+    def deliver(self, title: str, body: str, tags: str = 'cloud_with_rain',
+                payload: dict | None = None) -> bool:
+        """Put one message on the wire. Returns whether it was accepted.
+
+        Split from `send` because not everything worth saying is about rain at
+        a location — `StallWatch` reports the absence of data and has neither.
+        """
         headers = {}
         if self.auth:
             headers['Authorization'] = self.auth
@@ -252,7 +268,7 @@ class Notifier:
                 headers.update({
                     'Title': title,
                     'Priority': 'default',
-                    'Tags': 'cloud_with_rain',
+                    'Tags': tags,
                 })
                 response = requests.post(
                     self.url, data=body.encode('utf-8'), headers=headers,
@@ -261,24 +277,81 @@ class Notifier:
             else:
                 response = requests.post(
                     self.url,
-                    json={
-                        'title': title,
-                        'message': body,
-                        'location': event.rule.location,
-                        'onset': event.onset,
-                        'peak_mm_h': round(event.peak, 2),
-                        'peak_at': event.peak_at,
-                        'probability': round(event.probability, 3),
-                        'threshold_mm_h': event.rule.threshold,
-                    },
+                    json={'title': title, 'message': body, **(payload or {})},
                     headers=headers,
                     timeout=DELIVERY_TIMEOUT_SECONDS,
                 )
             response.raise_for_status()
             return True
         except requests.RequestException as error:
-            log.warning('alert delivery failed (%s); will retry next cycle', error)
+            log.warning('alert delivery failed (%s)', error)
             return False
+
+
+class StallWatch:
+    """Has the upstream gone quiet?
+
+    Separate from the rain rules on purpose. It fires on the *absence* of data,
+    it has no location to name, and it has to work for a deployment that
+    configured a webhook without ever asking to be told about rain — so it is
+    built from ALERT_WEBHOOK_URL alone, not from ALERT_RULES.
+
+    This became necessary when the container healthcheck stopped reading
+    /healthz. That was the wrong place to notice a stall — it answered by
+    deleting the site from the reverse proxy — but it was the only place, and
+    removing it would otherwise mean nothing at all says KNMI has stopped.
+
+    Latched like a rule, and for the same reason, with one deliberate
+    difference: the latch closes on the transition whether or not delivery
+    succeeded. A stall lasts hours, and the retry-every-cycle behaviour that is
+    right for one shower would mean a webhook that is down is re-attempted
+    every minute until the weather changes.
+    """
+
+    def __init__(self, notifier: Notifier, threshold: int):
+        self.notifier = notifier
+        self.threshold = threshold
+        self.last_cycle: float | None = None
+        self.alerted = False
+
+    @classmethod
+    def from_config(cls, config) -> 'StallWatch | None':
+        if not config.alert_webhook or config.stall_alert <= 0:
+            return None
+        notifier = Notifier(config.alert_webhook, config.alert_format, config.alert_auth)
+        return cls(notifier, config.stall_alert)
+
+    def cycle(self, now: float) -> None:
+        """A new forecast cycle landed. Also how the clock is started at boot,
+        so a process that never manages to ingest anything still reports it."""
+        if self.alerted:
+            quiet = int(now - (self.last_cycle or now))
+            log.info('forecast cycles resumed after %ds', quiet)
+            self.notifier.deliver(
+                'Forecast cycles resumed',
+                f'A new cycle landed after {quiet // 60} min of silence.',
+                tags='white_check_mark',
+                payload={'quiet_seconds': quiet},
+            )
+            self.alerted = False
+        self.last_cycle = now
+
+    def check(self, now: float) -> None:
+        """Called every time round the ingest loop; speaks once per stall."""
+        if self.alerted or self.last_cycle is None:
+            return
+        quiet = int(now - self.last_cycle)
+        if quiet < self.threshold:
+            return
+        self.alerted = True
+        log.warning('no new forecast cycle for %ds; alerting', quiet)
+        self.notifier.deliver(
+            'Forecast has stalled',
+            f'No new forecast cycle for {quiet // 60} min. The map is still '
+            f'serving the frames it has; only the data is old.',
+            tags='warning',
+            payload={'quiet_seconds': quiet},
+        )
 
 
 class AlertRunner:

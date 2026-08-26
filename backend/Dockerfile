@@ -19,6 +19,10 @@ COPY --from=builder /app/target/release/weather-backend /app/weather-backend
 # docker-compose.override.yml bind-mounts it over this copy for local development.
 COPY frontend /app/frontend
 EXPOSE 3000
+# /livez, never /healthz: an unhealthy container is dropped from Traefik's
+# routing table, and /healthz reports on the freshness of KNMI's data. Pointing
+# the probe at it means an upstream publishing gap takes the site off the
+# internet rather than showing the staleness banner built for it.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:3000/healthz || exit 1
+    CMD curl -fsS http://127.0.0.1:3000/livez || exit 1
 CMD ["/app/weather-backend"]

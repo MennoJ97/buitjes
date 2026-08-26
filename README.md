@@ -47,6 +47,7 @@ as twitchy as convective rain is a number that will be wrong.
 │  ─ 20 members → one field         ─ /api/point/<name>          │
 │  ─ resamples rows to Mercator     ─ /api/current/<name>        │
 │  ─ encodes 16-bit WebP frames     ─ /healthz  data freshness   │
+│                                   ─ /livez    is it serving?   │
 │           │                                ▲                   │
 │           ▼                                │                   │
 │   docker volume "frames": *.webp + manifest.json (ro for the   │
@@ -105,6 +106,13 @@ middleware chain. Two things worth knowing before you do:
   returns 503 once the newest forecast passes `MAX_MANIFEST_AGE_SECONDS`. Don't
   wire it into a load balancer health check, or an upstream outage will take the
   whole site down instead of showing the stale-data banner it was built for.
+  `/livez` is the one to probe: it answers 200 whenever the process is serving,
+  whatever the data looks like. The container healthcheck uses it, and Traefik
+  drops an unhealthy container from its routing table — so that endpoint decides
+  whether the site exists.
+- Losing the healthcheck as a stall signal is what `STALL_ALERT_SECONDS` covers:
+  the ingestor sends one alert when the forecast stops advancing, and one when
+  it resumes. It needs only `ALERT_WEBHOOK_URL`, not `ALERT_RULES`.
 
 ## Data
 

@@ -16,7 +16,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from ingestor.alerts import (  # noqa: E402
-    AlertState, Rule, describe, evaluate, parse_rules, process,
+    AlertRunner, AlertState, Rule, describe, evaluate, parse_rules, process,
 )
 
 NOW = 1_700_000_000
@@ -270,6 +270,89 @@ try:
     check('an unparseable rule is refused at startup', False, '(accepted)')
 except SystemExit:
     check('an unparseable rule is refused at startup', True)
+
+print('stall: one alert per stall, one when it clears')
+# The failure this guards is the same one the rain rules guard, from the other
+# side: an alarm that repeats every minute for a four-hour KNMI outage gets
+# muted, and then the next outage goes unnoticed.
+from ingestor.alerts import StallWatch  # noqa: E402
+
+
+class Collecting:
+    def __init__(self):
+        self.sent = []
+
+    def deliver(self, title, body, tags='cloud_with_rain', payload=None):
+        self.sent.append((title, body, tags))
+        return True
+
+
+sent = Collecting()
+watch = StallWatch(sent, threshold=1800)
+
+watch.check(NOW)
+check('silent before the clock is started', sent.sent == [])
+
+watch.cycle(NOW)
+watch.check(NOW + 1799)
+check('silent under the threshold', sent.sent == [])
+
+watch.check(NOW + 1800)
+check('alerts at the threshold', len(sent.sent) == 1, sent.sent)
+check('the alert says the forecast stalled', 'stalled' in sent.sent[0][0].lower(), sent.sent[0])
+
+watch.check(NOW + 3600)
+watch.check(NOW + 7200)
+check('still exactly one alert for one stall', len(sent.sent) == 1, sent.sent)
+
+watch.cycle(NOW + 7300)
+check('a recovery notice on the next cycle', len(sent.sent) == 2, sent.sent)
+check('the recovery says how long it was quiet',
+      '121 min' in sent.sent[1][1], sent.sent[1])
+
+watch.cycle(NOW + 7600)
+watch.check(NOW + 7600)
+check('no second recovery, and the latch re-armed', len(sent.sent) == 2, sent.sent)
+
+watch.check(NOW + 7600 + 1800)
+check('a later stall alerts again', len(sent.sent) == 3, sent.sent)
+
+
+class Failing:
+    def __init__(self):
+        self.attempts = 0
+
+    def deliver(self, title, body, tags='cloud_with_rain', payload=None):
+        self.attempts += 1
+        return False
+
+
+# Deliberately unlike a rain rule, which retries. A stall lasts hours, and
+# re-attempting a dead webhook every minute until the weather changes is the
+# behaviour this module exists to avoid.
+failing = Failing()
+stubborn = StallWatch(failing, threshold=1800)
+stubborn.cycle(NOW)
+for minute in range(30, 240, 1):
+    stubborn.check(NOW + minute * 60)
+check('a failed delivery is not retried every cycle', failing.attempts == 1,
+      f'{failing.attempts} attempts')
+
+print('stall: built from the webhook alone, not from the rules')
+os.environ.pop('ALERT_RULES', None)
+os.environ['ALERT_WEBHOOK_URL'] = 'http://example.invalid/topic'
+sys.modules.pop('ingestor.config', None)
+from ingestor.config import Config as StallConfig  # noqa: E402
+
+config = StallConfig.from_env()
+check('no rain rules still gets a stall watch', StallWatch.from_config(config) is not None)
+check('and no alert runner', AlertRunner.from_config(config) is None)
+
+os.environ['STALL_ALERT_SECONDS'] = '0'
+sys.modules.pop('ingestor.config', None)
+from ingestor.config import Config as ZeroConfig  # noqa: E402
+
+check('zero disables it', StallWatch.from_config(ZeroConfig.from_env()) is None)
 
 print()
 if failures:

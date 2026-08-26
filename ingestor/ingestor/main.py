@@ -31,7 +31,7 @@ from .encode import encode_frame
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
-from .alerts import AlertRunner, describe as describe_alert
+from .alerts import AlertRunner, StallWatch, describe as describe_alert
 from .conditions import ATTRIBUTION as CONDITIONS_ATTRIBUTION, ConditionsSource
 from .raster import MercatorResampler, StereographicResampler, TargetGrid
 
@@ -406,7 +406,7 @@ def seconds_until_next_publication(config: Config, state: State, now: float) -> 
 
 
 def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
-             check_forecast: bool = True, alert_runner=None) -> None:
+             check_forecast: bool = True, alert_runner=None, stall=None) -> None:
     # A radar-only notification means the forecast cannot have moved, so looking
     # it up would spend a request to learn nothing.
     if not check_forecast and state.grid is not None:
@@ -427,6 +427,15 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
         state.last_forecast_file = filename
         state.forecast_frames, state.meta, state.grid = frames, meta, grid
         reconcile_grid(config, grid)
+        # The transition the stall watch counts from, and deliberately down
+        # here: a cycle that KNMI announced but that failed to download is not
+        # progress, and marking it as such would keep resetting the clock
+        # through exactly the failure worth being told about. Equally
+        # deliberately not a notification — the subscription covers the radar
+        # topic too, so it keeps ticking through a gap in *forecast*
+        # publishing, which is the outage that started all this.
+        if stall:
+            stall.cycle(time.time())
     elif state.grid is None:
         return  # nothing published yet and no new cycle to build one from
 
@@ -506,12 +515,20 @@ def main() -> None:
                  ', '.join(rule.key for rule in config.alert_rules),
                  f'{config.alert_format} webhook' if config.alert_webhook else 'log only')
 
+    stall = StallWatch.from_config(config)
+    if stall:
+        log.info('stall alert after %ds without a new forecast cycle', stall.threshold)
+
     state = State()
+    if stall:
+        # Start the clock at boot, so a process that never manages to ingest
+        # anything reports that too, rather than waiting forever in silence.
+        stall.cycle(time.time())
     continue_kwargs = {'check_forecast': True}
     while True:
         try:
             run_once(client, config, state, conditions,
-                     alert_runner=alert_runner, **continue_kwargs)
+                     alert_runner=alert_runner, stall=stall, **continue_kwargs)
             continue_kwargs = {'check_forecast': True}
             delay = seconds_until_next_publication(config, state, time.time())
         except RateLimited as exc:
@@ -520,6 +537,12 @@ def main() -> None:
         except Exception:
             log.exception('ingest cycle failed')
             delay = config.poll_retry
+
+        # Outside the try, and before the wait: a stall has to be noticed on
+        # both the notification and the polling path, and on the cycles that
+        # raised as much as the ones that came back empty.
+        if stall:
+            stall.check(time.time())
 
         # With notifications there is nothing to wait *for* on a timer: sit on
         # the subscription until KNMI announces a file. The timeout is only a

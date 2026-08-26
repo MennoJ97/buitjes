@@ -397,12 +397,16 @@ async fn main() {
         )
         .with_state(state.clone());
 
-    // /healthz sits outside that trace on purpose. It answers 503 when the
-    // *data* is stale, which is not a failed request, and the container health
-    // check asks every 30 seconds — inside, one KNMI outage would be a WARN
-    // every half minute saying nothing the staleness edge has not said once.
+    // Both probes sit outside that trace on purpose. /healthz answers 503 when
+    // the *data* is stale, which is not a failed request, and the container
+    // health check asks every 30 seconds — inside, one KNMI outage would be a
+    // WARN every half minute saying nothing the staleness edge has not said
+    // once. They are also outside `require_api_key`, which is layered onto
+    // `served` alone: no setting of API_KEY_PROTECTED_PREFIXES can close the
+    // endpoints you need most when something is wrong.
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/livez", get(livez))
         .with_state(state.clone())
         .merge(served);
 
@@ -440,23 +444,53 @@ async fn forecast_age(state: &AppState) -> Option<u64> {
     Some(now.saturating_sub(reference))
 }
 
-/// Reports the freshness of the ingestor's output, so Traefik and the Docker
-/// healthcheck notice a poller that has died or lost its API key.
+/// Is the process serving?
+///
+/// Deliberately says nothing about how fresh the data is. This is what the
+/// container healthcheck reads, and an unhealthy container is dropped from
+/// Traefik's routing table — so anything that answers 503 here takes the whole
+/// site down. An upstream publishing gap must degrade the map, not delete it.
+/// Freshness is /healthz, which the browser reads.
+///
+/// The one thing worth failing on is a frame directory that cannot be read at
+/// all: the mount is broken and no request can be answered correctly anyway.
+/// Keep it to this single stat — a probe that does real work against a volume
+/// that might block would reintroduce the very failure this endpoint removes.
+async fn livez(State(state): State<AppState>) -> impl IntoResponse {
+    let readable = tokio::fs::metadata(&state.frame_dir).await.is_ok();
+    let (status, detail) = liveness(readable);
+    (
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(json!({
+            "status": if readable { "alive" } else { "unavailable" },
+            "detail": detail,
+        })),
+    )
+}
+
+/// Split from the handler so the verdict can be asserted without a router.
+fn liveness(frame_dir_readable: bool) -> (StatusCode, &'static str) {
+    if frame_dir_readable {
+        (StatusCode::OK, "serving")
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "frame directory is not readable",
+        )
+    }
+}
+
+/// Reports the freshness of the ingestor's output, for the browser's staleness
+/// banner and for anyone asking by hand.
+///
+/// Explicitly *not* the container's liveness probe. A 503 here means the data
+/// is old, not that the process is broken, and wiring it into a container
+/// health check deletes the router in front of a server that is working — see
+/// the warning in the README. That job belongs to /livez.
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     let age = forecast_age(&state).await;
-    let (status, ok, detail) = match age {
-        None => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            false,
-            "no manifest yet - the ingestor has not published a cycle",
-        ),
-        Some(seconds) if seconds > state.max_manifest_age => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            false,
-            "the newest forecast is stale - the ingestor is not keeping up",
-        ),
-        Some(_) => (StatusCode::OK, true, "ok"),
-    };
+    let (status, ok, detail) = freshness(age, state.max_manifest_age);
 
     // Log the transition, not the state. See `AppState::was_stale`.
     if state.was_stale.swap(!ok, Ordering::Relaxed) != !ok {
@@ -481,6 +515,26 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
             "max_forecast_age_seconds": state.max_manifest_age,
         })),
     )
+}
+
+/// Split from the handler so the stale case can be asserted without a router.
+///
+/// It is also the guard against the two endpoints quietly collapsing back into
+/// one answer: this one is allowed to say 503, /livez is not.
+fn freshness(age: Option<u64>, max_age: u64) -> (StatusCode, bool, &'static str) {
+    match age {
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "no manifest yet - the ingestor has not published a cycle",
+        ),
+        Some(seconds) if seconds > max_age => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "the newest forecast is stale - the ingestor is not keeping up",
+        ),
+        Some(_) => (StatusCode::OK, true, "ok"),
+    }
 }
 
 /// The manifest, with the list of published locations removed for callers who
@@ -707,7 +761,30 @@ async fn serve_conditions(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_frame_name, is_valid_point_name};
+    use super::{freshness, is_valid_frame_name, is_valid_point_name, liveness, StatusCode};
+
+    /// The two endpoints answer different questions, and the whole point of
+    /// /livez is that no state of the *data* can make it fail. If someone ever
+    /// wires freshness back into liveness, these are what should stop them.
+    #[test]
+    fn liveness_fails_only_on_an_unreadable_frame_dir() {
+        assert_eq!(liveness(true).0, StatusCode::OK);
+        assert_eq!(liveness(false).0, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn freshness_still_degrades_on_a_stale_manifest() {
+        let max = 1200;
+        assert_eq!(freshness(Some(0), max).0, StatusCode::OK);
+        assert_eq!(freshness(Some(max), max).0, StatusCode::OK);
+        assert!(freshness(Some(max), max).1);
+
+        for age in [Some(max + 1), None] {
+            let (status, ok, _) = freshness(age, max);
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "age {age:?}");
+            assert!(!ok, "age {age:?}");
+        }
+    }
 
     #[test]
     fn accepts_generated_names() {

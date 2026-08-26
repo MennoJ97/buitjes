@@ -49,6 +49,7 @@ class Config:
     alert_format: str
     alert_auth: str
     alert_state_file: str
+    stall_alert: int
 
     @classmethod
     def from_env(cls) -> 'Config':
@@ -151,4 +152,9 @@ class Config:
                 'ALERT_STATE_FILE',
                 os.path.join(os.environ.get('FRAME_DIR', '/data'), 'alerts.json'),
             ),
+            # How long the forecast may stop advancing before that is worth an
+            # alert of its own. Wants only ALERT_WEBHOOK_URL: this reports the
+            # pipeline, not the weather, so it is useful to someone who
+            # configured no rain rules at all. 0 disables it.
+            stall_alert=int(os.environ.get('STALL_ALERT_SECONDS', '1800')),
         )
