@@ -25,7 +25,7 @@ import re
 import tempfile
 import time
 
-from .blend import BlendFile, reduce_members
+from .blend import REDUCER_LABELS, BlendFile, reduce_members
 from .config import Config
 from .encode import encode_frame
 from .knmi import KnmiClient, RateLimited
@@ -95,7 +95,12 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             # while the members are still in memory, the point samples.
             members = source.members(index)
             extractor.observe(valid_time, members)
-            field = resampler(reduce_members(members, config.ensemble_stat))
+            # Cropped before reducing, not after: pmm pools every value it is
+            # given, so the reduction has to see exactly what will be published
+            # and nothing else.
+            field = resampler(
+                reduce_members(resampler.crop(members), config.ensemble_stat)
+            )
             payload = encode_frame(field, config.max_precip)
             name = forecast_frame_name(source.reference_time, valid_time)
             write_atomic(config.frame_dir, name, payload)
@@ -113,7 +118,8 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
 
         meta = {
             'reference_time': source.reference_time,
-            'product': f'{config.ensemble_stat} of {source.member_count} ensemble members',
+            'product': (f'{REDUCER_LABELS[config.ensemble_stat]} of '
+                        f'{source.member_count} ensemble members'),
             # Coordinates too: a client that knows where the user clicked can
             # then pick the nearest published location without another request.
             'points': [

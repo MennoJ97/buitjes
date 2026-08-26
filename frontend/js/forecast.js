@@ -156,8 +156,8 @@ function render(document_) {
     $('summary-text').textContent = document_.summary?.text ?? '';
     $('location-coords').textContent =
         `${document_.location.lat.toFixed(4)}, ${document_.location.lon.toFixed(4)}`;
-    $('rain-note').textContent = document_.precipitation?.median_only
-        ? 'KNMI ensemble median · 5-minute steps · no spread away from a sampled location'
+    $('rain-note').textContent = document_.precipitation?.frame_only
+        ? 'KNMI ensemble, probability-matched mean · 5-minute steps · no spread away from a sampled location'
         : 'KNMI ensemble · 5-minute steps';
 
     renderSummaryStats(document_);

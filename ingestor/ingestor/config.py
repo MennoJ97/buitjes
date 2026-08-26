@@ -81,9 +81,11 @@ class Config:
 
         crop = os.environ.get('CROP_BOUNDS', '').strip()
         height = os.environ.get('OUTPUT_HEIGHT', '').strip()
-        stat = os.environ.get('ENSEMBLE_STAT', 'median').strip().lower()
-        if stat not in ('median', 'mean', 'max'):
-            raise SystemExit(f'ENSEMBLE_STAT must be median, mean or max (got {stat!r})')
+        stat = os.environ.get('ENSEMBLE_STAT', 'pmm').strip().lower()
+        if stat not in ('pmm', 'median', 'mean', 'max'):
+            raise SystemExit(
+                f'ENSEMBLE_STAT must be pmm, median, mean or max (got {stat!r})'
+            )
 
         return cls(
             api_key=api_key,

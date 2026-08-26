@@ -16,7 +16,14 @@ as twitchy as convective rain is a number that will be wrong.
 - **A radar map** covering the last hour of observations and the next six hours,
   scrubbable on a timeline that marks which part is measured (`observed`), which
   is extrapolated (`nowcast`), and which is model (`forecast`). The distinction
-  matters more than the pixels do.
+  matters more than the pixels do. Where no radar can see, the readout says so
+  rather than saying "dry".
+
+- **Twenty members shown as one field, without flattening them.** The map draws
+  the *probability-matched mean*: the ensemble mean decides where the rain is,
+  and the members' own distribution decides how hard it falls. Averaging alone
+  smears one shower across twenty guesses at its position; a median erases it
+  entirely unless half the members hit the same square kilometre.
 - **Hover anywhere** for the rain rate under the cursor; click for a full
   forecast at that exact coordinate rather than snapping to a preset location.
 - **A looping radar on the detail page**, centred on the location: the last
@@ -44,7 +51,7 @@ as twitchy as convective rain is a number that will be wrong.
 │  ─ subscribes to KNMI's MQTT      ─ serves the frontend        │
 │    notification service           ─ /api/config   the manifest │
 │  ─ decodes NetCDF4 (h5py)         ─ /api/frames/<file>.webp    │
-│  ─ 20 members → one field         ─ /api/point/<name>          │
+│  ─ 20 members → one field (pmm)   ─ /api/point/<name>          │
 │  ─ resamples rows to Mercator     ─ /api/current/<name>        │
 │  ─ encodes 16-bit WebP frames     ─ /healthz  data freshness   │
 │                                   ─ /livez    is it serving?   │
@@ -120,7 +127,7 @@ middleware chain. Two things worth knowing before you do:
 
 | | |
 |---|---|
-| Forecast | KNMI `seamless_precipitation_ensemble_forecast_members` 1.0 — a pySTEPS/NWP blend, 20 members, 5-minute steps to +6 h |
+| Forecast | KNMI `seamless_precipitation_ensemble_forecast_members` 1.0 — a pySTEPS/NWP blend, 20 members, 5-minute steps to +6 h, reduced to one field by probability matching (Ebert 2001) |
 | Observed | KNMI `nl_rdr_data_rtcor_5m` real-time corrected radar composite |
 | Conditions | [Open-Meteo](https://open-meteo.com/) ensemble, for temperature, wind, solar and the beyond-6-hour rain outlook |
 | Basemaps | [CARTO](https://carto.com/), [OpenFreeMap](https://openfreemap.org/) and [OpenStreetMap](https://www.openstreetmap.org/) |

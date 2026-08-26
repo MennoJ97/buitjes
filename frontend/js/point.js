@@ -7,7 +7,8 @@
  *
  * The difference between the two is not cosmetic and callers should surface it:
  * KNMI's 20 members exist only while the ingestor holds a timestep in memory,
- * so a coordinate gets the rain *median* but no band and no probability.
+ * so a coordinate gets whatever single number the map frames carry - the
+ * probability-matched mean - with no band and no probability behind it.
  */
 
 import { conditionsFromEnsemble } from './ensemble.js';
@@ -64,11 +65,12 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
     if (frames?.frames?.length) {
         const sampled = frames.series(lon, lat).filter((point) => point.mmh !== null);
         if (sampled.length) {
-            // Median only: no members here, so no band and no probability. The
-            // flat percentiles keep the chart's shape without implying spread.
+            // Read off the frames: no members here, so no band and no
+            // probability. The flat percentiles keep the chart's shape without
+            // implying spread that was never sampled.
             document_.precipitation = {
                 unit: 'mm/h',
-                median_only: true,
+                frame_only: true,
                 series: sampled.map((point) => ({
                     t: point.t,
                     p10: point.mmh, p25: point.mmh, median: point.mmh,
