@@ -1,7 +1,7 @@
 import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
 import { renderBandChart } from './chart.js';
-import { pointForName, pointForCoordinates } from './point.js';
+import { centreOf, pointForName, pointForCoordinates } from './point.js';
 import { apiFetch } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
@@ -1116,6 +1116,11 @@ function renderTrend(document_) {
         wrapper.append(heading, chart);
         el.trendBody.appendChild(wrapper);
         renderBandChart(chart, block.series, {
+            // The same choice of line and band the standalone page makes: a
+            // clicked point's series carries no `median` at all, so defaulting
+            // to one drew nothing here while the full page drew the forecast.
+            // No fallback label — `config.label` is this card's heading.
+            ...centreOf(block),
             colour: config.colour,
             zeroFloor: config.zeroFloor,
             minSpan: config.minSpan,

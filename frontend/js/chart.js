@@ -63,6 +63,12 @@ export function renderBandChart(container, series, options = {}) {
         minSpan = 1,
         centreKey = 'median',
         centreLabel = '',
+        // Outer band first, inner second. Named rather than assumed, because a
+        // line and a band drawn from different kinds of number look unrelated:
+        // a neighbourhood median rises when rain arrives near you, a per-cell
+        // p10–p90 rises when it arrives *on* you, and plotting one inside the
+        // other put the peak of each an hour from the other.
+        bands = [['p10', 'p90', 0.16], ['p25', 'p75', 0.26]],
     } = options;
     const centre = (entry) => entry[centreKey];
 
@@ -93,8 +99,9 @@ export function renderBandChart(container, series, options = {}) {
     // instead, which is a whole-domain reconstruction and can sit well above
     // p90 — 141 mm/h against a p90 of 3.1 where a shower only a fifth of the
     // members forecast lands on one cell — and the line simply left the plot.
-    const lows = series.map((entry) => Math.min(entry.p10 ?? Infinity, centre(entry)));
-    const highs = series.map((entry) => Math.max(entry.p90 ?? -Infinity, centre(entry)));
+    const [outerLow, outerHigh] = bands[0] ?? [];
+    const lows = series.map((entry) => Math.min(entry[outerLow] ?? Infinity, centre(entry)));
+    const highs = series.map((entry) => Math.max(entry[outerHigh] ?? -Infinity, centre(entry)));
     let min = zeroFloor ? 0 : Math.min(...lows);
     let max = Math.max(...highs);
     // A flat series - a dry night, darkness - would otherwise collapse the axis
@@ -156,8 +163,7 @@ export function renderBandChart(container, series, options = {}) {
         }
         flush();
     };
-    band('p10', 'p90', 0.16);
-    band('p25', 'p75', 0.26);
+    for (const [low, high, opacity] of bands) band(low, high, opacity);
 
     svg.appendChild(element('polyline', {
         points: series.map((entry) => `${x(entry.t)},${y(centre(entry))}`).join(' '),
@@ -256,7 +262,7 @@ export function renderBandChart(container, series, options = {}) {
     attachHover({
         container, svg, series, unit, colour, formatValue,
         width, padLeft: pad.left, plotWidth, firstTime, span, x, y,
-        centre, centreLabel,
+        centre, centreLabel, bands,
     });
 }
 
@@ -270,7 +276,7 @@ export function renderBandChart(container, series, options = {}) {
  */
 function attachHover({ container, svg, series, unit, colour, formatValue,
                        width, padLeft, plotWidth, firstTime, span, x, y,
-                       centre, centreLabel }) {
+                       centre, centreLabel, bands }) {
     const crosshair = element('line', { class: 'chart-crosshair', y1: 0, y2: 0, x1: 0, x2: 0 });
     crosshair.style.display = 'none';
     svg.appendChild(crosshair);
@@ -329,8 +335,8 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
             `<span class="tip-time">${stamp}</span>` +
             `<span class="tip-value">${precise(centre(entry))}<small>${unit}</small></span>` +
             (centreLabel ? `<span class="tip-centre">${centreLabel}</span>` : '') +
-            bandRow('50% of members', entry.p25, entry.p75) +
-            bandRow('80% of members', entry.p10, entry.p90) +
+            bands.map(([low, high, , label]) =>
+                bandRow(label ?? '80% of members', entry[low], entry[high])).join('') +
             (entry.probability !== undefined
                 ? `<span class="tip-band"><i>chance of rain</i>${Math.round(entry.probability * 100)}%</span>`
                 : '');

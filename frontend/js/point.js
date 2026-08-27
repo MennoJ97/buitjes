@@ -95,10 +95,16 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
                 // mean unless configured otherwise - and none of those is the
                 // median of anything. The manifest says which.
                 field_product: manifest?.source?.reducer ?? manifest?.source?.product,
+                nearby_radius_km: spread?.radius_km,
+                // Named the same as a configured location's, so both draw the
+                // same statistic through the same path: the neighbourhood
+                // median as the line, its own p10–p90 around it. `field` rides
+                // along for anyone who wants the number the map paints.
                 series: sampled.map((point) => {
                     const band = bands?.get(point.t);
                     return band
-                        ? { t: point.t, p10: band.p10, field: point.mmh, p90: band.p90 }
+                        ? { t: point.t, field: point.mmh, nearby_p10: band.p10,
+                            nearby_median: band.p50, nearby_p90: band.p90 }
                         : { t: point.t, field: point.mmh };
                 }),
             };
@@ -121,4 +127,36 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
             document_.precipitation_outlook.series.filter((entry) => entry.t > knmiEnds);
     }
     return document_;
+}
+
+
+/**
+ * Which entry field carries a block's line, what to call it, and which pair of
+ * keys the band around it comes from.
+ *
+ * The line and its band have to be the same kind of number or they look
+ * unrelated, which is exactly what happened when the line was the map's field
+ * and the band was the members at that one cell: the field is dealt by rank, so
+ * it sat at zero through the band's whole peak and then spiked after it. The
+ * neighbourhood band is local and smooth, and its median is a line that rises
+ * when rain arrives near you.
+ *
+ * Falling back: the field, then the members' own median with their own
+ * quartiles. Everything that is not precipitation really is a median of its
+ * members and says nothing extra.
+ */
+export function centreOf(block, fallbackLabel = '') {
+    const has = (key) => block?.series?.some((entry) => entry[key] !== undefined);
+    if (block?.nearby_radius_km && has('nearby_median')) {
+        const radius = Math.round(block.nearby_radius_km);
+        return {
+            centreKey: 'nearby_median',
+            centreLabel: `median within ${radius} km`,
+            bands: [['nearby_p10', 'nearby_p90', 0.16, `80% of members within ${radius} km`]],
+        };
+    }
+    if (block?.field_product && has('field')) {
+        return { centreKey: 'field', centreLabel: block.field_product };
+    }
+    return { centreKey: 'median', centreLabel: fallbackLabel };
 }

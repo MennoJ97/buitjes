@@ -467,6 +467,29 @@ bare.observe(1_700_000_000, np.zeros((20, 200, 180), np.float32))
 check('a step observed without one says nothing about it',
       'field' not in bare.series_for(0)[0])
 
+# The neighbourhood band at the location, sampled from the same stack the spread
+# frames are built from. Uncropped, so it reads at the location's own cell.
+banded = PointExtractor(locations, lat, lon, neighbourhood_km=10.0)
+stack = np.zeros((20, 200, 180), np.float32)
+stack[:, row0, column0] = 2.5
+near = spread_fields(stack, 2, 2)
+banded.observe(1_700_000_000, stack, field=drawn, nearby=near)
+entry = banded.series_for(0)[0]
+check('the neighbourhood band is published at the location',
+      entry['nearby_p10'] == 2.5 and entry['nearby_median'] == 2.5
+      and entry['nearby_p90'] == 2.5, entry)
+check('and a step without one says nothing about it',
+      'nearby_median' not in with_field.series_for(0)[0])
+
+# The precedence the summary reads, best available first.
+check('the summary prefers the neighbourhood median',
+      summarise([{'t': REF, 'nearby_median': 3.0, 'field': 9.0, 'median': 0.0,
+                  'p90': 9.0, 'probability': 0.0, 'probability_nearby': 0.0}],
+                REF, 10)['peak_mm_h'] == 3.0)
+check('then the field',
+      summarise([{'t': REF, 'field': 9.0, 'median': 0.0, 'p90': 9.0,
+                  'probability': 0.0, 'probability_nearby': 0.0}], REF, 10)['peak_mm_h'] == 9.0)
+
 # The field arrives cropped to what is published, while a location's cell is an
 # index into the whole KNMI grid, so the offset has to be taken off.
 cropped = PointExtractor(locations, lat, lon, neighbourhood_km=10.0,

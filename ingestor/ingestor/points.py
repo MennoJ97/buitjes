@@ -114,12 +114,13 @@ class PointExtractor:
         self._samples: list[np.ndarray] = []  # one (locations, members) array per step
         self._nearby: list[np.ndarray] = []   # one (locations,) array of NEP per step
         self._fields: list = []               # one (locations,) array of the drawn field
+        self._nearby_bands: list = []         # one (locations, percentiles) per step
         self._estimated: list[bool] = []      # was this step stood in for?
 
     def __bool__(self):
         return bool(self.locations)
 
-    def observe(self, valid_time: int, members, field=None,
+    def observe(self, valid_time: int, members, field=None, nearby=None,
                 estimated: bool = False) -> None:
         """Record every member's value at each location for one timestep.
 
@@ -145,6 +146,17 @@ class PointExtractor:
         so for showers it sits at zero through a cycle the map paints rain in.
         Publishing both is the only way to stop the chart and the map
         contradicting each other.
+
+        ``nearby`` is the neighbourhood percentile stack the spread frames are
+        built from - each member taken at its wettest within the published
+        radius, then percentiles across members - on the uncropped grid, so it
+        indexes the same way the members do. It exists here because neither of
+        the other two numbers makes a usable line through time at one point.
+        The members' own median is dry unless half of them rain on this exact
+        cell; the field is dealt by *rank*, so it stays at zero until the cell
+        climbs into the wettest few percent of the domain and then jumps, which
+        put a chart's line and its band an hour out of step. Softening position
+        into a small radius removes both problems at once.
 
         ``estimated`` says the members are not KNMI's for this timestep but a
         stand-in for a dead one, built from the steps either side of it - see
@@ -172,12 +184,19 @@ class PointExtractor:
             if 0 <= row < field.shape[0] and 0 <= column < field.shape[1] else None
             for row, column in self._field_cells
         ])
+        # Uncropped, so these read at the location's own cell rather than the
+        # crop-relative one the field uses.
+        self._nearby_bands.append(None if nearby is None else [
+            [float(percentile[row, column]) for percentile in nearby]
+            for row, column in self._cells
+        ])
 
     def series_for(self, index: int) -> list[dict]:
         """The published series for one location, one entry per timestep."""
         entries = []
-        for valid_time, sample, nearby, drawn, estimated in zip(
-                self._times, self._samples, self._nearby, self._fields, self._estimated):
+        for valid_time, sample, nearby, drawn, band, estimated in zip(
+                self._times, self._samples, self._nearby, self._fields,
+                self._nearby_bands, self._estimated):
             values = np.asarray(sample[index], dtype=np.float64)
             quantiles = np.percentile(values, PERCENTILES)
             entry = {'t': int(valid_time)}
@@ -193,6 +212,12 @@ class PointExtractor:
             # mean or a maximum, none of which is the median sitting beside it.
             if drawn is not None and drawn[index] is not None:
                 entry['field'] = _round(drawn[index])
+            # The same three the spread frames carry, at this one location.
+            if band is not None:
+                low, middle, high = band[index]
+                entry['nearby_p10'] = _round(low)
+                entry['nearby_median'] = _round(middle)
+                entry['nearby_p90'] = _round(high)
             # Only when true, so a reader that predates the flag is unaffected.
             if estimated:
                 entry['estimated'] = True
@@ -368,14 +393,25 @@ def summarise(series: list[dict], reference_time: int,
 
 
 def _drawn(entry: dict) -> float:
-    """The number this entry is drawn as: the published field, or the median.
+    """The number this entry is drawn as, best available first.
 
-    The fallback is for series written before the field was published, which a
-    running container can still be holding - the same reason
-    :func:`_nearby_probability` has one.
+    The neighbourhood median, then the field, then the members' own median.
+    That order is the order of usefulness at a single location over time, and
+    each step down is a fallback for a document written before the key above it
+    existed - the same reason :func:`_nearby_probability` has one.
+
+    The neighbourhood median leads because the other two are hard to read as a
+    line. The members' median is dry unless half of them rain on this exact
+    square kilometre. The field is dealt by rank, so at one cell it sits at zero
+    until that cell climbs into the wettest few percent of the domain and then
+    jumps - which had a chart's line peaking half an hour after the band around
+    it. Softening position into a small radius removes both.
     """
-    value = entry.get('field')
-    return float(entry['median'] if value is None else value)
+    for key in ('nearby_median', 'field'):
+        value = entry.get(key)
+        if value is not None:
+            return float(value)
+    return float(entry.get('median', 0.0))
 
 
 def _nearby_probability(entry: dict) -> float:

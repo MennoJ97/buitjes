@@ -131,9 +131,14 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             # given, so the reduction has to see exactly what will be published
             # and nothing else.
             reduced = reduce_members(resampler.crop(members), config.ensemble_stat)
-            # Both outputs off one read: the members for the point percentiles,
-            # and the field they were reduced into for the line the map draws.
-            extractor.observe(valid_time, members, field=reduced, estimated=estimated)
+            # Computed once and used twice: the point documents sample it at
+            # their own cells, the frames carry it for every pixel.
+            nearby = spread_fields(members, *reach) if reach else None
+            # Three outputs off one read: the members for the point
+            # percentiles, the field they were reduced into, and the
+            # neighbourhood band that makes a usable line at a location.
+            extractor.observe(valid_time, members, field=reduced, nearby=nearby,
+                              estimated=estimated)
             field = resampler(reduced)
             payload = encode_frame(field, config.max_precip)
             name = forecast_frame_name(source.reference_time, valid_time)
@@ -149,8 +154,7 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
                 # a percentile rather than a second read of the file. Dilated
                 # before the crop, so a pixel at the crop edge still sees the
                 # neighbours that exist just outside it.
-                spread = [resampler(resampler.crop(percentile))
-                          for percentile in spread_fields(members, *reach)]
+                spread = [resampler(resampler.crop(percentile)) for percentile in nearby]
                 spread_payload = encode_spread_frame(spread, config.max_precip)
                 spread_name = spread_frame_name(source.reference_time, valid_time)
                 write_atomic(config.frame_dir, spread_name, spread_payload)
@@ -228,6 +232,9 @@ def publish_points(config: Config, source, extractor: PointExtractor,
                 # What each entry's `field` is, so a reader drawing it can name
                 # it rather than calling every central number a median.
                 'field_product': REDUCER_LABELS[config.ensemble_stat],
+                # What the `nearby_*` keys are a radius of. Absent with the
+                # spread layer switched off, and so are the keys.
+                'nearby_radius_km': config.spread_radius_km,
                 # What `probability_nearby` in each entry is the radius of.
                 'neighbourhood_km': extractor.neighbourhood_km,
                 'series': series,
