@@ -82,7 +82,8 @@ class PointExtractor:
     plain arithmetic — no interpolation, which would blur an ensemble's spread.
     """
 
-    def __init__(self, locations, lat, lon, neighbourhood_km: float = NEIGHBOURHOOD_KM):
+    def __init__(self, locations, lat, lon, neighbourhood_km: float = NEIGHBOURHOOD_KM,
+                 crop_origin=(0, 0)):
         lat = np.asarray(lat, dtype=np.float64)
         lon = np.asarray(lon, dtype=np.float64)
         lat0, dlat = float(lat[0]), float(lat[1] - lat[0])
@@ -91,6 +92,7 @@ class PointExtractor:
         self.neighbourhood_km = float(neighbourhood_km)
         self.locations = []
         self._cells = []
+        self._field_cells = []   # the same cells, offset into the published crop
         self._discs = []
         for location in locations:
             row = int(round((location.lat - lat0) / dlat))
@@ -102,6 +104,7 @@ class PointExtractor:
                 )
             self.locations.append(location)
             self._cells.append((row, column))
+            self._field_cells.append((row - crop_origin[0], column - crop_origin[1]))
             self._discs.append(
                 _disc(row, column, len(lat), len(lon), dlat, dlon,
                       location.lat, self.neighbourhood_km)
@@ -110,12 +113,14 @@ class PointExtractor:
         self._times: list[int] = []
         self._samples: list[np.ndarray] = []  # one (locations, members) array per step
         self._nearby: list[np.ndarray] = []   # one (locations,) array of NEP per step
+        self._fields: list = []               # one (locations,) array of the drawn field
         self._estimated: list[bool] = []      # was this step stood in for?
 
     def __bool__(self):
         return bool(self.locations)
 
-    def observe(self, valid_time: int, members, estimated: bool = False) -> None:
+    def observe(self, valid_time: int, members, field=None,
+                estimated: bool = False) -> None:
         """Record every member's value at each location for one timestep.
 
         Two probabilities come out of this, and the difference between them is
@@ -127,6 +132,19 @@ class PointExtractor:
         nobody doubts. The neighbourhood count asks the question a reader
         actually means - how many members put rain anywhere near here - by
         letting each member be wet within a radius before counting it.
+
+        ``field`` is the reduced field this timestep publishes - the same numbers
+        the map draws, already cropped to what goes out. Taken before the frame
+        format's ceiling, so above ``MAX_PRECIP_MM_H`` this carries the real
+        rate where the frame saturates; the colour ramp's top reads "100+" for
+        that reason and the two do not contradict each other. Sampled here because a
+        reader comparing the two is entitled to the same answer from both, and
+        the percentiles cannot supply it: they are the members at one square
+        kilometre, while the field is a whole-domain reconstruction. The median
+        of twenty members is dry unless half of them rain on that exact cell,
+        so for showers it sits at zero through a cycle the map paints rain in.
+        Publishing both is the only way to stop the chart and the map
+        contradicting each other.
 
         ``estimated`` says the members are not KNMI's for this timestep but a
         stand-in for a dead one, built from the steps either side of it - see
@@ -147,12 +165,19 @@ class PointExtractor:
             float((members[:, rows, columns] >= WET_THRESHOLD_MM_H).any(axis=1).mean())
             for rows, columns in self._discs
         ]))
+        # None rather than zero for a location outside the published crop: it
+        # has no drawn field, which is not the same as a dry one.
+        self._fields.append(None if field is None else [
+            float(field[row, column])
+            if 0 <= row < field.shape[0] and 0 <= column < field.shape[1] else None
+            for row, column in self._field_cells
+        ])
 
     def series_for(self, index: int) -> list[dict]:
         """The published series for one location, one entry per timestep."""
         entries = []
-        for valid_time, sample, nearby, estimated in zip(
-                self._times, self._samples, self._nearby, self._estimated):
+        for valid_time, sample, nearby, drawn, estimated in zip(
+                self._times, self._samples, self._nearby, self._fields, self._estimated):
             values = np.asarray(sample[index], dtype=np.float64)
             quantiles = np.percentile(values, PERCENTILES)
             entry = {'t': int(valid_time)}
@@ -163,6 +188,11 @@ class PointExtractor:
             # What the ensemble is really for: how many members say it rains.
             entry['probability'] = round(float((values >= WET_THRESHOLD_MM_H).mean()), 2)
             entry['probability_nearby'] = round(float(nearby[index]), 2)
+            # What the map draws here, under its own name. Not `median`: it is a
+            # probability-matched mean by default and can be configured to be a
+            # mean or a maximum, none of which is the median sitting beside it.
+            if drawn is not None and drawn[index] is not None:
+                entry['field'] = _round(drawn[index])
             # Only when true, so a reader that predates the flag is unaffected.
             if estimated:
                 entry['estimated'] = True

@@ -96,7 +96,10 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
         )
 
         extractor = PointExtractor(
-            config.widget_locations, source.lat, source.lon, config.neighbourhood_km
+            config.widget_locations, source.lat, source.lon, config.neighbourhood_km,
+            # So it can read the reduced field, which is cropped where its own
+            # cells are indices into the full KNMI grid.
+            crop_origin=resampler.origin,
         )
 
         # Cells, not kilometres, and worked out once: the grid is regular, so
@@ -124,13 +127,14 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
         # published without an ensemble behind them are stood in for or dropped
         # before they get here; see :func:`ingestor.blend.repaired_steps`.
         for valid_time, members, estimated in repaired_steps(source):
-            extractor.observe(valid_time, members, estimated=estimated)
             # Cropped before reducing, not after: pmm pools every value it is
             # given, so the reduction has to see exactly what will be published
             # and nothing else.
-            field = resampler(
-                reduce_members(resampler.crop(members), config.ensemble_stat)
-            )
+            reduced = reduce_members(resampler.crop(members), config.ensemble_stat)
+            # Both outputs off one read: the members for the point percentiles,
+            # and the field they were reduced into for the line the map draws.
+            extractor.observe(valid_time, members, field=reduced, estimated=estimated)
+            field = resampler(reduced)
             payload = encode_frame(field, config.max_precip)
             name = forecast_frame_name(source.reference_time, valid_time)
             write_atomic(config.frame_dir, name, payload)
@@ -221,6 +225,9 @@ def publish_points(config: Config, source, extractor: PointExtractor,
                 'unit': 'mm/h',
                 'members': source.member_count,
                 'percentiles': list(PERCENTILES),
+                # What each entry's `field` is, so a reader drawing it can name
+                # it rather than calling every central number a median.
+                'field_product': REDUCER_LABELS[config.ensemble_stat],
                 # What `probability_nearby` in each entry is the radius of.
                 'neighbourhood_km': extractor.neighbourhood_km,
                 'series': series,
@@ -440,6 +447,12 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
             'dataset': config.dataset,
             'version': config.version,
             'product': meta['product'],
+            # The same thing in two lengths on purpose. `product` names the
+            # member count for the About dialog; `reducer` is what to call the
+            # number itself, under a value in a tooltip where "of 20 ensemble
+            # members" is noise. The point documents publish this short one too,
+            # so a reader gets the same words whichever route they came by.
+            'reducer': REDUCER_LABELS[config.ensemble_stat],
             'observed': config.observed_dataset if config.history_minutes > 0 else None,
             'attribution': 'KNMI (CC BY 4.0)',
         },

@@ -373,6 +373,40 @@ check('the one in the middle, with nothing either side, is dropped rather than d
 check('a wholly dead cycle publishes nothing at all',
       list(repaired_steps(FakeSource([dead, dead]))) == [])
 
+# The field the map draws, published beside the percentiles taken from the
+# members. They are different estimators and the whole point is that a reader
+# gets the same answer from the chart as from the map.
+drawn = np.zeros((200, 180), np.float32)
+row0, column0 = extractor._cells[0]
+drawn[row0, column0] = 7.5
+with_field = PointExtractor(locations, lat, lon, neighbourhood_km=10.0)
+with_field.observe(1_700_000_000, np.zeros((20, 200, 180), np.float32), field=drawn)
+entry = with_field.series_for(0)[0]
+check('the drawn field is published under its own name', entry['field'] == 7.5, entry)
+check('and does not disturb the members it sits beside',
+      entry['median'] == 0.0 and entry['p90'] == 0.0)
+bare = PointExtractor(locations, lat, lon, neighbourhood_km=10.0)
+bare.observe(1_700_000_000, np.zeros((20, 200, 180), np.float32))
+check('a step observed without one says nothing about it',
+      'field' not in bare.series_for(0)[0])
+
+# The field arrives cropped to what is published, while a location's cell is an
+# index into the whole KNMI grid, so the offset has to be taken off.
+cropped = PointExtractor(locations, lat, lon, neighbourhood_km=10.0,
+                         crop_origin=(row0 - 2, column0 - 3))
+window = np.zeros((40, 40), np.float32)
+window[2, 3] = 4.25
+cropped.observe(1_700_000_000, np.zeros((20, 200, 180), np.float32), field=window)
+check('a cropped field is read at the location, not at its raw index',
+      cropped.series_for(0)[0]['field'] == 4.25, cropped.series_for(0)[0])
+
+outside = PointExtractor(locations, lat, lon, neighbourhood_km=10.0,
+                         crop_origin=(row0 + 50, column0 + 50))
+outside.observe(1_700_000_000, np.zeros((20, 200, 180), np.float32), field=window)
+check('a location outside the published crop gets no field rather than a zero',
+      'field' not in outside.series_for(0)[0])
+
+
 flagged = PointExtractor(locations, lat, lon, neighbourhood_km=10.0)
 flagged.observe(1_700_000_000, np.zeros((20, 200, 180), np.float32))
 flagged.observe(1_700_000_300, np.zeros((20, 200, 180), np.float32), estimated=True)

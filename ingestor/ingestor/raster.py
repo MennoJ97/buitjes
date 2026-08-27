@@ -157,6 +157,17 @@ class MercatorResampler:
         """Shape of the source window, which is what :meth:`__call__` expects."""
         return (self._rows.stop - self._rows.start, self._cols.stop - self._cols.start)
 
+    @property
+    def origin(self):
+        """``(row, column)`` of the window's first cell in the source grid.
+
+        What a caller holding source-grid indices needs in order to read a
+        cropped field: the point forecasts locate a cell against the full KNMI
+        grid, while the reduced field they want a value from has already been
+        restricted to what will be published.
+        """
+        return (self._rows.start, self._cols.start)
+
     def crop(self, values):
         """Restrict a ``(..., nlat, nlon)`` array to the window this reads.
 
