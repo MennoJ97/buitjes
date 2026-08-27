@@ -101,11 +101,20 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
                 // median as the line, its own p10–p90 around it. `field` rides
                 // along for anyone who wants the number the map paints.
                 series: sampled.map((point) => {
+                    // An observed frame is the radar composite - a measurement,
+                    // with no ensemble behind it and so never a band. Under its
+                    // own key because `field_product` names what the *forecast*
+                    // frames were reduced into, and the tooltip would otherwise
+                    // caption an hour of measured rain as a probability-matched
+                    // mean of members that were never involved in it.
+                    const value = point.kind === 'observed'
+                        ? { measured: point.mmh }
+                        : { field: point.mmh };
                     const band = bands?.get(point.t);
                     return band
-                        ? { t: point.t, field: point.mmh, nearby_p10: band.p10,
+                        ? { t: point.t, ...value, nearby_p10: band.p10,
                             nearby_median: band.p50, nearby_p90: band.p90 }
-                        : { t: point.t, field: point.mmh };
+                        : { t: point.t, ...value };
                 }),
             };
             const reference = document_.reference_time;
@@ -131,8 +140,8 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
 
 
 /**
- * Which entry field carries a block's line, what to call it, and which pair of
- * keys the band around it comes from.
+ * Which entry fields carry a block's line, what to call each of them, and which
+ * pair of keys the band around it comes from.
  *
  * The line and its band have to be the same kind of number or they look
  * unrelated, which is exactly what happened when the line was the map's field
@@ -141,22 +150,44 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
  * neighbourhood band is local and smooth, and its median is a line that rises
  * when rain arrives near you.
  *
- * Falling back: the field, then the members' own median with their own
- * quartiles. Everything that is not precipitation really is a median of its
- * members and says nothing extra.
+ * A chain rather than one key, and every link checked against the series rather
+ * than against the block's metadata. Both matter:
+ *
+ * - A clicked point's series is not homogeneous. The hour of observed radar in
+ *   front of the forecast is measurement, with no ensemble behind it and so no
+ *   neighbourhood median, while the forecast steps have one. Naming the key the
+ *   forecast half carries left the measured half with no number at all.
+ * - `field` used to be offered only when the manifest said what the field was.
+ *   A manifest without `source.reducer` costs a tooltip label, which is not a
+ *   reason to fall through to `median` — a key a clicked point never carries.
+ *
+ * Falling through the chain per entry keeps the drawn value the best one that
+ * step has, under a label that is true of it: the neighbourhood median where
+ * the ensemble reaches, the measured rate over the observed hour, the reduced
+ * field where neither is published, the members' own median for the blocks that
+ * are genuinely a median of their members and say nothing extra.
  */
 export function centreOf(block, fallbackLabel = '') {
-    const has = (key) => block?.series?.some((entry) => entry[key] !== undefined);
+    const has = (key) => block?.series?.some((entry) => entry[key] != null);
+    const chain = [];
+    const radius = Math.round(block?.nearby_radius_km ?? 0);
     if (block?.nearby_radius_km && has('nearby_median')) {
-        const radius = Math.round(block.nearby_radius_km);
-        return {
-            centreKey: 'nearby_median',
-            centreLabel: `median within ${radius} km`,
-            bands: [['nearby_p10', 'nearby_p90', 0.16, `80% of members within ${radius} km`]],
-        };
+        chain.push(['nearby_median', `median within ${radius} km`]);
     }
-    if (block?.field_product && has('field')) {
-        return { centreKey: 'field', centreLabel: block.field_product };
+    if (has('measured')) chain.push(['measured', 'measured by radar']);
+    if (has('field')) chain.push(['field', block.field_product ?? '']);
+    if (has('median') || !chain.length) chain.push(['median', fallbackLabel]);
+
+    const centre = {
+        centreKeys: chain.map(([key]) => key),
+        centreLabels: chain.map(([, label]) => label),
+    };
+    // Only alongside the neighbourhood median: the per-cell percentiles are a
+    // different kind of number from it, and drawing them around it is the very
+    // mismatch this function exists to avoid.
+    if (centre.centreKeys[0] === 'nearby_median') {
+        centre.bands = [['nearby_p10', 'nearby_p90', 0.16,
+                         `80% of members within ${radius} km`]];
     }
-    return { centreKey: 'median', centreLabel: fallbackLabel };
+    return centre;
 }

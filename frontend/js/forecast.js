@@ -7,7 +7,7 @@
  * ingestor publishes.
  */
 
-import { renderBandChart } from './chart.js';
+import { renderBandChart, centreValue } from './chart.js';
 import { centreOf, pointForName, pointForCoordinates } from './point.js';
 import { apiFetch, hasApiKey } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
@@ -236,10 +236,10 @@ function describeRange(block) {
     // The range names what the card actually plots, band included. Reporting
     // the line alone had the header saying "0–0.5 mm/h" over an axis running to
     // 1.5, because the axis has to fit a band the header never mentioned.
-    const { centreKey, bands = [['p10', 'p90']] } = centreOf(block);
+    const { centreKeys, bands = [['p10', 'p90']] } = centreOf(block);
     const [low_, high_] = bands[0];
     const values = block.series.flatMap((entry) => [
-        entry[centreKey], entry[low_], entry[high_],
+        centreValue(entry, centreKeys), entry[low_], entry[high_],
     ].filter((value) => value != null));
     const low = Math.min(...values);
     const high = Math.max(...values);
@@ -261,10 +261,14 @@ function renderSummaryStats(document_) {
     const ahead = (block) => (block?.series ?? []).filter((entry) => entry.t >= reference);
 
     const rain = ahead(document_.precipitation);
-    const rainCentre = centreOf(document_.precipitation).centreKey;
-    const peak = rain.length ? Math.max(...rain.map((entry) => entry[rainCentre])) : 0;
+    // Down the same chain the chart draws, so these describe the line above
+    // them. A step with none of its keys counts as nothing rather than as NaN,
+    // which one missing step used to make of both numbers.
+    const rainCentre = centreOf(document_.precipitation).centreKeys;
+    const drawn = (entry) => centreValue(entry, rainCentre) ?? 0;
+    const peak = rain.length ? Math.max(...rain.map(drawn)) : 0;
     // 5-minute steps, so a rate in mm/h contributes a twelfth of an hour.
-    const total = rain.reduce((sum, entry) => sum + entry[rainCentre] / 12, 0);
+    const total = rain.reduce((sum, entry) => sum + drawn(entry) / 12, 0);
     const items = [
         ['Peak rate', `${peak.toFixed(1)} mm/h`],
         ['Total expected', `${total.toFixed(1)} mm`],

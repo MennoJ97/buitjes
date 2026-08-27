@@ -35,6 +35,26 @@ function niceStep(range, target = 4) {
 }
 
 /**
+ * Which of a chain's keys an entry's line comes from, or undefined if it
+ * carries none of them.
+ *
+ * Absent is resolved to absent rather than to a number. Reading a key straight
+ * off an entry gave `undefined` for a step that did not have it, and undefined
+ * arrives at the axis as NaN: one such step took `Math.max` for the whole
+ * series with it, so the axis had no range, every coordinate was NaN and the
+ * chart went blank — the forecast half that did have the key included.
+ */
+export function centreKeyFor(entry, centreKeys) {
+    return centreKeys.find((key) => entry[key] != null);
+}
+
+/** The value a chart draws for one entry, or null where it draws nothing. */
+export function centreValue(entry, centreKeys) {
+    const key = centreKeyFor(entry, centreKeys);
+    return key === undefined ? null : entry[key];
+}
+
+/**
  * Render one series into a container.
  *
  * `series` entries are `{t, p10, p25, median, p75, p90}`. `options.zeroFloor`
@@ -42,12 +62,18 @@ function niceStep(range, target = 4) {
  * below zero would be nonsense) but wrong for temperature, where the interesting
  * variation is a few degrees somewhere well above it.
  *
- * `options.centreKey` names the entry field holding the line, because it is not
- * always a median and calling it one in the code is how it ends up being called
- * one to a reader. A temperature series really is a median of its members; a
- * rain series is drawn as the same probability-matched mean the map paints,
- * which is a whole-domain reconstruction rather than any percentile of the
- * twenty numbers beside it. `options.centreLabel` names it in the tooltip.
+ * `options.centreKeys` names the entry fields the line may come from, best
+ * first, because it is not always a median and calling it one in the code is how
+ * it ends up being called one to a reader. A temperature series really is a
+ * median of its members; a rain series is drawn as the neighbourhood median the
+ * map's spread layer carries. `options.centreLabels` names them in the tooltip,
+ * one label per key, so the tooltip says which of them the number under the
+ * pointer actually came from.
+ *
+ * More than one key because a series need not be homogeneous. A clicked point's
+ * rain series is an hour of observed radar in front of the forecast, and a
+ * measurement has no ensemble behind it, so those steps carry no neighbourhood
+ * median and the chain falls through to the measured value for them alone.
  */
 /** Floor for a chart with nothing to stretch into — a narrow single column. */
 const MIN_CHART_HEIGHT = 190;
@@ -61,8 +87,8 @@ export function renderBandChart(container, series, options = {}) {
         formatValue = (value) => String(value),
         now = null,
         minSpan = 1,
-        centreKey = 'median',
-        centreLabel = '',
+        centreKeys = ['median'],
+        centreLabels = [''],
         // Outer band first, inner second. Named rather than assumed, because a
         // line and a band drawn from different kinds of number look unrelated:
         // a neighbourhood median rises when rain arrives near you, a per-cell
@@ -70,7 +96,11 @@ export function renderBandChart(container, series, options = {}) {
         // other put the peak of each an hour from the other.
         bands = [['p10', 'p90', 0.16], ['p25', 'p75', 0.26]],
     } = options;
-    const centre = (entry) => entry[centreKey];
+    const centre = (entry) => centreValue(entry, centreKeys);
+    const centreLabel = (entry) => {
+        const index = centreKeys.indexOf(centreKeyFor(entry, centreKeys));
+        return index === -1 ? '' : centreLabels[index] ?? '';
+    };
 
     container.innerHTML = '';
     if (!series || series.length < 2) {
@@ -99,9 +129,30 @@ export function renderBandChart(container, series, options = {}) {
     // instead, which is a whole-domain reconstruction and can sit well above
     // p90 — 141 mm/h against a p90 of 3.1 where a shower only a fifth of the
     // members forecast lands on one cell — and the line simply left the plot.
+    //
+    // Collected rather than reduced per entry, so a step missing the centre or
+    // the band contributes nothing instead of poisoning the pair it is in:
+    // `Math.min(Infinity, undefined)` is NaN, and one NaN in here is a chart
+    // with no axis at all.
     const [outerLow, outerHigh] = bands[0] ?? [];
-    const lows = series.map((entry) => Math.min(entry[outerLow] ?? Infinity, centre(entry)));
-    const highs = series.map((entry) => Math.max(entry[outerHigh] ?? -Infinity, centre(entry)));
+    const lows = [];
+    const highs = [];
+    for (const entry of series) {
+        const value = centre(entry);
+        if (value !== null) {
+            lows.push(value);
+            highs.push(value);
+        }
+        if (entry[outerLow] != null) lows.push(entry[outerLow]);
+        if (entry[outerHigh] != null) highs.push(entry[outerHigh]);
+    }
+    if (!lows.length) {
+        const empty = document.createElement('p');
+        empty.className = 'chart-empty';
+        empty.textContent = 'No data for this location.';
+        container.appendChild(empty);
+        return;
+    }
     let min = zeroFloor ? 0 : Math.min(...lows);
     let max = Math.max(...highs);
     // A flat series - a dry night, darkness - would otherwise collapse the axis
@@ -165,13 +216,29 @@ export function renderBandChart(container, series, options = {}) {
     };
     for (const [low, high, opacity] of bands) band(low, high, opacity);
 
-    svg.appendChild(element('polyline', {
-        points: series.map((entry) => `${x(entry.t)},${y(centre(entry))}`).join(' '),
-        fill: 'none',
-        stroke: colour,
-        'stroke-width': 2,
-        'stroke-linejoin': 'round',
-    }));
+    // One polyline per unbroken run that has a centre, on the same rule as the
+    // bands above: a step carrying none of the keys is a hole in the line, not a
+    // point at zero. With the chain in place a hole means the series really has
+    // nothing there, which is rare — but it used to render as NaN coordinates,
+    // and an SVG polyline with a NaN in its points draws nothing at all.
+    let line = [];
+    const flushLine = () => {
+        if (line.length > 1) {
+            svg.appendChild(element('polyline', {
+                points: line.map((entry) => `${x(entry.t)},${y(centre(entry))}`).join(' '),
+                fill: 'none',
+                stroke: colour,
+                'stroke-width': 2,
+                'stroke-linejoin': 'round',
+            }));
+        }
+        line = [];
+    };
+    for (const entry of series) {
+        if (centre(entry) === null) flushLine();
+        else line.push(entry);
+    }
+    flushLine();
 
     // Steps the ingestor stood in for. KNMI publishes a timestep with no
     // ensemble behind it about once a cycle, and what is plotted there is the
@@ -277,6 +344,7 @@ export function renderBandChart(container, series, options = {}) {
 function attachHover({ container, svg, series, unit, colour, formatValue,
                        width, padLeft, plotWidth, firstTime, span, x, y,
                        centre, centreLabel, bands }) {
+    // `centreLabel` is a function of the entry here, not a string.
     const crosshair = element('line', { class: 'chart-crosshair', y1: 0, y2: 0, x1: 0, x2: 0 });
     crosshair.style.display = 'none';
     svg.appendChild(crosshair);
@@ -311,8 +379,11 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
         crosshair.setAttribute('y2', svg.viewBox.baseVal.height - 22);
         crosshair.style.display = '';
         marker.setAttribute('cx', px);
-        marker.setAttribute('cy', y(centre(entry)));
-        marker.style.display = '';
+        // Hidden rather than parked at NaN where this step has no line: the
+        // crosshair and the readings below it are still worth having.
+        const value = centre(entry);
+        marker.setAttribute('cy', value === null ? 0 : y(value));
+        marker.style.display = value === null ? 'none' : '';
 
         const stamp = span > 18 * 3600 ? formatDayClock(entry.t) : formatClock(entry.t);
         // The axis formatter is deliberately coarse; reusing it here would round
@@ -331,10 +402,16 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
                 ? ''
                 : `<span class="tip-band"><i>${label}</i>${range(low, high)}</span>`);
 
+        // The label follows the value: which key supplied it varies along a
+        // mixed series, and naming the neighbourhood median over a measured
+        // step would describe a number that is not there.
+        const centreName = centreLabel(entry);
         tooltip.innerHTML =
             `<span class="tip-time">${stamp}</span>` +
-            `<span class="tip-value">${precise(centre(entry))}<small>${unit}</small></span>` +
-            (centreLabel ? `<span class="tip-centre">${centreLabel}</span>` : '') +
+            `<span class="tip-value">${value === null ? '—' : precise(value)}` +
+            `<small>${unit}</small></span>` +
+            (value !== null && centreName
+                ? `<span class="tip-centre">${centreName}</span>` : '') +
             bands.map(([low, high, , label]) =>
                 bandRow(label ?? '80% of members', entry[low], entry[high])).join('') +
             (entry.probability !== undefined
