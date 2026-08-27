@@ -155,8 +155,15 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
         // MapLibre opens the compact attribution on load, which on a card this
         // small is a bar across the whole map. Same reasoning as the full map:
         // collapsed it is one ⓘ, and a click still shows every credit.
+        //
+        // The `compact-show` class has to go along with `open`: MapLibre holds
+        // its open/closed state in both, and its click handler reads the class,
+        // so leaving it set costs the reader their first click. See
+        // collapseAttribution in app.js.
         requestAnimationFrame(() => {
-            mapEl.querySelector('details.maplibregl-ctrl-attrib[open]')?.removeAttribute('open');
+            const attrib = mapEl.querySelector('details.maplibregl-ctrl-attrib');
+            attrib?.removeAttribute('open');
+            attrib?.classList.remove('maplibregl-compact-show');
         });
         mapEl.classList.toggle('theme-light', !!config.lightUi);
         map.on('error', (event) => fail('map error', event?.error));
