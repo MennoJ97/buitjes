@@ -341,6 +341,10 @@ export function renderBandChart(container, series, options = {}) {
  * cannot eyeball. So the tooltip leads with the median and then names each
  * band it actually has explicitly.
  */
+/** Tooltip offset from the crosshair, and from the edges of the card. */
+const TIP_GAP = 10;
+const TIP_EDGE = 6;
+
 function attachHover({ container, svg, series, unit, colour, formatValue,
                        width, padLeft, plotWidth, firstTime, span, x, y,
                        centre, centreLabel, bands }) {
@@ -419,11 +423,22 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
                 : '');
         tooltip.hidden = false;
 
-        // Flip to the other side of the crosshair near the right edge so the
-        // tooltip never leaves the card.
+        // Right of the crosshair by preference, flipped to its left where that
+        // would run past the card — and then clamped inside the card either
+        // way. Flipping alone is only enough while the card has room for the
+        // tooltip on both sides of the pointer; on a phone the card is barely
+        // wider than the tooltip, so a flip near the middle of the plot put its
+        // left edge at a negative offset and half the numbers off the screen.
+        const cardWidth = container.clientWidth || rect.width;
+        const tipWidth = tooltip.offsetWidth;
         const leftPx = (px / width) * rect.width;
-        const flip = leftPx > rect.width - tooltip.offsetWidth - 16;
-        tooltip.style.left = `${flip ? leftPx - tooltip.offsetWidth - 10 : leftPx + 10}px`;
+        let left = leftPx + TIP_GAP;
+        if (left + tipWidth > cardWidth - TIP_EDGE) left = leftPx - TIP_GAP - tipWidth;
+        // Lower bound last: where the tooltip is wider than the space either
+        // side of the pointer it sits against the left edge and overlaps the
+        // crosshair, which is still readable, unlike hanging off the card.
+        left = Math.max(TIP_EDGE, Math.min(left, cardWidth - tipWidth - TIP_EDGE));
+        tooltip.style.left = `${left}px`;
     };
 
     const hide = () => {

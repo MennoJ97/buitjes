@@ -1214,6 +1214,10 @@ body.page-forecast {
     flex-direction: column;
     gap: 2px;
     min-width: 132px;
+    /* Never wider than the card it is clamped into: a phone card is around
+       320px and the long band labels alone would push past that, which no
+       amount of repositioning can rescue. */
+    max-width: calc(100% - 12px);
     padding: 8px 10px;
     background: rgba(10, 12, 17, 0.94);
     border: 1px solid var(--border-strong);
@@ -1243,10 +1247,13 @@ body.page-forecast {
     display: flex;
     justify-content: space-between;
     gap: 12px;
+    /* The label yields first when the card is too narrow for the row, so the
+       number it is labelling stays whole. */
+    min-width: 0;
     font-size: 0.7rem;
     color: var(--text);
 }
-.tip-band i { font-style: normal; color: var(--muted-dim); }
+.tip-band i { min-width: 0; font-style: normal; color: var(--muted-dim); }
 
 
 /* ------------------------------------------------------ forecast radar card */
