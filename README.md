@@ -199,7 +199,7 @@ middleware chain. Two things worth knowing before you do:
 | Forecast | KNMI `seamless_precipitation_ensemble_forecast_members` 1.0 — a pySTEPS/NWP blend, 20 members, 5-minute steps to +6 h, reduced to one field by probability matching (Ebert 2001) |
 | Observed | KNMI `nl_rdr_data_rtcor_5m` real-time corrected radar composite |
 | Conditions | [Open-Meteo](https://open-meteo.com/) ensemble, for temperature, wind, solar and the beyond-6-hour rain outlook |
-| Basemaps | [CARTO](https://carto.com/), [OpenFreeMap](https://openfreemap.org/) and [OpenStreetMap](https://www.openstreetmap.org/) |
+| Basemaps | [OpenFreeMap](https://openfreemap.org/) vector styles, and [OpenStreetMap](https://www.openstreetmap.org/)'s own raster tiles — both keyless, both OSM data |
 
 KNMI open data is CC BY 4.0. This is a hobby project and not an official KNMI
 product — for warnings, go to [KNMI](https://www.knmi.nl/) itself.

@@ -7,7 +7,7 @@ import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.j
 import { formatClock } from './time.js';
 import {
     BASEMAPS, BASEMAP_STORAGE_KEY, OWN_CREDIT,
-    applyPaintOverrides, labelLayerId, storedBasemap, styleFor,
+    applyStyleOverrides, labelLayerId, storedBasemap, styleFor,
 } from './basemap.js';
 
 /** How each timeline zone is described in the UI. */
@@ -168,7 +168,7 @@ map.addControl(
 );
 el.basemapSelect.value = initialBasemap;
 document.body.classList.toggle('theme-light', !!initialConfig.lightUi);
-onStyleReady(() => applyPaintOverrides(map, initialConfig));
+onStyleReady(() => applyStyleOverrides(map, initialConfig));
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
 // ---------------------------------------------------------------- boot
@@ -1381,7 +1381,7 @@ function applyBasemap(name) {
     // itself loaded, which would repaint layers that are about to be replaced.
     map.once('styledata', () => {
         loadingBasemap = null;
-        applyPaintOverrides(map, config);
+        applyStyleOverrides(map, config);
         // A new style brings a new credits line, opened by MapLibre again.
         collapseAttribution();
         const queued = queuedBasemap;

@@ -13,7 +13,7 @@
 
 import { RadarRenderer, FrameStore } from './radar.js';
 import {
-    BASEMAPS, OWN_CREDIT, applyPaintOverrides, labelLayerId, storedBasemap, styleFor,
+    BASEMAPS, OWN_CREDIT, applyStyleOverrides, labelLayerId, storedBasemap, styleFor,
 } from './basemap.js';
 import { formatClock } from './time.js';
 import { apiFetch } from './key.js';
@@ -169,7 +169,7 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
         map.on('error', (event) => fail('map error', event?.error));
         map.once('load', () => {
             try {
-                applyPaintOverrides(map, config);
+                applyStyleOverrides(map, config);
                 addRadarLayer();
             } catch (error) {
                 fail('could not add the radar layer', error);
