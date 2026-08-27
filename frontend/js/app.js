@@ -1409,10 +1409,19 @@ function updateControlClearance() {
  * licences ask for.
  *
  * Re-applied on styledata because switching basemaps rebuilds the control.
+ *
+ * Both halves of MapLibre's open/closed state have to go. It keeps the state
+ * twice — the `open` attribute, which decides whether the credits render, and
+ * the `compact-show` class, which its CSS hangs the expanded padding on — and
+ * its click handler branches on the class alone. Clearing only `open` left the
+ * class saying "expanded", so the chip sat there as an empty pill, and the
+ * first click read the stale class, took the collapse branch, and cancelled
+ * out the browser's own <details> toggle. It took two clicks to open.
  */
 function collapseAttribution() {
-    for (const node of document.querySelectorAll('details.maplibregl-ctrl-attrib[open]')) {
+    for (const node of document.querySelectorAll('details.maplibregl-ctrl-attrib')) {
         node.removeAttribute('open');
+        node.classList.remove('maplibregl-compact-show');
     }
 }
 
