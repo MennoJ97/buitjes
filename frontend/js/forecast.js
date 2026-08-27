@@ -181,6 +181,7 @@ function render(document_) {
         }
         meta.textContent = describeRange(block);
         renderBandChart(container, block.series, {
+            ...centreOf(block),
             unit: block.unit,
             colour: config.colour,
             zeroFloor: config.zeroFloor,
@@ -199,11 +200,27 @@ function render(document_) {
     ].filter(Boolean).join(' · ');
 }
 
-/** Min/max of the median line, which is what a glance at a card wants. */
+/**
+ * Which entry field carries a block's line, and what to call it.
+ *
+ * Precipitation is drawn as the field the map draws, so the two views of the
+ * same place stop disagreeing — a point's own median is dry unless half the
+ * members rain on its exact square kilometre, which for showers is most of the
+ * time. Everything else really is a median of its members.
+ */
+function centreOf(block) {
+    const drawn = block?.field_product && block.series?.some((e) => e.field !== undefined);
+    return drawn
+        ? { centreKey: 'field', centreLabel: block.field_product }
+        : { centreKey: 'median', centreLabel: '' };
+}
+
+/** Min/max of the line, which is what a glance at a card wants. */
 function describeRange(block) {
-    const medians = block.series.map((entry) => entry.median);
-    const low = Math.min(...medians);
-    const high = Math.max(...medians);
+    const { centreKey } = centreOf(block);
+    const middle = block.series.map((entry) => entry[centreKey]);
+    const low = Math.min(...middle);
+    const high = Math.max(...middle);
     const round = (value) => (Math.abs(value) >= 10 ? Math.round(value) : Math.round(value * 10) / 10);
     return `${round(low)}–${round(high)} ${block.unit}`;
 }
@@ -222,9 +239,10 @@ function renderSummaryStats(document_) {
     const ahead = (block) => (block?.series ?? []).filter((entry) => entry.t >= reference);
 
     const rain = ahead(document_.precipitation);
-    const peak = rain.length ? Math.max(...rain.map((entry) => entry.median)) : 0;
+    const rainCentre = centreOf(document_.precipitation).centreKey;
+    const peak = rain.length ? Math.max(...rain.map((entry) => entry[rainCentre])) : 0;
     // 5-minute steps, so a rate in mm/h contributes a twelfth of an hour.
-    const total = rain.reduce((sum, entry) => sum + entry.median / 12, 0);
+    const total = rain.reduce((sum, entry) => sum + entry[rainCentre] / 12, 0);
     const items = [
         ['Peak rate', `${peak.toFixed(1)} mm/h`],
         ['Total expected', `${total.toFixed(1)} mm`],

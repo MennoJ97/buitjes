@@ -90,12 +90,16 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
                 // members at one square kilometre. Sharing the name made the
                 // detail page describe a per-cell band as a 10 km one.
                 band_radius_km: spread?.radius_km,
+                // `field`, not `median`. What comes off a frame is whatever
+                // the ingestor reduced the members into - a probability-matched
+                // mean unless configured otherwise - and none of those is the
+                // median of anything. The manifest says which.
+                field_product: manifest?.source?.reducer ?? manifest?.source?.product,
                 series: sampled.map((point) => {
                     const band = bands?.get(point.t);
                     return band
-                        ? { t: point.t, p10: band.p10, median: point.mmh, p90: band.p90 }
-                        : { t: point.t, p10: point.mmh, p25: point.mmh, median: point.mmh,
-                            p75: point.mmh, p90: point.mmh };
+                        ? { t: point.t, p10: band.p10, field: point.mmh, p90: band.p90 }
+                        : { t: point.t, field: point.mmh };
                 }),
             };
             const reference = document_.reference_time;

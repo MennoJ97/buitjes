@@ -1232,6 +1232,13 @@ body.page-forecast {
 }
 .tip-value { font-size: 1.05rem; font-weight: 700; line-height: 1.1; }
 .tip-value small { margin-left: 3px; font-size: 0.62rem; font-weight: 600; color: var(--muted); }
+/* What the big number above it actually is. Only shown where that is worth
+   saying — a rain chart draws the field the map draws, not a median. */
+.tip-centre {
+    margin-top: -2px;
+    font-size: 0.62rem;
+    color: var(--muted-dim);
+}
 .tip-band {
     display: flex;
     justify-content: space-between;

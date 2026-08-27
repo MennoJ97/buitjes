@@ -41,6 +41,13 @@ function niceStep(range, target = 4) {
  * pins the axis at zero, which is right for rain and solar (a band dipping
  * below zero would be nonsense) but wrong for temperature, where the interesting
  * variation is a few degrees somewhere well above it.
+ *
+ * `options.centreKey` names the entry field holding the line, because it is not
+ * always a median and calling it one in the code is how it ends up being called
+ * one to a reader. A temperature series really is a median of its members; a
+ * rain series is drawn as the same probability-matched mean the map paints,
+ * which is a whole-domain reconstruction rather than any percentile of the
+ * twenty numbers beside it. `options.centreLabel` names it in the tooltip.
  */
 /** Floor for a chart with nothing to stretch into — a narrow single column. */
 const MIN_CHART_HEIGHT = 190;
@@ -54,7 +61,10 @@ export function renderBandChart(container, series, options = {}) {
         formatValue = (value) => String(value),
         now = null,
         minSpan = 1,
+        centreKey = 'median',
+        centreLabel = '',
     } = options;
+    const centre = (entry) => entry[centreKey];
 
     container.innerHTML = '';
     if (!series || series.length < 2) {
@@ -77,8 +87,14 @@ export function renderBandChart(container, series, options = {}) {
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
 
-    const lows = series.map((entry) => entry.p10 ?? entry.median);
-    const highs = series.map((entry) => entry.p90 ?? entry.median);
+    // The centre has to be inside the axis, not merely near it. It used to be
+    // safe to derive the range from the band alone, back when the line was that
+    // band's own median and could not leave it. A rain chart draws the field
+    // instead, which is a whole-domain reconstruction and can sit well above
+    // p90 — 141 mm/h against a p90 of 3.1 where a shower only a fifth of the
+    // members forecast lands on one cell — and the line simply left the plot.
+    const lows = series.map((entry) => Math.min(entry.p10 ?? Infinity, centre(entry)));
+    const highs = series.map((entry) => Math.max(entry.p90 ?? -Infinity, centre(entry)));
     let min = zeroFloor ? 0 : Math.min(...lows);
     let max = Math.max(...highs);
     // A flat series - a dry night, darkness - would otherwise collapse the axis
@@ -130,7 +146,7 @@ export function renderBandChart(container, series, options = {}) {
     band('p25', 'p75', 0.26);
 
     svg.appendChild(element('polyline', {
-        points: series.map((entry) => `${x(entry.t)},${y(entry.median)}`).join(' '),
+        points: series.map((entry) => `${x(entry.t)},${y(centre(entry))}`).join(' '),
         fill: 'none',
         stroke: colour,
         'stroke-width': 2,
@@ -226,6 +242,7 @@ export function renderBandChart(container, series, options = {}) {
     attachHover({
         container, svg, series, unit, colour, formatValue,
         width, padLeft: pad.left, plotWidth, firstTime, span, x, y,
+        centre, centreLabel,
     });
 }
 
@@ -234,11 +251,12 @@ export function renderBandChart(container, series, options = {}) {
  *
  * Reading a band off an axis gives you the median easily enough; the useful
  * numbers — how far apart the members are at that moment — are the ones you
- * cannot eyeball. So the tooltip leads with the median and then names both
- * bands explicitly.
+ * cannot eyeball. So the tooltip leads with the median and then names each
+ * band it actually has explicitly.
  */
 function attachHover({ container, svg, series, unit, colour, formatValue,
-                       width, padLeft, plotWidth, firstTime, span, x, y }) {
+                       width, padLeft, plotWidth, firstTime, span, x, y,
+                       centre, centreLabel }) {
     const crosshair = element('line', { class: 'chart-crosshair', y1: 0, y2: 0, x1: 0, x2: 0 });
     crosshair.style.display = 'none';
     svg.appendChild(crosshair);
@@ -273,7 +291,7 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
         crosshair.setAttribute('y2', svg.viewBox.baseVal.height - 22);
         crosshair.style.display = '';
         marker.setAttribute('cx', px);
-        marker.setAttribute('cy', y(entry.median));
+        marker.setAttribute('cy', y(centre(entry)));
         marker.style.display = '';
 
         const stamp = span > 18 * 3600 ? formatDayClock(entry.t) : formatClock(entry.t);
@@ -283,12 +301,22 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
             Math.abs(value) < 100 ? (Math.round(value * 10) / 10).toFixed(1) : String(Math.round(value));
         const range = (low, high) =>
             (precise(low) === precise(high) ? precise(low) : `${precise(low)}–${precise(high)}`);
+        // A row per band the series actually carries, and nothing where it does
+        // not. A point read off the map frames has p10, the median and p90 and
+        // no quartiles — three channels is three percentiles — and naming a
+        // band that is not there printed "50% of members NaN–NaN". Same rule as
+        // the polygons above: absent is drawn as absent, never as a value.
+        const bandRow = (label, low, high) =>
+            (low == null || high == null
+                ? ''
+                : `<span class="tip-band"><i>${label}</i>${range(low, high)}</span>`);
 
         tooltip.innerHTML =
             `<span class="tip-time">${stamp}</span>` +
-            `<span class="tip-value">${precise(entry.median)}<small>${unit}</small></span>` +
-            `<span class="tip-band"><i>50% of members</i>${range(entry.p25, entry.p75)}</span>` +
-            `<span class="tip-band"><i>80% of members</i>${range(entry.p10, entry.p90)}</span>` +
+            `<span class="tip-value">${precise(centre(entry))}<small>${unit}</small></span>` +
+            (centreLabel ? `<span class="tip-centre">${centreLabel}</span>` : '') +
+            bandRow('50% of members', entry.p25, entry.p75) +
+            bandRow('80% of members', entry.p10, entry.p90) +
             (entry.probability !== undefined
                 ? `<span class="tip-band"><i>chance of rain</i>${Math.round(entry.probability * 100)}%</span>`
                 : '');
