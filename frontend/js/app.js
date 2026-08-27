@@ -101,9 +101,19 @@ const el = {
     hoverReadout: $('hover-readout'),
     hoverSwatch: $('hover-swatch'),
     hoverValue: $('hover-value'),
+    hoverBand: $('hover-band'),
+    scaleTitle: $('scale-title'),
+    pctSwitch: $('pct-switch'),
+    aboutSpreadRadius: $('about-spread-radius'),
 };
 
 const store = new FrameStore();
+// A spread frame lands after the rate it belongs to: redraw so the band under
+// the cursor, or the field itself when an end of the ensemble is being shown,
+// appears as soon as it can rather than on the next mouse move.
+store.onSpreadLoaded = (frame) => {
+    if (store.frames[currentIndex] === frame) scheduleRender();
+};
 let renderer;
 let currentIndex = 0;
 let isPlaying = false;
@@ -118,6 +128,8 @@ let inspectDom = null;
 /** Which body is currently rendered: 'graph', 'loading', 'failed' or
  *  'uncovered'. Only a change of mode justifies rebuilding the DOM. */
 let inspectMode = null;
+/** Which of the ensemble the map paints: 'mid', 'p10' or 'p90'. */
+let currentBand = 'mid';
 let refreshTimer = null;
 let warmupTimer = null;
 let healthTimer = null;
@@ -231,6 +243,7 @@ async function load({ initial }) {
         renderer.setMaxPrecip(store.maxPrecip);
 
         buildTimeline();
+        setupBandSwitch();
         el.refTime.textContent = formatClock(manifest.reference_time ?? manifest.generated_at);
         describeSources(manifest);
 
@@ -255,6 +268,11 @@ async function load({ initial }) {
             el.loading.style.setProperty('--progress', `${Math.round(progress * 100)}%`);
         });
         el.loading.hidden = true;
+
+        // A cycle the reader is already looking at through one end of the
+        // ensemble has to keep those frames coming, or the map would go blank
+        // on the new manifest and stay blank.
+        if (currentBand !== 'mid') await store.prefetchSpread();
 
         // The frame list just changed, so any cached point series is stale —
         // and with it the summary and the bars, which are built once per series.
@@ -465,16 +483,89 @@ function renderCurrentFrame() {
     const frame = store.frames[currentIndex];
     if (!frame) return;
 
-    const image = store.imageFor(frame);
+    // Which of the twenty runs to paint. "Expected" is the rain frame the map
+    // has always drawn; the two ends come out of the spread frame instead, a
+    // different image and a different encoding, so the shader is told both.
+    const spread = store.spreadInfo;
+    const wantsBand = currentBand !== 'mid' && spread;
+    const image = wantsBand ? store.requestSpread(frame) : store.imageFor(frame);
+
     if (image) {
+        if (wantsBand) {
+            renderer.readSpreadChannel(spread.percentiles.indexOf(bandPercentile()), spread);
+        } else {
+            renderer.readRainFrames();
+        }
         renderer.draw(image);
     } else {
+        // Nothing to show yet: a spread frame still in flight, or a rain frame
+        // that never arrived. Either way an empty map beats a stale one.
         renderer.clear();
     }
 
     if (inspectPoint) updateInspectPopup();
     // The cursor has not moved, but the rain under it has.
     if (hoverPixel) updateHoverReadout();
+}
+
+/** Which percentile the switch is asking for, as a number. */
+function bandPercentile() {
+    return currentBand === 'p10' ? 10 : 90;
+}
+
+const BAND_TITLES = {
+    mid: 'Rainfall rate',
+    p10: 'Rainfall rate — low',
+    p90: 'Rainfall rate — high',
+};
+
+/**
+ * Switch which of the ensemble the map paints.
+ *
+ * Playback needs every step's spread frame, not just the one on screen, so
+ * moving off "Expected" prefetches them — the one moment the reader has said
+ * they want this layer. Moving back never fetches anything.
+ */
+async function setBand(band) {
+    if (band === currentBand) return;
+    currentBand = band;
+    for (const option of el.pctSwitch.querySelectorAll('.pct-option')) {
+        const active = option.dataset.band === band;
+        option.classList.toggle('is-active', active);
+        option.setAttribute('aria-pressed', String(active));
+    }
+    el.scaleTitle.textContent = BAND_TITLES[band] ?? BAND_TITLES.mid;
+
+    if (band !== 'mid') {
+        el.loading.hidden = false;
+        await store.prefetchSpread((progress) => {
+            el.loading.style.setProperty('--progress', `${Math.round(progress * 100)}%`);
+        });
+        el.loading.hidden = true;
+    }
+    scheduleRender();
+}
+
+/** Show the switch only where the server publishes a spread layer at all. */
+function setupBandSwitch() {
+    const spread = store.spreadInfo;
+    el.pctSwitch.hidden = !spread;
+    if (!spread) return;
+
+    const radius = Math.round(spread.radius_km);
+    el.pctSwitch.title =
+        `What the twenty ensemble members say, within ${radius} km: `
+        + `Low is p${spread.percentiles[0]}, High is p${spread.percentiles[2]}. `
+        + 'Expected is the field the map normally draws.';
+    // A span of its own rather than a search-and-replace across the paragraph:
+    // the prose wraps, so the phrase is not contiguous in textContent, and
+    // rewriting the paragraph would flatten the emphasis inside it.
+    if (el.aboutSpreadRadius) el.aboutSpreadRadius.textContent = `${radius} km`;
+    if (el.pctSwitch.dataset.wired) return;
+    el.pctSwitch.dataset.wired = '1';
+    for (const option of el.pctSwitch.querySelectorAll('.pct-option')) {
+        option.addEventListener('click', () => setBand(option.dataset.band));
+    }
 }
 
 function clampIndex(index) {
@@ -593,6 +684,7 @@ function updateHoverReadout() {
     // a frame still downloading is not the same as a point with no radar over it.
     let text;
     let colour = null;
+    let band = '';
     if (!store.isLoaded(frame)) {
         text = store.hasFailed(frame) ? 'unavailable' : 'loading…';
     } else {
@@ -605,15 +697,51 @@ function updateHoverReadout() {
             text = `${formatRate(mmh)} mm/h`;
             colour = colorForRate(mmh);
         }
+        if (mmh !== null) band = describeBand(frame, lng, lat);
     }
 
     el.hoverValue.textContent = text;
+    el.hoverBand.textContent = band;
+    if (band && store.spreadInfo) {
+        el.hoverReadout.title =
+            `The ensemble's 10th to 90th percentile within ${Math.round(store.spreadInfo.radius_km)}`
+            + ' km, each member taken at its wettest inside that radius.';
+    }
+    el.hoverBand.hidden = !band;
     el.hoverSwatch.hidden = colour === null;
     if (colour) el.hoverSwatch.style.background = colour;
     el.hoverReadout.classList.toggle('hover-readout--muted', colour === null);
     el.hoverReadout.hidden = false;
 
     positionHoverReadout();
+}
+
+/**
+ * The ensemble's range under the cursor, as "0.1–2.4".
+ *
+ * Asks for the spread frame as a side effect: the first hover on a step fetches
+ * it, and `onSpreadLoaded` redraws the readout when it lands, so the band
+ * appears a moment after the rate rather than holding it up. A reader who never
+ * hovers never downloads any of this.
+ *
+ * Empty when the band is entirely dry — "0.3 mm/h · 0–0" is noise, and a point
+ * every member agrees is dry has no disagreement worth reporting.
+ *
+ * Prefixed "nearby", and that word is doing real work. Each member is taken at
+ * its wettest within the published radius before the percentiles are read, so
+ * the band sits *above* the rate under the cursor as often as around it — 3.9
+ * mm/h against 4.8–7.6 is not a contradiction, it is a pixel with heavier rain
+ * a couple of kilometres away. Without the word it reads as a bug.
+ */
+function describeBand(frame, lng, lat) {
+    if (!store.spreadInfo) return '';
+    store.requestSpread(frame);
+    const band = store.sampleSpread(frame, lng, lat);
+    if (!band) return '';
+    const low = band.p10 ?? 0;
+    const high = band.p90 ?? 0;
+    if (high < WET_THRESHOLD_MM_H) return '';
+    return `nearby ${formatRate(low)}–${formatRate(high)}`;
 }
 
 /** Offset from the cursor, flipped near an edge so it stays fully on screen. */

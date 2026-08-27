@@ -77,8 +77,8 @@ export function renderBandChart(container, series, options = {}) {
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
 
-    const lows = series.map((entry) => entry.p10);
-    const highs = series.map((entry) => entry.p90);
+    const lows = series.map((entry) => entry.p10 ?? entry.median);
+    const highs = series.map((entry) => entry.p90 ?? entry.median);
     let min = zeroFloor ? 0 : Math.min(...lows);
     let max = Math.max(...highs);
     // A flat series - a dry night, darkness - would otherwise collapse the axis
@@ -113,6 +113,11 @@ export function renderBandChart(container, series, options = {}) {
     }
 
     const band = (lowKey, highKey, opacity) => {
+        // Skipped rather than faked when a series does not carry the pair. The
+        // map's spread frames hold p10, p50 and p90 and no quartiles — three
+        // channels is three channels — and a band drawn from missing keys would
+        // collapse onto the median and read as certainty.
+        if (series.some((entry) => entry[lowKey] == null || entry[highKey] == null)) return;
         const top = series.map((entry) => `${x(entry.t)},${y(entry[highKey])}`);
         const bottom = series.map((entry) => `${x(entry.t)},${y(entry[lowKey])}`).reverse();
         svg.appendChild(element('polygon', {

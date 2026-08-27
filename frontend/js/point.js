@@ -5,10 +5,13 @@
  * same answer in both. A named location is served precomputed; a coordinate is
  * assembled here from the on-demand conditions proxy plus the radar frames.
  *
- * The difference between the two is not cosmetic and callers should surface it:
- * KNMI's 20 members exist only while the ingestor holds a timestep in memory,
- * so a coordinate gets whatever single number the map frames carry - the
- * probability-matched mean - with no band and no probability behind it.
+ * The difference between the two is not cosmetic and callers should surface it.
+ * A named location is sampled from KNMI's 20 members at its own square
+ * kilometre, while the ingestor holds the timestep in memory. A coordinate is
+ * read back off the published frames, which carry the probability-matched mean
+ * and, where the server publishes a spread layer, a band taken over a small
+ * radius around each pixel. So a coordinate now gets a real band - but one
+ * answering "near here" rather than "here", and with no probability behind it.
  */
 
 import { conditionsFromEnsemble } from './ensemble.js';
@@ -63,19 +66,37 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
     }
 
     if (frames?.frames?.length) {
+        // The band comes from a second set of frames, so ask for them before
+        // sampling. A click is the reader saying they want this point in
+        // detail, which is the moment to spend the download.
+        const spread = frames.spreadInfo;
+        if (spread) await frames.prefetchSpread();
+
+        const bands = spread ? new Map(
+            frames.spreadSeries(lon, lat).map((entry) => [entry.t, entry.band])
+        ) : null;
         const sampled = frames.series(lon, lat).filter((point) => point.mmh !== null);
         if (sampled.length) {
-            // Read off the frames: no members here, so no band and no
-            // probability. The flat percentiles keep the chart's shape without
-            // implying spread that was never sampled.
+            // Read off the frames. The median is the field the map draws; the
+            // band, where there is one, is the ensemble within the published
+            // radius. No quartiles - the frames carry three percentiles, not
+            // five - and no probability, which needs the members themselves.
             document_.precipitation = {
                 unit: 'mm/h',
-                frame_only: true,
-                series: sampled.map((point) => ({
-                    t: point.t,
-                    p10: point.mmh, p25: point.mmh, median: point.mmh,
-                    p75: point.mmh, p90: point.mmh,
-                })),
+                frame_only: !spread,
+                // Its own key, not `neighbourhood_km`. A named location carries
+                // that one too, and it means something else there: the radius
+                // for `probability_nearby`, while its percentiles are the
+                // members at one square kilometre. Sharing the name made the
+                // detail page describe a per-cell band as a 10 km one.
+                band_radius_km: spread?.radius_km,
+                series: sampled.map((point) => {
+                    const band = bands?.get(point.t);
+                    return band
+                        ? { t: point.t, p10: band.p10, median: point.mmh, p90: band.p90 }
+                        : { t: point.t, p10: point.mmh, p25: point.mmh, median: point.mmh,
+                            p75: point.mmh, p90: point.mmh };
+                }),
             };
             const reference = document_.reference_time;
             const wet = sampled.filter(

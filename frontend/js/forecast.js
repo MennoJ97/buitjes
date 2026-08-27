@@ -156,9 +156,16 @@ function render(document_) {
     $('summary-text').textContent = document_.summary?.text ?? '';
     $('location-coords').textContent =
         `${document_.location.lat.toFixed(4)}, ${document_.location.lon.toFixed(4)}`;
-    $('rain-note').textContent = document_.precipitation?.frame_only
-        ? 'KNMI ensemble, probability-matched mean · 5-minute steps · no spread away from a sampled location'
-        : 'KNMI ensemble · 5-minute steps';
+    // Three notes, because the three cases are genuinely different questions:
+    // members at this square kilometre, the published field with a band taken
+    // around each pixel, or the field on its own.
+    const rain = document_.precipitation;
+    const radius = rain?.band_radius_km;
+    $('rain-note').textContent = !rain?.frame_only && radius
+        ? `KNMI ensemble, probability-matched mean · 5-minute steps · band within ${Math.round(radius)} km`
+        : rain?.frame_only
+            ? 'KNMI ensemble, probability-matched mean · 5-minute steps · no spread away from a sampled location'
+            : 'KNMI ensemble · 5-minute steps';
 
     renderSummaryStats(document_);
     showRadar(document_.location);

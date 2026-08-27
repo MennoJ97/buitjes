@@ -606,6 +606,35 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(5
     color: var(--muted);
 }
 .scale-unit { color: var(--muted-dim); }
+
+/* Sits between the scale's title and its unit, directly over the bar it
+   changes the meaning of. Not in the settings popover: it alters what is drawn,
+   not how it plays, and a control that repaints the map should be visible while
+   you use it. */
+.pct-switch { display: flex; gap: 2px; align-items: center; }
+.pct-option {
+    padding: 2px 8px;
+    border: 0;
+    border-radius: 20px;
+    background: transparent;
+    color: var(--muted-dim);
+    font: inherit;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+.pct-option:hover { color: var(--muted); background: rgba(255, 255, 255, 0.06); }
+.pct-option.is-active { background: rgba(59, 130, 246, 0.25); color: #bfdbfe; }
+/* The two ends of the ensemble get the same amber the estimated badge uses:
+   what is drawn is no longer the expected field. */
+.pct-option.is-active[data-band="p10"],
+.pct-option.is-active[data-band="p90"] {
+    background: rgba(245, 158, 11, 0.22);
+    color: #fcd34d;
+}
+.hover-band { color: var(--muted-dim); font-variant-numeric: tabular-nums; }
 .scale-bar {
     display: block;
     width: 100%;

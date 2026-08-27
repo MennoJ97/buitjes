@@ -59,6 +59,7 @@
     <div class="hover-readout" id="hover-readout" aria-hidden="true" hidden>
         <span class="hover-swatch" id="hover-swatch"></span>
         <span class="hover-value" id="hover-value"></span>
+        <span class="hover-band" id="hover-band" hidden></span>
     </div>
 
     <div class="banner" id="banner" role="alert" hidden>
@@ -119,6 +120,25 @@
                 <p class="about-note">The forecast is <em>seamless</em> — that split is a
                    reading aid, not a change of data source. Accuracy drops the further
                    right you scrub.</p>
+            </section>
+
+            <section class="about-section">
+                <h3>How sure is it?</h3>
+                <p class="about-note">The forecast is twenty runs, not one. What the map
+                   paints is the middle of them — but where a shower lands is the thing
+                   twenty runs disagree about most, long before they disagree that one is
+                   coming at all.</p>
+                <p class="about-note"><strong>Low</strong> and <strong>High</strong> above the
+                   colour bar redraw the map as the dry and wet ends of that disagreement:
+                   the rate that all but two of the runs beat, and the one only two of them
+                   reach. The gap between them is how much the ensemble is arguing. Hover
+                   anywhere to read all three at once.</p>
+                <p class="about-note">Both are taken over
+                   <span id="about-spread-radius">a small radius</span>
+                   rather than a single square kilometre, which is deliberate: at one
+                   kilometre the low end reads zero almost everywhere, because a shower two
+                   streets away counts as a miss. So read them as <em>near here</em> rather
+                   than <em>exactly here</em>.</p>
             </section>
 
             <section class="about-section">
@@ -281,7 +301,12 @@
             <div class="zone-key" id="zone-key"></div>
             <div class="scale">
                 <div class="scale-head">
-                    <span class="scale-title">Rainfall rate</span>
+                    <span class="scale-title" id="scale-title">Rainfall rate</span>
+                    <div class="pct-switch" id="pct-switch" role="group" aria-label="Which of the ensemble to draw" hidden>
+                        <button type="button" class="pct-option" data-band="p10">Low</button>
+                        <button type="button" class="pct-option is-active" data-band="mid" aria-pressed="true">Expected</button>
+                        <button type="button" class="pct-option" data-band="p90">High</button>
+                    </div>
                     <span class="scale-unit">mm/h</span>
                 </div>
                 <canvas id="legend-canvas" class="scale-bar"></canvas>
