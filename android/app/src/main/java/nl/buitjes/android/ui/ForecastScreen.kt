@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import nl.buitjes.core.CentreKey
 import nl.buitjes.android.data.ForecastRepository
 import nl.buitjes.android.data.NamedPoint
 import nl.buitjes.android.data.Snapshot
@@ -170,14 +171,16 @@ private fun Chart(snapshot: Snapshot?) {
 }
 
 /**
- * The sentence, the age, and what kind of forecast this actually is.
+ * The sentence, the age, and what the chart above it is actually of.
  *
- * The last of those is the part worth arguing for. A named location carries
- * real KNMI ensemble spread at five-minute resolution; a coordinate is sampled
- * from median frames after the members have been averaged away, and has none.
- * Both draw a chart that looks equally confident, so the difference has to be
- * written down — the server marks it as `median_only` precisely so a client can
- * say so rather than quietly present one as the other.
+ * The last of those is the part worth arguing for. Two documents can draw the
+ * same-looking chart from quite different numbers: a configured location's band
+ * is its own twenty members at its own square kilometre, while a coordinate's
+ * is the ensemble within a few kilometres of it, read back off the published
+ * frames and with no count of members behind it. Both are real uncertainty and
+ * they are not the same claim, so the labels come from the same place the chart
+ * takes its keys — if the line changes, the sentence describing it changes with
+ * it rather than going quietly out of date.
  */
 @Composable
 private fun Provenance(snapshot: Snapshot?) {
@@ -212,22 +215,50 @@ private fun Provenance(snapshot: Snapshot?) {
             )
         }
 
-        val kind = when {
-            forecast == null -> null
-            forecast.outOfCoverage ->
+        val provenance: List<String> = when {
+            forecast == null -> emptyList()
+            forecast.outOfCoverage -> listOf(
                 "Outside the radar domain — there is no rain forecast for this point at all."
+            )
 
-            forecast.medianOnly ->
-                "Sampled from the published median frames, so there is no ensemble spread " +
-                    "for this point — the chart shows the middle of the forecast and " +
-                    "nothing about how much the members disagree."
-
-            else ->
-                "Full KNMI ensemble: the band is the 10th to 90th percentile of the members."
+            else -> buildList {
+                val centre = forecast.rain
+                val band = centre.band
+                add(
+                    if (band != null) {
+                        "Bars are the ${centre.label}; the shaded band covers ${band.label}."
+                    } else {
+                        // An older server serves a coordinate as one number
+                        // copied across the percentiles. Saying nothing here
+                        // would leave a confident-looking chart unqualified.
+                        "Bars are the ${centre.label}. This forecast carries no band, so " +
+                            "nothing on the chart says how much the members disagreed."
+                    }
+                )
+                if (CentreKey.Measured in centre.keys) {
+                    add(
+                        "The first steps are measured by radar, and carry no band — a " +
+                            "measurement has no ensemble behind it to disagree."
+                    )
+                }
+                if (forecast.location.adHoc) {
+                    add(
+                        "Read back off the published frames rather than from the members " +
+                            "themselves, so the band answers \"near here\" rather than " +
+                            "\"exactly here\", and there is no share-of-members behind it."
+                    )
+                }
+                // A licence obligation as much as a courtesy: this draws two
+                // organisations' data and neither is named anywhere else in the
+                // app.
+                listOfNotNull(forecast.source?.text, forecast.conditionsSource?.text)
+                    .filter { it.isNotBlank() }
+                    .forEach { add(it) }
+            }
         }
-        kind?.let {
+        provenance.forEach { line ->
             Text(
-                it,
+                line,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

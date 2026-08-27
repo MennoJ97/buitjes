@@ -31,16 +31,29 @@ own.
 | It needs | It calls |
 |---|---|
 | the list of configured locations | `GET /api/config` → `points` |
-| a forecast for one of them | `GET /api/point/<name>` — real KNMI spread |
+| a forecast for one of them | `GET /api/point/<name>` — the members at that cell |
 | a forecast for wherever the phone is | `GET /api/point?lat=&lon=` |
 
 The third is the one built for this app. A phone is not a configured location,
-so that endpoint samples the published median frames on demand and returns the
-same document shape. Two things it will not fudge, and the app surfaces both:
-`median_only` says the ensemble spread is gone (the members were averaged away
-before the frames were written, so a band drawn there would be invented), and
-`out_of_coverage` says the point is outside the radar domain — which is not the
-same as a forecast of dry weather, and pauses alerting rather than relaxing it.
+so that endpoint assembles the same document on demand by sampling the
+published frames — both of them. The rain frame gives the value; the spread
+frame beside it gives a p10/p50/p90 taken over a few kilometres around that
+pixel. So the phone's own position gets a real band for the whole six hours,
+not just a line.
+
+What it is a band *of* is the part the app keeps saying out loud. A configured
+location's percentiles are its own twenty members at its own square kilometre.
+A coordinate's are the ensemble *near* it, read back off pictures, with nothing
+behind them that can count members — so there is no `probability`, and the
+forecast screen says "near here" rather than "here". The keys carry the
+distinction rather than leaving it to prose: `nearby_median` and
+`nearby_radius_km` for the neighbourhood, `measured` for the hour of radar
+composite that has no ensemble at all, `field` for what the map paints.
+
+Two more things it will not fudge. A pixel no radar looked at is dropped rather
+than published as zero, and `out_of_coverage` says the point is outside the
+radar domain — which is not the same as a forecast of dry weather, and pauses
+alerting rather than relaxing it.
 
 Alerts are evaluated **on the phone**, not pushed from the server. That avoids
 push infrastructure, per-device state on the server, and a location trail
@@ -175,7 +188,9 @@ out and labels itself stale, which is the intended behaviour rather than a bug.
 `:core` is written and its tests pass — including parsing tests that run
 against **real captured responses** from the server rather than hand-written
 approximations, since the two halves share nothing but that document and
-nothing else would catch them drifting apart.
+nothing else would catch them drifting apart. Three fixtures: a coordinate, the
+same coordinate outside the radar domain, and a configured location, all
+captured from a running cycle.
 
 `:app` compiles and packages: `./gradlew :app:assembleDebug` produces a debug
 APK, with no warnings. What it has *not* had is a single second of runtime.

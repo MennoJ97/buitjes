@@ -44,12 +44,94 @@ class AlertEngineTest {
         )
     }
 
+    /**
+     * The other document shape: a coordinate, read off the frames.
+     *
+     * `field` is deliberately set to something the rule would *not* fire on, so
+     * that a pass reading the wrong key fails loudly instead of coincidentally
+     * agreeing. The map's field and the neighbourhood median are different
+     * numbers about the same square kilometre, and which one an alert threshold
+     * means is not a detail.
+     */
+    private fun coordinate(vararg nearbyMedians: Double, observed: Int = 0): Forecast {
+        val steps = nearbyMedians.mapIndexed { index, rate ->
+            val t = now + index * 300L
+            if (index < observed) {
+                Step(t = t, kind = "observed", measured = rate)
+            } else {
+                Step(
+                    t = t,
+                    kind = "forecast",
+                    drawn = 0.0,
+                    nearbyP10 = 0.0,
+                    nearbyMedian = rate,
+                    nearbyP90 = rate * 2,
+                )
+            }
+        }
+        return Forecast(
+            referenceTime = now,
+            precipitation = Series(
+                unit = "mm/h",
+                nearbyRadiusKm = 3.0,
+                fieldProduct = "probability-matched mean",
+                series = steps,
+            ),
+        )
+    }
+
     private val rule = AlertRule(
         targetKind = AlertTargetKind.CURRENT_LOCATION,
         thresholdMmH = 1.0,
         withinSeconds = 3600,
         quietSeconds = 3600,
     )
+
+    /**
+     * A coordinate used to have nothing but a copied median, and a rule for
+     * "here" thresholded on that. It now carries the band the frames publish,
+     * and the rule has to read the line that band belongs to.
+     */
+    @Test
+    fun `fires on the neighbourhood median a coordinate carries`() {
+        val forecast = coordinate(0.0, 0.0, 1.4)
+        assertEquals(CentreKey.NearbyMedian, forecast.rain.keys.first())
+
+        val outcome = AlertEngine.consider(forecast, rule, RuleState(), now)
+        val event = assertNotNull(outcome.fire, "1.4 mm/h within the hour should fire")
+        assertEquals(1.4, event.peakMmH, "the band's line, not the map's field")
+    }
+
+    /** The observed hour reads through the same rule, off its own key. */
+    @Test
+    fun `fires on rain the radar is already measuring`() {
+        val outcome = AlertEngine.consider(coordinate(2.0, 2.0, observed = 2), rule, RuleState(), now)
+        val event = assertNotNull(outcome.fire)
+        assertTrue(event.rainingNow)
+        assertEquals(2.0, event.peakMmH)
+    }
+
+    /**
+     * A hole in the composite is not a dry spell. A step carrying no value at
+     * all must not re-arm a latched rule, or a shower crossing a gap in the
+     * radar would be announced twice.
+     */
+    @Test
+    fun `a step with no value neither fires nor re-arms`() {
+        val empty = Forecast(
+            referenceTime = now,
+            precipitation = Series(
+                unit = "mm/h",
+                nearbyRadiusKm = 3.0,
+                series = listOf(Step(t = now, kind = "forecast"), Step(t = now + 300, kind = "forecast")),
+            ),
+        )
+        val latched = RuleState(active = true, lastFired = now - 7200)
+
+        val outcome = AlertEngine.consider(empty, rule, latched, now)
+        assertNull(outcome.fire)
+        assertTrue(outcome.state.active, "still latched, because nothing said it was dry")
+    }
 
     @Test
     fun `fires once when rain enters the window`() {

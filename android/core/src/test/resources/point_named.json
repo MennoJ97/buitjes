@@ -1,62 +1,79 @@
 {
   "conditions_source": {
     "attribution": "Open-Meteo (CC BY 4.0)",
-    "model": "on-demand ensemble"
+    "model": "icon_seamless",
+    "percentiles": [
+      10,
+      25,
+      50,
+      75,
+      90
+    ],
+    "step": "hourly"
   },
-  "generated_at": 1787852488,
+  "generated_at": 1787852120,
   "location": {
-    "ad_hoc": true,
     "lat": 52.1009,
     "lon": 5.1056,
-    "name": "this point"
+    "name": "home"
   },
   "precipitation": {
-    "band_radius_km": 3.0,
     "field_product": "probability-matched mean",
-    "frame_only": false,
+    "members": 20,
     "nearby_radius_km": 3.0,
+    "neighbourhood_km": 10.0,
+    "percentiles": [
+      10,
+      25,
+      50,
+      75,
+      90
+    ],
     "series": [
       {
-        "kind": "observed",
-        "measured": 0.0,
-        "t": 1787851500
-      },
-      {
-        "kind": "observed",
-        "measured": 0.0,
-        "t": 1787851800
-      },
-      {
         "field": 0.0,
-        "kind": "nowcast",
+        "mean": 0.0,
+        "median": 0.0,
         "nearby_median": 0.0,
         "nearby_p10": 0.0,
         "nearby_p90": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "probability": 0.0,
+        "probability_nearby": 0.0,
         "t": 1787852100
       },
       {
         "field": 0.0,
-        "kind": "nowcast",
+        "mean": 0.0,
+        "median": 0.0,
         "nearby_median": 0.0,
         "nearby_p10": 0.0,
         "nearby_p90": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "probability": 0.0,
+        "probability_nearby": 0.0,
         "t": 1787852400
       },
       {
-        "field": 1.2,
-        "kind": "forecast",
-        "nearby_median": 0.96,
-        "nearby_p10": 0.0,
-        "nearby_p90": 4.89,
-        "t": 1787863200
-      },
-      {
-        "field": 10.02,
-        "kind": "forecast",
-        "nearby_median": 5.16,
-        "nearby_p10": 1.74,
-        "nearby_p90": 12.66,
-        "t": 1787870100
+        "field": 7.11,
+        "mean": 3.66,
+        "median": 3.28,
+        "nearby_median": 4.84,
+        "nearby_p10": 1.59,
+        "nearby_p90": 13.83,
+        "p10": 0.58,
+        "p25": 1.64,
+        "p75": 4.22,
+        "p90": 8.42,
+        "probability": 0.9,
+        "probability_nearby": 0.95,
+        "t": 1787870400
       }
     ],
     "unit": "mm/h"
@@ -94,27 +111,27 @@
   "solar": {
     "series": [
       {
-        "median": 534.0,
-        "p10": 480.0,
-        "p25": 512.0,
-        "p75": 564.0,
-        "p90": 585.0,
+        "median": 534,
+        "p10": 480,
+        "p25": 512,
+        "p75": 564,
+        "p90": 585,
         "t": 1787839200
       },
       {
-        "median": 446.0,
-        "p10": 403.0,
-        "p25": 427.0,
-        "p75": 466.0,
-        "p90": 481.0,
+        "median": 446,
+        "p10": 403,
+        "p25": 426,
+        "p75": 466,
+        "p90": 481,
         "t": 1787842800
       },
       {
-        "median": 297.0,
-        "p10": 265.0,
-        "p25": 273.0,
-        "p75": 322.0,
-        "p90": 341.0,
+        "median": 297,
+        "p10": 265,
+        "p25": 272,
+        "p75": 322,
+        "p90": 341,
         "t": 1787846400
       }
     ],
@@ -123,18 +140,15 @@
   "source": {
     "attribution": "KNMI (CC BY 4.0)",
     "dataset": "seamless_precipitation_ensemble_forecast_members",
-    "observed": "nl_rdr_data_rtcor_5m",
-    "product": "probability-matched mean of 20 ensemble members",
-    "reducer": "probability-matched mean",
     "version": "1.0"
   },
   "summary": {
     "peak_at": 1787870100,
-    "peak_mm_h": 5.16,
+    "peak_mm_h": 5.24,
     "raining_now": false,
-    "starts_at": 1787862600,
+    "starts_at": 1787862300,
     "stops_at": null,
-    "text": "Dry now — rain at 20:30, peaking 5.2 mm/h around 22:35, lasting past the end of the forecast."
+    "text": "Dry now — rain at 22:25, peaking 5.2 mm/h around 00:35, lasting past the end of the forecast."
   },
   "temperature": {
     "series": [

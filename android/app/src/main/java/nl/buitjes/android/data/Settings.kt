@@ -58,14 +58,15 @@ data class Prefs(
      * The rules to evaluate this pass, one per watched place.
      *
      * `probability` is pinned at zero for every rule, which in the state
-     * machine's terms means "the median alone decides". That is not a
+     * machine's terms means "the drawn line alone decides". That is not a
      * simplification for the sake of a smaller settings screen; it is the only
      * value that means the same thing on both endpoints. `/api/point/<name>`
      * carries a real per-step probability from the KNMI members, but
-     * `/api/point?lat&lon` is sampled from median frames and has none — so a
-     * rule asking for 40% agreement would fire for `home` and be silently
-     * incapable of ever firing for wherever the phone actually is. Silent
-     * asymmetry in an alarm is worse than a blunter alarm.
+     * `/api/point?lat&lon` is read back off the published frames, which carry
+     * percentiles rather than members — a band, but nothing that can answer
+     * "how many of them". A rule asking for 40% agreement would fire for `home`
+     * and be silently incapable of ever firing for wherever the phone actually
+     * is. Silent asymmetry in an alarm is worse than a blunter alarm.
      */
     fun rules(): List<AlertRule> {
         if (!alertsEnabled) return emptyList()

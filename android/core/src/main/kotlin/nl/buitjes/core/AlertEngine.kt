@@ -66,28 +66,41 @@ object AlertEngine {
      * past is not news at all.
      */
     fun evaluate(forecast: Forecast, rule: AlertRule, now: Long): AlertEvent {
+        // Whatever this document draws its line from — the neighbourhood median
+        // for a coordinate, the members' own median for a configured location,
+        // the radar composite over the observed hour. Thresholding on one named
+        // key would mean "0.5 mm/h" quietly meant different things on the two
+        // endpoints, and on an ad-hoc document it would mean nothing at all.
+        val centre = forecast.rain
         val window = forecast.rainSteps.filter { step ->
-            step.t >= now - PAST_TOLERANCE_SECONDS && step.t <= now + rule.withinSeconds
+            step.t >= now - PAST_TOLERANCE_SECONDS &&
+                step.t <= now + rule.withinSeconds &&
+                // A step carrying no value is not a dry step. It drops out
+                // rather than counting as zero, which would let a hole in the
+                // radar composite re-arm a latched rule mid-shower.
+                centre.valueOf(step) != null
         }
         if (window.isEmpty()) return AlertEvent(rule = rule)
 
-        val peak = window.maxBy { it.median }
-        // A step with no `probability` is an ad-hoc point, where the median is
-        // all there is. Treating that as 1.0 lets one rule serve both kinds of
-        // document: a probability floor simply cannot bite where there are no
-        // members to count, which is the honest reading rather than a silent
-        // failure to ever fire.
+        val rate = { step: Step -> centre.valueOf(step) ?: 0.0 }
+        val peak = window.maxBy(rate)
+        // A step with no `probability` is a coordinate, where there are no
+        // members to count. Treating that as 1.0 lets one rule serve both kinds
+        // of document: a probability floor simply cannot bite where nothing can
+        // answer it, which is the honest reading rather than a silent failure
+        // to ever fire.
         val onset = window.firstOrNull { step ->
-            step.median >= rule.thresholdMmH && (step.probability ?: 1.0) >= rule.probability
+            rate(step) >= rule.thresholdMmH && (step.probability ?: 1.0) >= rule.probability
         }
 
         return AlertEvent(
             rule = rule,
             onset = onset?.t,
-            peakMmH = peak.median,
+            peakMmH = rate(peak),
             peakAt = peak.t,
             probability = onset?.probability ?: 0.0,
             rainingNow = onset != null && onset.t <= now + PAST_TOLERANCE_SECONDS,
+            readings = window.size,
         )
     }
 
@@ -114,6 +127,13 @@ object AlertEngine {
         }
 
         val event = evaluate(forecast, rule, now)
+
+        // Nothing in the window said anything — every step in it was missing,
+        // or there were no steps at all. Same treatment as being out of
+        // coverage, and for the same reason: silence is not a report of dry
+        // weather, and re-arming on it would let one shower crossing a hole in
+        // the composite be announced twice.
+        if (event.readings == 0) return AlertOutcome(previous, null)
 
         if (!event.matched) {
             // Re-arm only once the window is clearly dry, not merely under the
@@ -184,8 +204,9 @@ data class AlertRule(
     val thresholdMmH: Double = AlertEngine.DEFAULT_THRESHOLD_MM_H,
     val withinSeconds: Int = AlertEngine.DEFAULT_WITHIN_MINUTES * 60,
     /**
-     * Minimum share of members that must agree. Zero accepts the median alone,
-     * which is the only thing available for a coordinate.
+     * Minimum share of members that must agree. Zero accepts the drawn line
+     * alone, which is all a coordinate can answer: the frames carry
+     * percentiles, and counting members needs the members.
      */
     val probability: Double = 0.0,
     val quietSeconds: Int = AlertEngine.DEFAULT_QUIET_MINUTES * 60,
@@ -232,6 +253,14 @@ data class AlertEvent(
     val peakAt: Long? = null,
     val probability: Double = 0.0,
     val rainingNow: Boolean = false,
+    /**
+     * How many steps in the window carried a number at all.
+     *
+     * Zero is what tells "the window is dry" apart from "the window is empty",
+     * and the two must not be confused: a peak of 0.0 mm/h is what both look
+     * like from the outside, and only one of them is a reason to re-arm.
+     */
+    val readings: Int = 0,
 ) {
     val matched: Boolean get() = onset != null
 }

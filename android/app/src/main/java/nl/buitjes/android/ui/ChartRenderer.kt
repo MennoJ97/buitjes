@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
+import nl.buitjes.core.Centre
 import nl.buitjes.core.Forecast
 import nl.buitjes.core.Step
 import java.util.TimeZone
@@ -73,6 +74,10 @@ object ChartRenderer {
         fun dp(value: Float) = value * scale
 
         val series = forecast?.precipitation?.series.orEmpty()
+        // Worked out once. `Forecast.rain` walks the series to decide which
+        // keys are present, so asking it per step would be quadratic for no
+        // reason — and this is a widget's render pass.
+        val centre = forecast?.rain
         val message = when {
             forecast == null -> "No forecast yet"
             // Said explicitly, because the alternative reading of an empty chart
@@ -80,6 +85,10 @@ object ChartRenderer {
             // flat zero line for exactly this reason.
             forecast.outOfCoverage -> "Outside radar coverage"
             !forecast.hasRainSeries || series.size < 2 -> "No rain data for this point"
+            // Every step in the series carrying nothing. Rare — it takes a
+            // cycle of unreadable frames — but an axis with no bars under it is
+            // indistinguishable from six dry hours.
+            series.none { centre?.valueOf(it) != null } -> "No rain data for this point"
             else -> null
         }
         if (message != null) {
@@ -87,7 +96,7 @@ object ChartRenderer {
             return bitmap
         }
 
-        drawSeries(canvas, width, height, ::dp, palette, forecast!!, series)
+        drawSeries(canvas, width, height, ::dp, palette, forecast!!, centre!!, series)
         return bitmap
     }
 
@@ -109,6 +118,7 @@ object ChartRenderer {
         dp: (Float) -> Float,
         palette: ChartPalette,
         forecast: Forecast,
+        centre: Centre,
         series: List<Step>,
     ) {
         val axisTextSize = dp(9f)
@@ -130,7 +140,12 @@ object ChartRenderer {
             return
         }
 
-        val spread = forecast.precipitation?.medianOnly == false
+        // What this document draws its line from, and what to shade around it,
+        // both decided in :core rather than here — the web app makes the same
+        // choice from the same keys, and the two charts have to agree about
+        // which number they are showing.
+        val band = centre.band
+
         val firstT = series.first().t
         val lastT = series.last().t
         val span = (lastT - firstT).coerceAtLeast(1L)
@@ -141,7 +156,10 @@ object ChartRenderer {
         // as a full-height wall of 0.04 mm/h bars: without a floor the axis
         // rescales to whatever noise is in the frame and every chart looks like
         // weather.
-        val observedMax = series.maxOf { step -> if (spread) max(step.median, step.p90) else step.median }
+        val observedMax = series.maxOf { step ->
+            val line = centre.valueOf(step) ?: 0.0
+            if (band != null) max(line, step.value(band.high) ?: 0.0) else line
+        }
         val step = niceStep(max(observedMax, 1.0))
         val top = max(ceil(max(observedMax, 1.0) / step) * step, step)
 
@@ -174,27 +192,38 @@ object ChartRenderer {
 
         drawHourAxis(canvas, dp, palette, axisTextSize, series, ::x, plotTop, plotBottom, plotLeft, plotRight)
 
-        // The p10–p90 band, and only when there is one.
+        // The band, where the document has one — for a coordinate the ensemble
+        // within a few kilometres of it, for a configured location the members
+        // at its own cell. Which pair of keys that is, and whether there is a
+        // pair at all, is :core's decision.
         //
-        // `median_only` documents carry percentiles that are all equal to the
-        // median — the server keeps the shape so a client can use one code path
-        // — so drawing the band unconditionally would paint a zero-width ribbon
-        // over every ad-hoc point and look, at a glance, like a forecast with
-        // impossibly high confidence. Absence is the honest rendering.
-        if (spread) {
-            val band = Path()
-            series.forEachIndexed { index, entry ->
-                val px = x(entry.t)
-                val py = y(entry.p90)
-                if (index == 0) band.moveTo(px, py) else band.lineTo(px, py)
+        // Absence is the honest rendering of a document with no band. An older
+        // server serves a coordinate as five copies of one number; shading
+        // between them would paint a zero-width ribbon that reads, at a glance,
+        // as a forecast of impossible confidence.
+        //
+        // Drawn only across the steps that actually carry both edges. The
+        // observed hour has no band — it is measurement, not an ensemble — so a
+        // polygon spanning the whole series would fill that hour with a wedge
+        // running to zero and invent disagreement about a number that was
+        // measured.
+        if (band != null) {
+            for (run in centre.bandRuns(series)) {
+                if (run.size < 2) continue
+                val ribbon = Path()
+                run.forEachIndexed { index, entry ->
+                    val px = x(entry.t)
+                    val py = y(entry.value(band.high) ?: 0.0)
+                    if (index == 0) ribbon.moveTo(px, py) else ribbon.lineTo(px, py)
+                }
+                for (index in run.indices.reversed()) {
+                    ribbon.lineTo(x(run[index].t), y(run[index].value(band.low) ?: 0.0))
+                }
+                ribbon.close()
+                paint.style = Paint.Style.FILL
+                paint.color = palette.band
+                canvas.drawPath(ribbon, paint)
             }
-            for (index in series.indices.reversed()) {
-                band.lineTo(x(series[index].t), y(series[index].p10))
-            }
-            band.close()
-            paint.style = Paint.Style.FILL
-            paint.color = palette.band
-            canvas.drawPath(band, paint)
         }
 
         // Bars for the median.
@@ -204,17 +233,21 @@ object ChartRenderer {
         paint.color = palette.bar
         val baseline = y(0.0)
         for (entry in series) {
-            if (entry.median <= 0.0) continue
-            val centre = x(entry.t)
-            var barTop = y(entry.median)
+            // A step carrying nothing draws nothing. Not a bar of zero height,
+            // which is what this chart draws for a dry step and would be a
+            // claim it cannot make about a hole in the radar composite.
+            val rate = centre.valueOf(entry) ?: continue
+            if (rate <= 0.0) continue
+            val middle = x(entry.t)
+            var barTop = y(rate)
             // A wet step must be visible. At six hours across a widget each bar
             // is a couple of pixels wide, and 0.2 mm/h rounds to a bar of zero
             // height — which reads as dry, which is the one thing this chart
             // must never say when it is not true.
-            if (entry.median >= WET_THRESHOLD_MM_H && baseline - barTop < 1f) {
+            if (rate >= WET_THRESHOLD_MM_H && baseline - barTop < 1f) {
                 barTop = baseline - 1f
             }
-            canvas.drawRect(centre - barWidth / 2f, barTop, centre + barWidth / 2f, baseline, paint)
+            canvas.drawRect(middle - barWidth / 2f, barTop, middle + barWidth / 2f, baseline, paint)
         }
 
         // Where the measured part stops and the extrapolated part begins.
