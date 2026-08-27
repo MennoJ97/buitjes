@@ -128,19 +128,33 @@ export function renderBandChart(container, series, options = {}) {
         svg.appendChild(label);
     }
 
+    // One polygon per unbroken run that has the pair, rather than one for the
+    // whole series. Skipped where it is missing, because a band faked from
+    // absent keys collapses onto the line and reads as certainty — but skipped
+    // per step, not wholesale. A clicked point's series carries an hour of
+    // observed radar in front of the forecast, and a measurement has no
+    // ensemble behind it, so those thirteen steps have no band; dropping the
+    // whole thing over them left every clicked point with a bare line and no
+    // spread anywhere, which is how this was found.
     const band = (lowKey, highKey, opacity) => {
-        // Skipped rather than faked when a series does not carry the pair. The
-        // map's spread frames hold p10, p50 and p90 and no quartiles — three
-        // channels is three channels — and a band drawn from missing keys would
-        // collapse onto the median and read as certainty.
-        if (series.some((entry) => entry[lowKey] == null || entry[highKey] == null)) return;
-        const top = series.map((entry) => `${x(entry.t)},${y(entry[highKey])}`);
-        const bottom = series.map((entry) => `${x(entry.t)},${y(entry[lowKey])}`).reverse();
-        svg.appendChild(element('polygon', {
-            points: [...top, ...bottom].join(' '),
-            fill: colour,
-            'fill-opacity': opacity,
-        }));
+        let run = [];
+        const flush = () => {
+            if (run.length > 1) {
+                const top = run.map((entry) => `${x(entry.t)},${y(entry[highKey])}`);
+                const bottom = run.map((entry) => `${x(entry.t)},${y(entry[lowKey])}`).reverse();
+                svg.appendChild(element('polygon', {
+                    points: [...top, ...bottom].join(' '),
+                    fill: colour,
+                    'fill-opacity': opacity,
+                }));
+            }
+            run = [];
+        };
+        for (const entry of series) {
+            if (entry[lowKey] == null || entry[highKey] == null) flush();
+            else run.push(entry);
+        }
+        flush();
     };
     band('p10', 'p90', 0.16);
     band('p25', 'p75', 0.26);

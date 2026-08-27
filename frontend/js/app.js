@@ -486,9 +486,15 @@ function renderCurrentFrame() {
     // Which of the twenty runs to paint. "Expected" is the rain frame the map
     // has always drawn; the two ends come out of the spread frame instead, a
     // different image and a different encoding, so the shader is told both.
+    // `frame.spread` and not merely `spread`: the observed hour has no companion
+    // frame, because a radar measurement has no ensemble to take percentiles
+    // of. Without that check, scrubbing back into the measured past while Low
+    // or High is selected asked for a file that does not exist and blanked the
+    // map. There the measurement is the only answer, so it is the one drawn.
     const spread = store.spreadInfo;
-    const wantsBand = currentBand !== 'mid' && spread;
+    const wantsBand = currentBand !== 'mid' && spread && frame.spread;
     const image = wantsBand ? store.requestSpread(frame) : store.imageFor(frame);
+    updateScaleTitle(wantsBand);
 
     if (image) {
         if (wantsBand) {
@@ -520,6 +526,17 @@ const BAND_TITLES = {
 };
 
 /**
+ * The legend names what is on screen, not what the switch is set to.
+ *
+ * They part company over the measured hour, which has no ensemble and so is
+ * drawn as itself whatever the switch says. A bar labelled "high" above a radar
+ * measurement would be claiming a percentile of a single number.
+ */
+function updateScaleTitle(showingBand) {
+    el.scaleTitle.textContent = showingBand ? BAND_TITLES[currentBand] : BAND_TITLES.mid;
+}
+
+/**
  * Switch which of the ensemble the map paints.
  *
  * Playback needs every step's spread frame, not just the one on screen, so
@@ -534,8 +551,6 @@ async function setBand(band) {
         option.classList.toggle('is-active', active);
         option.setAttribute('aria-pressed', String(active));
     }
-    el.scaleTitle.textContent = BAND_TITLES[band] ?? BAND_TITLES.mid;
-
     if (band !== 'mid') {
         el.loading.hidden = false;
         await store.prefetchSpread((progress) => {
@@ -556,7 +571,8 @@ function setupBandSwitch() {
     el.pctSwitch.title =
         `What the twenty ensemble members say, within ${radius} km: `
         + `Low is p${spread.percentiles[0]}, High is p${spread.percentiles[2]}. `
-        + 'Expected is the field the map normally draws.';
+        + 'Expected is the field the map normally draws. The measured hour has '
+        + 'no ensemble, so it is shown as itself whichever you pick.';
     // A span of its own rather than a search-and-replace across the paragraph:
     // the prose wraps, so the phrase is not contiguous in textContent, and
     // rewriting the paragraph would flatten the emphasis inside it.
@@ -735,6 +751,11 @@ function updateHoverReadout() {
  */
 function describeBand(frame, lng, lat) {
     if (!store.spreadInfo) return '';
+    // The measured hour has no band and never will: radar is one number, not
+    // twenty. Saying so beats saying nothing, which reads as a missing feature
+    // — the app opens on the newest observed frame, so an empty readout there
+    // is the first thing anyone sees.
+    if (frame.kind === 'observed') return 'measured';
     store.requestSpread(frame);
     const band = store.sampleSpread(frame, lng, lat);
     if (!band) return '';
