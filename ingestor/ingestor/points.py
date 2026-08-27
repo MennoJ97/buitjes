@@ -243,8 +243,15 @@ def summarise(series: list[dict], reference_time: int,
               radius_km: float | None = None) -> dict:
     """A plain-language read of the series, for a widget with one line of room.
 
+    Describes the same number the map paints and the chart draws - each entry's
+    ``field`` - rather than the median of the members at this square kilometre.
+    They are different estimators and for showers they disagree completely: the
+    median is dry unless half the members rain on that exact cell, so a sentence
+    built on it said "dry now" over a chart peaking at 141 mm/h. Falling back to
+    the median keeps a series published before ``field`` existed readable.
+
     Describes the *spell* — the contiguous run of wet steps — rather than the
-    moment it begins. The onset rate is by construction the instant the median
+    moment it begins. The onset rate is by construction the instant the field
     crosses the wet threshold, so it is always a small number whether what
     follows is five minutes of drizzle or the leading edge of a downpour; the
     peak, and how far ahead of the onset it sits, is what tells them apart.
@@ -264,20 +271,20 @@ def summarise(series: list[dict], reference_time: int,
         return {'raining_now': False, 'text': 'No forecast available.'}
 
     onset_index = next(
-        (i for i, entry in enumerate(future) if entry['median'] >= WET_THRESHOLD_MM_H),
+        (i for i, entry in enumerate(future) if _drawn(entry) >= WET_THRESHOLD_MM_H),
         None,
     )
 
     if onset_index is None:
-        # Even with a dry median, the ensemble may still be hinting at rain -
-        # and this is exactly the case the neighbourhood probability was added
-        # for. A median that never crosses the threshold means the members did
-        # not agree on one square kilometre, which is the normal state of
-        # affairs for showers and says nothing about whether it will rain here.
+        # A dry field still leaves room for the ensemble to be hinting at rain,
+        # and this is what the neighbourhood probability was added for. The
+        # field being dry says the map draws nothing on this cell; it says
+        # nothing about the showers the members are putting a few kilometres
+        # away, which for anything convective is where the disagreement lives.
         best_chance = max(future, key=_nearby_probability)
         chance = _nearby_probability(best_chance)
         if chance >= 0.3:
-            # Two sentences, not one with a percentage swapped in. A dry median
+            # Two sentences, not one with a percentage swapped in. A dry cell
             # and a near-certain neighbourhood are not a contradiction - it is
             # what "showers about, one of them may be yours" looks like in
             # numbers - but "probably dry, 100% chance of rain" reads as a bug.
@@ -297,21 +304,21 @@ def summarise(series: list[dict], reference_time: int,
 
     dry_after = next(
         (i for i in range(onset_index + 1, len(future))
-         if future[i]['median'] < WET_THRESHOLD_MM_H),
+         if _drawn(future[i]) < WET_THRESHOLD_MM_H),
         None,
     )
     spell = future[onset_index:dry_after]
     clearing = future[dry_after] if dry_after is not None else None
 
     onset = spell[0]
-    peak = max(spell, key=lambda entry: entry['median'])
+    peak = max(spell, key=_drawn)
     raining_now = onset_index == 0
 
     # Only worth its own clause if it is meaningfully heavier than the start,
     # otherwise it is the same number twice.
     peak_matters = (
         peak['t'] != onset['t']
-        and peak['median'] >= onset['median'] * 1.5 + 0.05
+        and _drawn(peak) >= _drawn(onset) * 1.5 + 0.05
     )
 
     lead_minutes = round((onset['t'] - reference_time) / 60)
@@ -321,18 +328,18 @@ def summarise(series: list[dict], reference_time: int,
     relative = raining_now or lead_minutes < 90
 
     if raining_now:
-        parts = [f'Raining now at {_rate(onset["median"])} mm/h']
+        parts = [f'Raining now at {_rate(_drawn(onset))} mm/h']
     else:
         when = f'in {lead_minutes} min' if relative else f'at {_clock(onset["t"])}'
         parts = [f'Dry now — rain {when}' if peak_matters
-                 else f'Dry now — rain {when} at {_rate(onset["median"])} mm/h']
+                 else f'Dry now — rain {when} at {_rate(_drawn(onset))} mm/h']
 
     if peak_matters:
         climb = round((peak['t'] - onset['t']) / 60)
         parts.append(
-            f'up to {_rate(peak["median"])} mm/h within {climb} min'
+            f'up to {_rate(_drawn(peak))} mm/h within {climb} min'
             if relative and climb <= 30
-            else f'peaking {_rate(peak["median"])} mm/h around {_clock(peak["t"])}'
+            else f'peaking {_rate(_drawn(peak))} mm/h around {_clock(peak["t"])}'
         )
 
     parts.append(
@@ -344,10 +351,21 @@ def summarise(series: list[dict], reference_time: int,
         'raining_now': raining_now,
         'starts_at': None if raining_now else onset['t'],
         'stops_at': clearing['t'] if clearing else None,
-        'peak_mm_h': peak['median'],
+        'peak_mm_h': _drawn(peak),
         'peak_at': peak['t'],
         'text': ', '.join(parts) + '.',
     }
+
+
+def _drawn(entry: dict) -> float:
+    """The number this entry is drawn as: the published field, or the median.
+
+    The fallback is for series written before the field was published, which a
+    running container can still be holding - the same reason
+    :func:`_nearby_probability` has one.
+    """
+    value = entry.get('field')
+    return float(entry['median'] if value is None else value)
 
 
 def _nearby_probability(entry: dict) -> float:
@@ -406,7 +424,13 @@ def current_conditions(document: dict) -> dict:
     if rain:
         now['precipitation'] = {
             'unit': document['precipitation']['unit'],
-            'value': rain['median'],
+            # The same number the map paints and the summary describes, so a
+            # dashboard headline cannot disagree with the page it links to.
+            # `median` rides along beside it because they are different
+            # questions, not two spellings of one.
+            'value': _drawn(rain),
+            'product': document['precipitation'].get('field_product'),
+            'median': rain['median'],
             'p10': rain['p10'],
             'p90': rain['p90'],
             'probability': rain['probability'],

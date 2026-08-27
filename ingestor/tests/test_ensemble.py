@@ -33,7 +33,9 @@ from ingestor.encode import (  # noqa: E402
     SPREAD_FLOOR_MM_H, decode_frame, decode_spread_frame, encode_frame,
     encode_spread_frame,
 )
-from ingestor.points import Location, PointExtractor, summarise  # noqa: E402
+from ingestor.points import (  # noqa: E402
+    Location, PointExtractor, current_conditions, summarise,
+)
 from ingestor.raster import MercatorResampler  # noqa: E402
 
 failures = []
@@ -210,6 +212,56 @@ check('a low chance is still just dry',
       summarise([step(600, 0.0, 0.1)], REF, 10)['text'] == 'Staying dry.')
 check('a wet median is unaffected by any of this',
       summarise([step(0, 2.0, 1.0)], REF, 10)['raining_now'] is True)
+
+
+print('summary: the sentence describes what is drawn')
+
+
+def drawn_step(offset, field, median, nearby=0.0):
+    return {'t': REF + offset, 'field': field, 'median': median, 'p90': max(field, median),
+            'probability': 0.0, 'probability_nearby': nearby}
+
+
+# The case that forced this: at the wettest cell of a real cycle the field ran
+# to 141 mm/h while only a fifth of the members were wet, so the median sat at
+# zero and the sentence read "Staying dry" over a chart with a spike in it.
+downpour = summarise([drawn_step(0, 141.46, 0.0), drawn_step(300, 32.42, 0.0),
+                      drawn_step(600, 0.0, 0.0)], REF, 10)
+check('a dry median no longer hides a downpour',
+      downpour['raining_now'] is True, downpour['text'])
+check('and the rate quoted is the one on the map',
+      '141 mm/h' in downpour['text'], downpour['text'])
+check('the structured peak follows the same number', downpour['peak_mm_h'] == 141.46)
+
+# The spell is the field's spell, so a step the map paints dry ends it.
+spell = summarise([drawn_step(0, 1.0, 1.0), drawn_step(300, 2.0, 1.0),
+                   drawn_step(600, 0.0, 1.0), drawn_step(900, 3.0, 1.0)], REF, 10)
+check('the spell ends where the drawn field goes dry',
+      spell['stops_at'] == REF + 600, spell)
+check('and the peak comes from that spell, not the later one',
+      spell['peak_mm_h'] == 2.0, spell)
+
+# A dry field with a wet neighbourhood is still the case that branch exists for.
+nearby_only = summarise([drawn_step(0, 0.0, 0.0, 0.9), drawn_step(300, 0.0, 0.0, 0.9)],
+                        REF, 10)
+check('a dry cell with showers around it still says so',
+      'Showers about' in nearby_only['text'], nearby_only['text'])
+
+check('a series with no field at all still reads off the median',
+      summarise([step(0, 2.0, 0.0)], REF, 10)['peak_mm_h'] == 2.0)
+
+current = current_conditions({
+    'generated_at': REF, 'reference_time': REF,
+    'location': {'name': 'home', 'lat': 52.0, 'lon': 5.0},
+    'summary': {'text': ''},
+    'precipitation': {'unit': 'mm/h', 'field_product': 'probability-matched mean',
+                      'series': [dict(drawn_step(0, 4.0, 0.0), p10=0.0, p90=1.0)]},
+})
+check('the headline value is what the map shows', current['precipitation']['value'] == 4.0)
+check('with the members median kept beside it, not instead of it',
+      current['precipitation']['median'] == 0.0)
+check('and it says which number it is',
+      current['precipitation']['product'] == 'probability-matched mean')
 
 
 print('frame encoding: dry is not the same as unmeasured')
