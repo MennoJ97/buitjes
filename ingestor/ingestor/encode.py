@@ -1,9 +1,9 @@
 """Encoding a precipitation field into the frame format the frontend decodes.
 
 Each pixel carries a 16-bit fraction of full-scale rain rate, split high byte
-into R and low byte into G, with alpha 0 where it is dry. The frontend
-recombines the bytes in a shader and applies the colour ramp on the GPU, so a
-frame can be recoloured without refetching it.
+into R and low byte into G. The frontend recombines the bytes in a shader and
+applies the colour ramp on the GPU, so a frame can be recoloured without
+refetching it. Rain rate zero is dry; there is no separate flag for it.
 
 Blue carries a flag rather than data: 255 marks a pixel no radar measured, as
 distinct from one measured and found dry. Both are invisible on the map - there
@@ -11,9 +11,25 @@ is nothing to draw either way - but they are different answers to "is it raining
 there", and the readout under the cursor says so. Observed frames are the ones
 that need it; a forecast covers its whole domain by construction.
 
-Dry pixels are written as fully zeroed RGBA rather than just transparent: large
-uniform runs are what make the lossless WebP small. Unmeasured pixels are a
-uniform run of their own, so the flag costs essentially nothing.
+**Alpha is 255 everywhere, and that is the whole reason the flag works.** It
+used to be zero on dry pixels, which read as the obvious choice - nothing to
+draw, so draw nothing - and quietly broke the feature it shared a pixel with. A
+browser reading a frame back gets it through a 2D canvas, whose backing store is
+premultiplied: a pixel at alpha zero has its colour multiplied away before
+anything can ask what it was, and comes back (0, 0, 0, 0) no matter what was
+encoded. So every unmeasured pixel - a quarter of an observed frame - arrived at
+the readout indistinguishable from dry, which is exactly the bug the blue flag
+was added to fix. Opaque frames survive that round trip.
+
+It costs nothing: a constant alpha plane compresses better than a varying one,
+and the frames came out 5% *smaller*. The shader does not need alpha either -
+it already returns nothing for a rate of zero, which dry and unmeasured pixels
+both are - and `exact` is no longer needed, since a frame with no transparent
+pixels has nothing for the encoder to rewrite underneath.
+
+Dry pixels are otherwise written as fully zeroed RGB: large uniform runs are
+what make the lossless WebP small. Unmeasured pixels are a uniform run of their
+own, so the flag costs essentially nothing.
 """
 
 from __future__ import annotations
@@ -52,7 +68,8 @@ def encode_frame(values_mm_h, max_precip_mm_h: float, measured=None) -> bytes:
     """Encode a (h, w) array of mm/h into a lossless WebP frame.
 
     ``measured`` is an optional boolean mask; where it is False the pixel is
-    flagged as unmeasured instead of dry.
+    flagged as unmeasured instead of dry. See the module docstring for why the
+    result is opaque rather than transparent where it is dry.
     """
     values = np.asarray(values_mm_h, dtype=np.float32)
     wet = values >= DRY_THRESHOLD_MM_H
@@ -69,16 +86,11 @@ def encode_frame(values_mm_h, max_precip_mm_h: float, measured=None) -> bytes:
     rgba[:, :, 1] = (packed & 0xFF).astype(np.uint8)
     if measured is not None:
         rgba[:, :, 2] = np.where(measured, 0, NO_DATA_FLAG).astype(np.uint8)
-    rgba[:, :, 3] = np.where(wet, 255, 0).astype(np.uint8)
+    rgba[:, :, 3] = 255
 
     buffer = io.BytesIO()
-    # exact=True, or WebP rewrites the colour under fully transparent pixels to
-    # whatever compresses best - which is a fine trade for a picture and a
-    # silent data loss for us, since the no-data flag lives in exactly those
-    # pixels. It costs a percent or two of frame size.
     Image.fromarray(rgba, 'RGBA').save(
-        buffer, format='WEBP', lossless=True, quality=100, method=ENCODER_EFFORT,
-        exact=True,
+        buffer, format='WEBP', lossless=True, quality=100, method=ENCODER_EFFORT
     )
     return buffer.getvalue()
 
@@ -92,7 +104,10 @@ def decode_frame(data: bytes, max_precip_mm_h: float):
     packed = rgba[:, :, 0].astype(np.uint32) * 256 + rgba[:, :, 1].astype(np.uint32)
     values = packed.astype(np.float32) / 65535.0 * max_precip_mm_h
     measured = rgba[:, :, 2] < NO_DATA_FLAG
-    return np.where(rgba[:, :, 3] == 0, 0.0, values), measured
+    # Dry is a rate of zero rather than an alpha of zero, so nothing here reads
+    # alpha - which also means this still decodes frames written before the
+    # format went opaque.
+    return values, measured
 
 
 # -------------------------------------------------------------------- spread

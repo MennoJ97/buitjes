@@ -227,6 +227,28 @@ check('an unmeasured pixel is flagged, not zeroed into dryness',
 _, all_measured = decode_frame(encode_frame(values, 100.0), 100.0)
 check('a frame with no mask is measured everywhere', all_measured.all())
 
+# The flag is only readable at all because the frame is opaque: a browser reads
+# a pixel back through a premultiplying 2D canvas, which erases the colour of
+# anything at alpha zero. A dry pixel is one with a rate of zero, nothing more.
+payload = encode_frame(values, 100.0, measured)
+pixels = np.array(Image.open(io.BytesIO(payload)).convert('RGBA'))
+check('every pixel is opaque, dry and unmeasured alike', (pixels[:, :, 3] == 255).all())
+check('and the flag rides on a pixel a canvas can still read',
+      pixels[1, 0, 2] == 255 and pixels[1, 0, 3] == 255)
+check('a dry pixel is zero rain rather than zero alpha',
+      pixels[0, 0, 0] == 0 and pixels[0, 0, 1] == 0 and pixels[0, 0, 3] == 255)
+
+# Frames written before the format changed are still in the volume and in
+# browser caches until they age out, so decoding must not depend on alpha.
+legacy = np.array(Image.open(io.BytesIO(payload)).convert('RGBA'))
+legacy[:, :, 3] = np.where(legacy[:, :, 0] + legacy[:, :, 1] > 0, 255, 0)
+buffer = io.BytesIO()
+Image.fromarray(legacy, 'RGBA').save(buffer, format='WEBP', lossless=True,
+                                     quality=100, method=1, exact=True)
+old_decoded, old_measured = decode_frame(buffer.getvalue(), 100.0)
+check('a transparent frame from before the change still decodes',
+      np.allclose(old_decoded, decoded, atol=0.01) and np.array_equal(old_measured, measured))
+
 
 print('alert rules: metrics')
 check('bare rules still parse as median',
