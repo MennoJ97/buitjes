@@ -104,8 +104,10 @@
 
         <div class="modal-body">
             <p>Rainfall over the Netherlands in 5-minute steps: an hour of measured
-               radar behind you, six hours of forecast ahead. Everything is
-               self-hosted — the page talks only to this server.</p>
+               radar behind you, six hours of forecast ahead. Every number on this
+               page comes from this server, which fetches and reduces the weather
+               data itself; the only thing the browser asks anyone else for is the
+               basemap under the rain.</p>
 
             <section class="about-section">
                 <h3>Reading the timeline</h3>
@@ -120,14 +122,22 @@
                 <p class="about-note">The forecast is <em>seamless</em> — that split is a
                    reading aid, not a change of data source. Accuracy drops the further
                    right you scrub.</p>
+                <p class="about-note">A step badged <strong>Estimated</strong> is one KNMI
+                   published empty: all twenty runs identical and the country dry in the
+                   middle of a rain band. Rather than draw that, this stands in for it with
+                   the average of the steps five minutes either side, and says so — on the
+                   map as the badge, on a chart as a dashed line.</p>
             </section>
 
             <section class="about-section">
                 <h3>How sure is it?</h3>
                 <p class="about-note">The forecast is twenty runs, not one. What the map
-                   paints is the middle of them — but where a shower lands is the thing
-                   twenty runs disagree about most, long before they disagree that one is
-                   coming at all.</p>
+                   paints — <strong>Expected</strong> on the switch — is the twenty pooled
+                   into a single field: their average decides where the rain is, and the runs'
+                   own range of intensities decides how hard it falls, so a shower keeps its
+                   edges instead of being smeared across twenty guesses at its position. But
+                   where a shower lands is the thing twenty runs disagree about most, long
+                   before they disagree that one is coming at all.</p>
                 <p class="about-note"><strong>Low</strong> and <strong>High</strong> above the
                    colour bar redraw the map as the dry and wet ends of that disagreement:
                    the rate that all but two of the runs beat, and the one only two of them
@@ -139,6 +149,10 @@
                    kilometre the low end reads zero almost everywhere, because a shower two
                    streets away counts as a miss. So read them as <em>near here</em> rather
                    than <em>exactly here</em>.</p>
+                <p class="about-note">None of this exists over the measured hour: radar is one
+                   number, not twenty, and a measurement has no percentiles to take. Scrub back
+                   into it and the map shows what was measured whichever end you have selected,
+                   and the readout says <em>measured</em> rather than naming a band.</p>
             </section>
 
             <section class="about-section">
@@ -150,10 +164,12 @@
                 <ul class="about-list">
                     <li>
                         <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>
-                        <span class="about-kind">temperature</span>
-                        <p>The KNMI product is precipitation only, so temperature comes from
+                        <span class="about-kind">temperature, wind, solar, rain outlook</span>
+                        <p>The KNMI product is precipitation only, so everything else comes from
                            Open-Meteo's ensemble endpoint — which returns every member, giving
-                           the same kind of spread the rain forecast has. Fetched server-side.</p>
+                           the same kind of spread the rain forecast has. It also carries the rain
+                           outlook past KNMI's six hours, hourly instead of every five minutes.
+                           Fetched server-side.</p>
                     </li>
                 </ul>
             </section>
@@ -203,8 +219,9 @@
                         both are resampled onto a single Web Mercator raster so the map can
                         stretch one canvas over them.</li>
                     <li><strong>16-bit WebP packing.</strong> Each rain rate is split across the red
-                        and green channels of a lossless WebP, so a whole 6-hour cycle is about
-                        a megabyte.</li>
+                        and green channels of a lossless WebP, and blue flags the pixels no radar
+                        measured — so a frame of the whole domain is around 30 KB and a full
+                        6-hour cycle a couple of megabytes.</li>
                     <li><strong>Colour on the GPU.</strong> A WebGL shader recombines those bytes and
                         applies the colour scale, so frames can be recoloured without
                         refetching. A Rust server hands out the finished frames.</li>

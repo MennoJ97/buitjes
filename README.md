@@ -24,8 +24,13 @@ as twitchy as convective rain is a number that will be wrong.
   and the members' own distribution decides how hard it falls. Averaging alone
   smears one shower across twenty guesses at its position; a median erases it
   entirely unless half the members hit the same square kilometre.
-- **Hover anywhere** for the rain rate under the cursor; click for a full
-  forecast at that exact coordinate rather than snapping to a preset location.
+- **The whole map redrawn as either end of the ensemble.** *Expected* is that
+  field; *Low* and *High* swap it for the tenth and ninetieth percentile of what
+  the members put near each pixel, so the gap between them is the argument the
+  ensemble is having, everywhere at once rather than only where you sampled it.
+- **Hover anywhere** for the rain rate under the cursor and the band around it;
+  click for a full forecast at that exact coordinate rather than snapping to a
+  preset location.
 - **A looping radar on the detail page**, centred on the location: the last
   hour measured and the next two extrapolated. The charts say how much and
   when; only a picture says which way it is coming from, and whether a shower
@@ -36,13 +41,26 @@ as twitchy as convective rain is a number that will be wrong.
   comes in two flavours: on your square kilometre, and within ten of them. The
   second is usually what you meant, because members disagree about where a
   shower will land long before they disagree that one is coming.
+- **A chart whose line and band are the same kind of number.** The obvious
+  candidates for the line are both unreadable at one point through time: the
+  members' median is dry unless half of them rain on that exact square
+  kilometre, and the drawn field is dealt by rank across the domain, so it sits
+  at zero until the cell climbs into the wettest few percent and then jumps —
+  which had a line peaking half an hour after the band around it. What is drawn
+  is the neighbourhood median with its own p10–p90, the same statistic the map's
+  *Low* and *High* carry, read at that location. The field and the per-cell
+  percentiles stay published beside it; they are honest numbers, just not ones
+  to draw as a line.
 - **Alerts.** "Tell me when it is about to rain at home", delivered to any
   webhook — ntfy, Gotify, Home Assistant, a two-line script. Fires on the edge
   and then stays quiet, because an alerting system's real failure mode is
   crying wolf twelve times for one shower. A rule can watch the median, a
-  percentile, or the probability itself — the median never crosses for a shower
-  only a third of the ensemble puts on your street, so for those it is the
-  wrong question rather than a stricter one.
+  percentile, the drawn field, or the probability itself — the median never
+  crosses for a shower only a third of the ensemble puts on your street, so for
+  those it is the wrong question rather than a stricter one. `field` is usually
+  the plainest: it fires when the map would paint rain on your location, which
+  is both what most people mean and what they will see on the page the alert
+  points at.
 - **A JSON API** shaped for a homepage dashboard widget.
 - **Five basemaps**, dark through high-contrast, none needing an API key.
 
@@ -59,12 +77,13 @@ as twitchy as convective rain is a number that will be wrong.
 │  ─ decodes NetCDF4 (h5py)         ─ /api/frames/<file>.webp    │
 │  ─ 20 members → one field (pmm)   ─ /api/point/<name>          │
 │  ─ resamples rows to Mercator     ─ /api/current/<name>        │
+│  ─ + a p10/p50/p90 spread frame   ─ /api/conditions            │
 │  ─ encodes 16-bit WebP frames     ─ /healthz  data freshness   │
 │                                   ─ /livez    is it serving?   │
 │           │                                ▲                   │
 │           ▼                                │                   │
-│   docker volume "frames": *.webp + manifest.json (ro for the   │
-│   server, which never writes)                                  │
+│   docker volume "frames": *.webp + manifest.json + the point   │
+│   documents (ro for the server, which never writes)            │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -106,6 +125,13 @@ also lifts the whole band, so too wide and it climbs off the field it describes:
 at 3 km the drawn value still falls inside the band 91% of the time, at 20 km
 only 66%. `SPREAD_RADIUS_KM` documents the trade and blank switches the layer
 off; it is a separate file so a reader who never opens it never downloads it.
+
+The same three numbers are sampled into each configured location's document
+while the members are in memory, which is what the detail chart draws. The
+measured hour has none of this and never will — radar is one number, not twenty,
+and a measurement has no percentiles to take — so the observed frames carry no
+companion, the map shows the measurement itself whichever end is selected, and
+the readout says `measured` rather than naming a band it does not have.
 
 **The timestep that isn't there.** Roughly once a cycle, somewhere around the
 three-hour lead, KNMI's blend publishes a dead step: all twenty members
