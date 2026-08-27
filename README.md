@@ -5,7 +5,7 @@ built on KNMI's seamless ensemble. *Buitje* is Dutch for a passing shower.
 
 *Mostly written by an AI coding assistant — see [Built with AI assistance](#built-with-ai-assistance).*
 
-![The radar map, showing a rain band over the Rhineland](docs/images/map.png)
+![The radar map, showing a rain band over the North Sea, halfway to the Dutch coast](docs/images/map.png)
 
 It answers one question well — **is it going to rain on me, and when** — and
 answers it with the uncertainty intact, because a single number for something
