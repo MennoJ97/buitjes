@@ -56,7 +56,18 @@ DELIVERY_TIMEOUT_SECONDS = 10
 #: alert that never fires, no matter how the probability floor is set. Watching
 #: `p90`, or the neighbourhood probability directly, asks a question that has an
 #: answer in that case.
-RATE_METRICS = ('median', 'mean', 'p10', 'p25', 'p75', 'p90')
+#:
+#: `field` is the fourth way out and usually the plainest: the number the map
+#: paints and the chart draws, which is a whole-domain reconstruction rather
+#: than a percentile of the twenty numbers at one cell. A rule on it fires when
+#: the map would show rain on your location — which is what most people mean by
+#: "tell me when it is going to rain here", and is the same thing they will see
+#: when they open the page the alert points at.
+#:
+#: It is not the default, deliberately. Changing what a bare rule means would
+#: silently change what every existing deployment fires on, and a rule's key
+#: does not encode a default it never wrote down.
+RATE_METRICS = ('median', 'mean', 'p10', 'p25', 'p75', 'p90', 'field')
 PROBABILITY_METRICS = ('prob', 'prob_nearby')
 METRICS = RATE_METRICS + PROBABILITY_METRICS
 
@@ -86,12 +97,16 @@ class Rule:
     def value(self, entry: dict) -> float:
         """This rule's number, out of one published timestep.
 
-        Falls back to the point probability for `prob_nearby`, so a document
-        written before neighbourhood counting existed still evaluates rather
-        than reading as zero and re-arming every latched rule at once.
+        Two fallbacks, both for documents a running container may still be
+        holding from before the key existed: `prob_nearby` reads the point
+        probability, and `field` reads the median. Without them such a rule
+        would evaluate as zero on every step, which does not merely fail to
+        fire - it re-arms every latched rule at once.
         """
         if self.metric == 'prob_nearby' and entry.get('probability_nearby') is None:
             return float(entry.get('probability', 0.0))
+        if self.metric == 'field' and entry.get('field') is None:
+            return float(entry.get('median', 0.0))
         return float(entry.get(self.series_key, 0.0))
 
     @property

@@ -233,7 +233,7 @@ def publish_points(config: Config, source, extractor: PointExtractor,
                 'series': series,
             },
             'summary': summarise(series, source.reference_time,
-                                 extractor.neighbourhood_km),
+                                 extractor.neighbourhood_km, config.max_precip),
             'source': {
                 'dataset': config.dataset,
                 'version': config.version,

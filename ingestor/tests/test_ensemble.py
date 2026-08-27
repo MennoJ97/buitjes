@@ -250,6 +250,18 @@ check('a dry cell with showers around it still says so',
 check('a series with no field at all still reads off the median',
       summarise([step(0, 2.0, 0.0)], REF, 10)['peak_mm_h'] == 2.0)
 
+# The sentence stops where the map does. The field is published unclipped, the
+# frames saturate, and the ramp's top reads "100+" — so a sentence quoting 481
+# names a number nothing on screen can be checked against.
+capped = summarise([drawn_step(0, 481.1, 0.0)], REF, 10, max_mm_h=100.0)
+check('a rate past the frame ceiling reads as "over"',
+      'over 100 mm/h' in capped['text'], capped['text'])
+check('but the structured peak keeps the real number', capped['peak_mm_h'] == 481.1)
+check('a rate inside the ceiling is untouched',
+      '4.2 mm/h' in summarise([drawn_step(0, 4.2, 0.0)], REF, 10, max_mm_h=100.0)['text'])
+check('and with no ceiling given nothing is capped',
+      '481' in summarise([drawn_step(0, 481.1, 0.0)], REF, 10)['text'])
+
 current = current_conditions({
     'generated_at': REF, 'reference_time': REF,
     'location': {'name': 'home', 'lat': 52.0, 'lon': 5.0},
@@ -321,8 +333,10 @@ document = {
     'location': {'name': 'home'},
     'precipitation': {'series': [
         # A shower eight of twenty members put here: dry median, high p90,
-        # and every member wet somewhere nearby.
-        {'t': NOW + 600, 'median': 0.0, 'p90': 2.4, 'mean': 0.9,
+        # every member wet somewhere nearby — and a map painting it at 6 mm/h,
+        # because the field is placed by the ensemble mean rather than counted
+        # at this one cell.
+        {'t': NOW + 600, 'median': 0.0, 'p90': 2.4, 'mean': 0.9, 'field': 6.0,
          'probability': 0.4, 'probability_nearby': 0.95},
     ]},
 }
@@ -348,8 +362,19 @@ legacy = {
     'location': {'name': 'home'},
     'precipitation': {'series': [{'t': NOW + 600, 'median': 1.0, 'probability': 0.9}]},
 }
+field_rule = Rule('home', 'field', 1.0, 3600, 0.0, 3600)
+check('a rule can watch the field the map draws',
+      parse_rules('home:field@1.0:60')[0].metric == 'field')
+check('and it fires on a shower the median never sees',
+      evaluate(document, field_rule, NOW).matched)
+check('reading the field rather than the percentiles beside it',
+      evaluate(document, field_rule, NOW).peak == 6.0,
+      evaluate(document, field_rule, NOW).peak)
+
 check('a document without neighbourhood counts still evaluates',
       evaluate(legacy, median_rule, NOW).matched)
+check('and a field rule on one falls back to the median rather than to zero',
+      evaluate(legacy, Rule('home', 'field', 0.5, 3600, 0.0, 3600), NOW).matched)
 check('and prob_nearby falls back to the point count on it',
       evaluate(legacy, Rule('home', 'prob_nearby', 0.8, 3600, 0.0, 3600), NOW).matched)
 

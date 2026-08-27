@@ -240,7 +240,8 @@ def _round(value: float) -> float:
 
 
 def summarise(series: list[dict], reference_time: int,
-              radius_km: float | None = None) -> dict:
+              radius_km: float | None = None,
+              max_mm_h: float | None = None) -> dict:
     """A plain-language read of the series, for a widget with one line of room.
 
     Describes the same number the map paints and the chart draws - each entry's
@@ -265,6 +266,15 @@ def summarise(series: list[dict], reference_time: int,
 
     ``radius_km`` is only used to name the neighbourhood in the sentence; with
     it left out the text says "nearby" instead.
+
+    ``max_mm_h`` is the frame format's ceiling, and the sentence stops there
+    because the map does. The field is published unclipped, so at the domain's
+    wettest ranked cell it can read 481 mm/h where the frames saturate at 100
+    and the colour ramp's top says "100+" — a rate no reader can check against
+    anything on screen, and one that is only that large because probability
+    matching hands the top rank the wettest value any member produced anywhere.
+    The prose says "over 100 mm/h" there; ``peak_mm_h`` keeps the real number,
+    because a structured field has no ramp to disagree with.
     """
     future = [entry for entry in series if entry['t'] >= reference_time]
     if not future:
@@ -328,18 +338,18 @@ def summarise(series: list[dict], reference_time: int,
     relative = raining_now or lead_minutes < 90
 
     if raining_now:
-        parts = [f'Raining now at {_rate(_drawn(onset))} mm/h']
+        parts = [f'Raining now at {_capped(_drawn(onset), max_mm_h)} mm/h']
     else:
         when = f'in {lead_minutes} min' if relative else f'at {_clock(onset["t"])}'
         parts = [f'Dry now — rain {when}' if peak_matters
-                 else f'Dry now — rain {when} at {_rate(_drawn(onset))} mm/h']
+                 else f'Dry now — rain {when} at {_capped(_drawn(onset), max_mm_h)} mm/h']
 
     if peak_matters:
         climb = round((peak['t'] - onset['t']) / 60)
         parts.append(
-            f'up to {_rate(_drawn(peak))} mm/h within {climb} min'
+            f'up to {_capped(_drawn(peak), max_mm_h)} mm/h within {climb} min'
             if relative and climb <= 30
-            else f'peaking {_rate(_drawn(peak))} mm/h around {_clock(peak["t"])}'
+            else f'peaking {_capped(_drawn(peak), max_mm_h)} mm/h around {_clock(peak["t"])}'
         )
 
     parts.append(
@@ -376,6 +386,13 @@ def _nearby_probability(entry: dict) -> float:
     """
     value = entry.get('probability_nearby')
     return float(entry.get('probability', 0.0) if value is None else value)
+
+
+def _capped(mmh: float, ceiling: float | None) -> str:
+    """A rate as the map can show it, saying "over" where the ramp saturates."""
+    if ceiling and mmh > ceiling:
+        return f'over {_rate(ceiling)}'
+    return _rate(mmh)
 
 
 def _rate(mmh: float) -> str:
