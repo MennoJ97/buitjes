@@ -16,7 +16,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from ingestor.alerts import (  # noqa: E402
-    AlertState, Rule, describe, evaluate, parse_rules, process,
+    AlertRunner, AlertState, Rule, describe, evaluate, parse_rules, process,
 )
 
 NOW = 1_700_000_000
@@ -270,6 +270,129 @@ try:
     check('an unparseable rule is refused at startup', False, '(accepted)')
 except SystemExit:
     check('an unparseable rule is refused at startup', True)
+
+print('stall: one alert per stall, one when it clears')
+# The failure this guards is the same one the rain rules guard, from the other
+# side: an alarm that repeats every minute for a four-hour KNMI outage gets
+# muted, and then the next outage goes unnoticed.
+from ingestor.alerts import StallWatch  # noqa: E402
+
+
+class Collecting:
+    def __init__(self):
+        self.sent = []
+
+    def deliver(self, title, body, tags='cloud_with_rain', payload=None):
+        self.sent.append((title, body, tags))
+        return True
+
+
+sent = Collecting()
+watch = StallWatch(sent, threshold=1800)
+
+watch.check(NOW)
+check('silent before the clock is started', sent.sent == [])
+
+watch.cycle(NOW)
+watch.check(NOW + 1799)
+check('silent under the threshold', sent.sent == [])
+
+watch.check(NOW + 1800)
+check('alerts at the threshold', len(sent.sent) == 1, sent.sent)
+check('the alert says the forecast stalled', 'stalled' in sent.sent[0][0].lower(), sent.sent[0])
+
+watch.check(NOW + 3600)
+watch.check(NOW + 7200)
+check('still exactly one alert for one stall', len(sent.sent) == 1, sent.sent)
+
+watch.cycle(NOW + 7300)
+check('a recovery notice on the next cycle', len(sent.sent) == 2, sent.sent)
+check('the recovery says how long it was quiet',
+      '121 min' in sent.sent[1][1], sent.sent[1])
+
+watch.cycle(NOW + 7600)
+watch.check(NOW + 7600)
+check('no second recovery, and the latch re-armed', len(sent.sent) == 2, sent.sent)
+
+watch.check(NOW + 7600 + 1800)
+check('a later stall alerts again', len(sent.sent) == 3, sent.sent)
+
+
+class Failing:
+    def __init__(self):
+        self.attempts = 0
+
+    def deliver(self, title, body, tags='cloud_with_rain', payload=None):
+        self.attempts += 1
+        return False
+
+
+# Deliberately unlike a rain rule, which retries. A stall lasts hours, and
+# re-attempting a dead webhook every minute until the weather changes is the
+# behaviour this module exists to avoid.
+failing = Failing()
+stubborn = StallWatch(failing, threshold=1800)
+stubborn.cycle(NOW)
+for minute in range(30, 240, 1):
+    stubborn.check(NOW + minute * 60)
+check('a failed delivery is not retried every cycle', failing.attempts == 1,
+      f'{failing.attempts} attempts')
+
+print('stall: built from the webhook alone, not from the rules')
+
+
+def reread():
+    """Config.from_env against whatever os.environ currently says."""
+    sys.modules.pop('ingestor.config', None)
+    import importlib
+    return importlib.import_module('ingestor.config').Config.from_env()
+
+
+os.environ.pop('ALERT_RULES', None)
+os.environ['ALERT_WEBHOOK_URL'] = 'http://example.invalid/rain'
+config = reread()
+check('no rain rules still gets a stall watch', StallWatch.from_config(config) is not None)
+check('and no alert runner', AlertRunner.from_config(config) is None)
+check('with no STALL_WEBHOOK_URL it falls back to the rain one',
+      config.stall_webhook == 'http://example.invalid/rain')
+
+# The separation this exists for: a stall goes to its own topic, and the rain
+# rules keep theirs. Sharing one URL was the earlier behaviour and is still
+# reachable by leaving STALL_WEBHOOK_URL unset, above.
+print('stall: its own webhook, format and auth')
+os.environ['STALL_WEBHOOK_URL'] = 'http://ntfy/alerts'
+os.environ['STALL_ALERT_FORMAT'] = 'ntfy'
+os.environ['STALL_WEBHOOK_AUTH'] = 'Bearer tk_stall'
+os.environ['ALERT_FORMAT'] = 'json'
+os.environ['ALERT_WEBHOOK_AUTH'] = 'Bearer tk_rain'
+config = reread()
+watch = StallWatch.from_config(config)
+check('stall takes its own url', watch.notifier.url == 'http://ntfy/alerts')
+check('stall takes its own format', watch.notifier.format == 'ntfy')
+check('stall takes its own auth', watch.notifier.auth == 'Bearer tk_stall')
+check('the rain settings are untouched',
+      config.alert_format == 'json' and config.alert_auth == 'Bearer tk_rain'
+      and config.alert_webhook == 'http://example.invalid/rain')
+
+# A webhook for the stall and nothing for the rain: the reader who only wants
+# to know when the pipeline dies.
+os.environ.pop('ALERT_WEBHOOK_URL', None)
+os.environ.pop('ALERT_WEBHOOK_AUTH', None)
+config = reread()
+check('stall works with no rain webhook at all',
+      StallWatch.from_config(config) is not None)
+
+os.environ['STALL_ALERT_FORMAT'] = 'smoke-signal'
+try:
+    reread()
+    check('a bad stall format is refused at startup', False, '(accepted)')
+except SystemExit as error:
+    check('a bad stall format is refused at startup',
+          'STALL_ALERT_FORMAT' in str(error), str(error))
+os.environ['STALL_ALERT_FORMAT'] = 'ntfy'
+
+os.environ['STALL_ALERT_SECONDS'] = '0'
+check('zero disables it', StallWatch.from_config(reread()) is None)
 
 print()
 if failures:

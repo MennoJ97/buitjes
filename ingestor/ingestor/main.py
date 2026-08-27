@@ -25,13 +25,16 @@ import re
 import tempfile
 import time
 
-from .blend import BlendFile, reduce_members
+from .blend import (
+    REDUCER_LABELS, SPREAD_PERCENTILES, BlendFile, cell_reach, reduce_members,
+    repaired_steps, spread_fields,
+)
 from .config import Config
-from .encode import encode_frame
+from .encode import SPREAD_FLOOR_MM_H, encode_frame, encode_spread_frame
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
-from .alerts import AlertRunner, describe as describe_alert
+from .alerts import AlertRunner, StallWatch, describe as describe_alert
 from .conditions import ATTRIBUTION as CONDITIONS_ATTRIBUTION, ConditionsSource
 from .raster import MercatorResampler, StereographicResampler, TargetGrid
 
@@ -41,6 +44,7 @@ MANIFEST_NAME = 'manifest.json'
 GRID_NAME = 'grid.json'
 FORECAST_PATTERN = re.compile(r'^p_(\d+)_(\d+)\.webp$')
 OBSERVED_PATTERN = re.compile(r'^o_(\d+)\.webp$')
+SPREAD_PATTERN = re.compile(r'^s_(\d+)_(\d+)\.webp$')
 
 #: Keep observed frames a little past the display window so a browser still
 #: loading the previous manifest does not start hitting 404s.
@@ -51,6 +55,12 @@ def forecast_frame_name(reference_time: int, valid_time: int) -> str:
     # The reference time is part of the name so a re-forecast of the same valid
     # time gets a new URL: frames are served with immutable caching.
     return f'p_{reference_time}_{valid_time}.webp'
+
+
+def spread_frame_name(reference_time: int, valid_time: int) -> str:
+    # Same two stamps as the frame it accompanies, so the pair prunes together
+    # and a re-forecast gets a new URL for both halves at once.
+    return f's_{reference_time}_{valid_time}.webp'
 
 
 def observed_frame_name(valid_time: int) -> str:
@@ -85,35 +95,106 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             resampler.width, resampler.height,
         )
 
-        extractor = PointExtractor(config.widget_locations, source.lat, source.lon)
+        extractor = PointExtractor(
+            config.widget_locations, source.lat, source.lon, config.neighbourhood_km,
+            # So it can read the reduced field, which is cropped where its own
+            # cells are indices into the full KNMI grid.
+            crop_origin=resampler.origin,
+        )
+
+        # Cells, not kilometres, and worked out once: the grid is regular, so
+        # the reach is the same for every pixel and every timestep.
+        reach = None
+        if config.spread_radius_km is not None:
+            reach = cell_reach(
+                config.spread_radius_km,
+                float(source.lat[1] - source.lat[0]),
+                float(source.lon[1] - source.lon[0]),
+                # The middle of the domain: longitude cells shrink towards the
+                # pole, so one reach for all of them is a compromise, and the
+                # middle is where it is least wrong.
+                float(source.lat[len(source.lat) // 2]),
+            )
+            log.info('spread: %.1f km is %d x %d cells', config.spread_radius_km, *reach)
 
         nowcast_until = source.reference_time + config.nowcast_minutes * 60
         frames = []
         written = 0
-        for index, valid_time in enumerate(source.valid_times):
-            # One read serves both outputs: the reduced field for the map and,
-            # while the members are still in memory, the point samples.
-            members = source.members(index)
-            extractor.observe(valid_time, members)
-            field = resampler(reduce_members(members, config.ensemble_stat))
+        spread_written = 0
+        estimated_steps = 0
+        # One read serves both outputs: the reduced field for the map and, while
+        # the members are still in memory, the point samples. Timesteps KNMI
+        # published without an ensemble behind them are stood in for or dropped
+        # before they get here; see :func:`ingestor.blend.repaired_steps`.
+        for valid_time, members, estimated in repaired_steps(source):
+            # Cropped before reducing, not after: pmm pools every value it is
+            # given, so the reduction has to see exactly what will be published
+            # and nothing else.
+            reduced = reduce_members(resampler.crop(members), config.ensemble_stat)
+            # Computed once and used twice: the point documents sample it at
+            # their own cells, the frames carry it for every pixel.
+            nearby = spread_fields(members, *reach) if reach else None
+            # Three outputs off one read: the members for the point
+            # percentiles, the field they were reduced into, and the
+            # neighbourhood band that makes a usable line at a location.
+            extractor.observe(valid_time, members, field=reduced, nearby=nearby,
+                              estimated=estimated)
+            field = resampler(reduced)
             payload = encode_frame(field, config.max_precip)
             name = forecast_frame_name(source.reference_time, valid_time)
             write_atomic(config.frame_dir, name, payload)
             written += len(payload)
-            frames.append({
+            frame = {
                 't': valid_time,
                 'kind': 'nowcast' if valid_time <= nowcast_until else 'forecast',
                 'file': name,
-            })
+            }
+            if reach is not None:
+                # Same members, still in memory: the spread costs a dilation and
+                # a percentile rather than a second read of the file. Dilated
+                # before the crop, so a pixel at the crop edge still sees the
+                # neighbours that exist just outside it.
+                spread = [resampler(resampler.crop(percentile)) for percentile in nearby]
+                spread_payload = encode_spread_frame(spread, config.max_precip)
+                spread_name = spread_frame_name(source.reference_time, valid_time)
+                write_atomic(config.frame_dir, spread_name, spread_payload)
+                spread_written += len(spread_payload)
+                frame['spread'] = spread_name
+            # Present only when true: a reader that has never heard of the flag
+            # reads exactly what it read before, and one that has can say so.
+            if estimated:
+                frame['estimated'] = True
+                estimated_steps += 1
+            frames.append(frame)
 
-        log.info('forecast %s: wrote %d frames, %.1f MiB',
-                 source.reference_time, len(frames), written / 1024 / 1024)
+        log.info('forecast %s: wrote %d frames, %.1f MiB%s%s',
+                 source.reference_time, len(frames), written / 1024 / 1024,
+                 f' + {spread_written / 1024 / 1024:.1f} MiB spread' if spread_written else '',
+                 f' ({estimated_steps} estimated)' if estimated_steps else '')
+        dropped = len(source) - len(frames)
+        if dropped:
+            log.warning('forecast %s: %d of %d steps had nothing to stand in for them '
+                        'and are published as a gap in the timeline',
+                        source.reference_time, dropped, len(source))
 
         publish_points(config, source, extractor, conditions, alert_runner)
 
         meta = {
             'reference_time': source.reference_time,
-            'product': f'{config.ensemble_stat} of {source.member_count} ensemble members',
+            'product': (f'{REDUCER_LABELS[config.ensemble_stat]} of '
+                        f'{source.member_count} ensemble members'),
+            # What the second file on each frame holds, and how to read it. The
+            # frames are useless without this: three bytes on a log scale say
+            # nothing about which percentile or how far around each pixel.
+            'spread': None if reach is None else {
+                'radius_km': config.spread_radius_km,
+                'percentiles': list(SPREAD_PERCENTILES),
+                'channels': ['r', 'g', 'b'],
+                'encoding': 'log8',
+                'floor_mm_h': SPREAD_FLOOR_MM_H,
+                'max_mm_h': config.max_precip,
+                'shape': 'square',
+            },
             # Coordinates too: a client that knows where the user clicked can
             # then pick the nearest published location without another request.
             'points': [
@@ -148,9 +229,18 @@ def publish_points(config: Config, source, extractor: PointExtractor,
                 'unit': 'mm/h',
                 'members': source.member_count,
                 'percentiles': list(PERCENTILES),
+                # What each entry's `field` is, so a reader drawing it can name
+                # it rather than calling every central number a median.
+                'field_product': REDUCER_LABELS[config.ensemble_stat],
+                # What the `nearby_*` keys are a radius of. Absent with the
+                # spread layer switched off, and so are the keys.
+                'nearby_radius_km': config.spread_radius_km,
+                # What `probability_nearby` in each entry is the radius of.
+                'neighbourhood_km': extractor.neighbourhood_km,
                 'series': series,
             },
-            'summary': summarise(series, source.reference_time),
+            'summary': summarise(series, source.reference_time,
+                                 extractor.neighbourhood_km, config.max_precip),
             'source': {
                 'dataset': config.dataset,
                 'version': config.version,
@@ -272,8 +362,8 @@ def fetch_observed(client: KnmiClient, config: Config, grid: TargetGrid,
                     log.info('observed: radar covers %.0f%% of the output grid',
                              resampler.coverage * 100)
                 rate, valid = source.rate_and_validity()
-                field = resampler(rate, valid)
-                payload = encode_frame(field, config.max_precip)
+                field, measured = resampler(rate, valid)
+                payload = encode_frame(field, config.max_precip, measured)
                 write_atomic(config.frame_dir, observed_frame_name(source.valid_time), payload)
                 added += 1
 
@@ -298,7 +388,7 @@ def prune(config: Config, keep_references: set[int], reference_time: int) -> Non
     oldest_observed = reference_time - config.history_minutes * 60 - OBSERVED_GRACE_SECONDS
     removed = 0
     for entry in os.listdir(config.frame_dir):
-        forecast = FORECAST_PATTERN.match(entry)
+        forecast = FORECAST_PATTERN.match(entry) or SPREAD_PATTERN.match(entry)
         observed = OBSERVED_PATTERN.match(entry)
         stale = (
             (forecast and int(forecast.group(1)) not in keep_references)
@@ -364,10 +454,17 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
             'dataset': config.dataset,
             'version': config.version,
             'product': meta['product'],
+            # The same thing in two lengths on purpose. `product` names the
+            # member count for the About dialog; `reducer` is what to call the
+            # number itself, under a value in a tooltip where "of 20 ensemble
+            # members" is noise. The point documents publish this short one too,
+            # so a reader gets the same words whichever route they came by.
+            'reducer': REDUCER_LABELS[config.ensemble_stat],
             'observed': config.observed_dataset if config.history_minutes > 0 else None,
             'attribution': 'KNMI (CC BY 4.0)',
         },
         'points': meta.get('points', []),
+        'spread': meta.get('spread'),
         'frames': frames,
     }
     write_atomic(config.frame_dir, MANIFEST_NAME, json.dumps(manifest).encode())
@@ -406,7 +503,7 @@ def seconds_until_next_publication(config: Config, state: State, now: float) -> 
 
 
 def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
-             check_forecast: bool = True, alert_runner=None) -> None:
+             check_forecast: bool = True, alert_runner=None, stall=None) -> None:
     # A radar-only notification means the forecast cannot have moved, so looking
     # it up would spend a request to learn nothing.
     if not check_forecast and state.grid is not None:
@@ -427,6 +524,15 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
         state.last_forecast_file = filename
         state.forecast_frames, state.meta, state.grid = frames, meta, grid
         reconcile_grid(config, grid)
+        # The transition the stall watch counts from, and deliberately down
+        # here: a cycle that KNMI announced but that failed to download is not
+        # progress, and marking it as such would keep resetting the clock
+        # through exactly the failure worth being told about. Equally
+        # deliberately not a notification — the subscription covers the radar
+        # topic too, so it keeps ticking through a gap in *forecast*
+        # publishing, which is the outage that started all this.
+        if stall:
+            stall.cycle(time.time())
     elif state.grid is None:
         return  # nothing published yet and no new cycle to build one from
 
@@ -506,12 +612,20 @@ def main() -> None:
                  ', '.join(rule.key for rule in config.alert_rules),
                  f'{config.alert_format} webhook' if config.alert_webhook else 'log only')
 
+    stall = StallWatch.from_config(config)
+    if stall:
+        log.info('stall alert after %ds without a new forecast cycle', stall.threshold)
+
     state = State()
+    if stall:
+        # Start the clock at boot, so a process that never manages to ingest
+        # anything reports that too, rather than waiting forever in silence.
+        stall.cycle(time.time())
     continue_kwargs = {'check_forecast': True}
     while True:
         try:
             run_once(client, config, state, conditions,
-                     alert_runner=alert_runner, **continue_kwargs)
+                     alert_runner=alert_runner, stall=stall, **continue_kwargs)
             continue_kwargs = {'check_forecast': True}
             delay = seconds_until_next_publication(config, state, time.time())
         except RateLimited as exc:
@@ -520,6 +634,12 @@ def main() -> None:
         except Exception:
             log.exception('ingest cycle failed')
             delay = config.poll_retry
+
+        # Outside the try, and before the wait: a stall has to be noticed on
+        # both the notification and the polling path, and on the cycles that
+        # raised as much as the ones that came back empty.
+        if stall:
+            stall.check(time.time())
 
         # With notifications there is nothing to wait *for* on a timer: sit on
         # the subscription until KNMI announces a file. The timeout is only a

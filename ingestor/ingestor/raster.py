@@ -109,6 +109,7 @@ class MercatorResampler:
         if col1 - col0 < 2 or row1 - row0 < 2:
             raise ValueError('crop bounds do not overlap the grid')
 
+        self._rows = slice(row0, row1)
         self._cols = slice(col0, col1)
         self.width = col1 - col0
         self.height = int(out_height or (row1 - row0))
@@ -126,10 +127,14 @@ class MercatorResampler:
         lats = np.degrees(2 * np.arctan(np.exp(centres)) - math.pi / 2)
 
         # Fractional position on the source row axis, then linear blend weights.
-        source_rows = np.clip((lats - self._lat0) / self._dlat, 0, len(lat) - 1)
-        self._row_lo = np.floor(source_rows).astype(np.int64)
-        self._row_hi = np.minimum(self._row_lo + 1, len(lat) - 1)
-        self._row_weight = (source_rows - self._row_lo).astype(np.float32)[:, None]
+        # Indices are rebased onto the crop, because that is the only part of
+        # the source this class ever reads - see :meth:`crop`.
+        source_rows = np.clip((lats - self._lat0) / self._dlat, row0, row1 - 1)
+        self._row_lo = np.floor(source_rows).astype(np.int64) - row0
+        self._row_hi = np.minimum(self._row_lo + 1, (row1 - row0) - 1)
+        self._row_weight = (
+            source_rows - row0 - self._row_lo
+        ).astype(np.float32)[:, None]
 
     @property
     def target(self) -> TargetGrid:
@@ -147,11 +152,46 @@ class MercatorResampler:
         """Corner coordinates in MapLibre's order: NW, NE, SE, SW."""
         return self.target.bounds
 
+    @property
+    def source_shape(self):
+        """Shape of the source window, which is what :meth:`__call__` expects."""
+        return (self._rows.stop - self._rows.start, self._cols.stop - self._cols.start)
+
+    @property
+    def origin(self):
+        """``(row, column)`` of the window's first cell in the source grid.
+
+        What a caller holding source-grid indices needs in order to read a
+        cropped field: the point forecasts locate a cell against the full KNMI
+        grid, while the reduced field they want a value from has already been
+        restricted to what will be published.
+        """
+        return (self._rows.start, self._cols.start)
+
+    def crop(self, values):
+        """Restrict a ``(..., nlat, nlon)`` array to the window this reads.
+
+        Reductions across ensemble members belong *inside* this window rather
+        than outside it: a probability-matched mean pools every value in the
+        array it is handed, so reducing the full KNMI domain and cropping
+        afterwards would let rain the map never shows set the intensities on
+        the part it does.
+        """
+        return np.asarray(values)[..., self._rows, self._cols]
+
     def __call__(self, field):
-        """Resample a (nlat, nlon) field; returns (height, width) float32."""
-        columns = np.asarray(field)[:, self._cols]
-        low = columns[self._row_lo].astype(np.float32)
-        high = columns[self._row_hi].astype(np.float32)
+        """Resample a cropped field; returns (height, width) float32.
+
+        ``field`` must already be through :meth:`crop`.
+        """
+        field = np.asarray(field)
+        if field.shape != self.source_shape:
+            raise ValueError(
+                f'expected a field cropped to {self.source_shape}, got {field.shape}; '
+                'pass it through .crop() first'
+            )
+        low = field[self._row_lo].astype(np.float32)
+        high = field[self._row_hi].astype(np.float32)
         return low + (high - low) * self._row_weight
 
 
@@ -223,12 +263,19 @@ class StereographicResampler:
     def __call__(self, field, valid=None):
         """Resample a (rows, columns) source field onto the target grid.
 
-        ``valid`` is an optional boolean mask of usable source pixels; anything
-        outside it, or outside the radar grid, comes back as 0 (encoded as dry,
-        which the frontend renders transparent).
+        Returns ``(values, measured)``: the rain rate, and a mask of the output
+        pixels a radar actually looked at. The two are separate on purpose. The
+        radar composite is a smaller box than the forecast domain the map is
+        drawn on, and it has holes of its own, so a good part of the frame is
+        somewhere no radar can see. Folding that into a zero would publish "no
+        rain" for a place we know nothing about, which is the one thing an
+        observation frame must never claim - the frontend already has words for
+        "no radar here" and could not reach them.
+
+        ``valid`` is an optional boolean mask of usable source pixels.
         """
         gathered = np.asarray(field)[self._rows, self._columns].astype(np.float32)
-        usable = self._inside
+        measured = self._inside
         if valid is not None:
-            usable = usable & np.asarray(valid)[self._rows, self._columns]
-        return np.where(usable, gathered, 0.0)
+            measured = measured & np.asarray(valid)[self._rows, self._columns]
+        return np.where(measured, gathered, 0.0), measured

@@ -1,13 +1,13 @@
 import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
 import { renderBandChart } from './chart.js';
-import { pointForName, pointForCoordinates } from './point.js';
+import { centreOf, pointForName, pointForCoordinates, summariseFrames } from './point.js';
 import { apiFetch } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
 import {
     BASEMAPS, BASEMAP_STORAGE_KEY, OWN_CREDIT,
-    applyPaintOverrides, labelLayerId, storedBasemap, styleFor,
+    applyStyleOverrides, labelLayerId, pristineStyle, storedBasemap, styleFor,
 } from './basemap.js';
 
 /** How each timeline zone is described in the UI. */
@@ -101,9 +101,19 @@ const el = {
     hoverReadout: $('hover-readout'),
     hoverSwatch: $('hover-swatch'),
     hoverValue: $('hover-value'),
+    hoverBand: $('hover-band'),
+    scaleTitle: $('scale-title'),
+    pctSwitch: $('pct-switch'),
+    aboutSpreadRadius: $('about-spread-radius'),
 };
 
 const store = new FrameStore();
+// A spread frame lands after the rate it belongs to: redraw so the band under
+// the cursor, or the field itself when an end of the ensemble is being shown,
+// appears as soon as it can rather than on the next mouse move.
+store.onSpreadLoaded = (frame) => {
+    if (store.frames[currentIndex] === frame) scheduleRender();
+};
 let renderer;
 let currentIndex = 0;
 let isPlaying = false;
@@ -118,6 +128,8 @@ let inspectDom = null;
 /** Which body is currently rendered: 'graph', 'loading', 'failed' or
  *  'uncovered'. Only a change of mode justifies rebuilding the DOM. */
 let inspectMode = null;
+/** Which of the ensemble the map paints: 'mid', 'p10' or 'p90'. */
+let currentBand = 'mid';
 let refreshTimer = null;
 let warmupTimer = null;
 let healthTimer = null;
@@ -156,7 +168,9 @@ map.addControl(
 );
 el.basemapSelect.value = initialBasemap;
 document.body.classList.toggle('theme-light', !!initialConfig.lightUi);
-onStyleReady(() => applyPaintOverrides(map, initialConfig));
+onStyleReady(async () => {
+    applyStyleOverrides(map, initialConfig, await pristineStyle(initialConfig));
+});
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
 // ---------------------------------------------------------------- boot
@@ -231,6 +245,7 @@ async function load({ initial }) {
         renderer.setMaxPrecip(store.maxPrecip);
 
         buildTimeline();
+        setupBandSwitch();
         el.refTime.textContent = formatClock(manifest.reference_time ?? manifest.generated_at);
         describeSources(manifest);
 
@@ -255,6 +270,11 @@ async function load({ initial }) {
             el.loading.style.setProperty('--progress', `${Math.round(progress * 100)}%`);
         });
         el.loading.hidden = true;
+
+        // A cycle the reader is already looking at through one end of the
+        // ensemble has to keep those frames coming, or the map would go blank
+        // on the new manifest and stay blank.
+        if (currentBand !== 'mid') await store.prefetchSpread();
 
         // The frame list just changed, so any cached point series is stale —
         // and with it the summary and the bars, which are built once per series.
@@ -421,10 +441,34 @@ function showFrame(index, { fromSlider = false } = {}) {
 
     const reference = store.manifest.reference_time ?? frames[0].t;
     el.stepLabel.textContent = formatOffset(frame.t - reference);
-    el.kindBadge.textContent = ZONES[frame.kind]?.label ?? frame.kind;
-    el.kindBadge.className = `kind-badge kind-badge--${frame.kind}`;
+    describeFrame(frame);
 
     scheduleRender();
+}
+
+/**
+ * The badge beside the clock: which kind of frame this is, or that it is not
+ * really a frame at all.
+ *
+ * KNMI publishes a timestep with no ensemble behind it about once a cycle, and
+ * the ingestor stands in for it with the average of the steps five minutes
+ * either side rather than let it read as five minutes of nationwide dry. That
+ * is worth saying, and it takes the badge rather than sitting next to it: the
+ * readout is a fixed width so that scrubbing does not shuffle the panel about,
+ * and a badge that appears and disappears per frame is exactly the jitter that
+ * width exists to prevent. The zone bar under the slider still says which part
+ * of the timeline this is, so the kind is not lost — only demoted, for one
+ * frame, under the more important fact that nobody forecast it.
+ */
+function describeFrame(frame) {
+    const zone = ZONES[frame.kind];
+    const kind = zone?.label ?? frame.kind;
+    el.kindBadge.textContent = frame.estimated ? 'Estimated' : kind;
+    el.kindBadge.className = `kind-badge kind-badge--${frame.estimated ? 'estimated' : frame.kind}`;
+    el.kindBadge.title = frame.estimated
+        ? `${kind}, estimated: KNMI published no ensemble for this step, so this `
+          + 'is the average of the steps five minutes either side.'
+        : zone?.hint ?? '';
 }
 
 let renderHandle = null;
@@ -441,16 +485,105 @@ function renderCurrentFrame() {
     const frame = store.frames[currentIndex];
     if (!frame) return;
 
-    const image = store.imageFor(frame);
+    // Which of the twenty runs to paint. "Expected" is the rain frame the map
+    // has always drawn; the two ends come out of the spread frame instead, a
+    // different image and a different encoding, so the shader is told both.
+    // `frame.spread` and not merely `spread`: the observed hour has no companion
+    // frame, because a radar measurement has no ensemble to take percentiles
+    // of. Without that check, scrubbing back into the measured past while Low
+    // or High is selected asked for a file that does not exist and blanked the
+    // map. There the measurement is the only answer, so it is the one drawn.
+    const spread = store.spreadInfo;
+    const wantsBand = currentBand !== 'mid' && spread && frame.spread;
+    const image = wantsBand ? store.requestSpread(frame) : store.imageFor(frame);
+    updateScaleTitle(wantsBand);
+
     if (image) {
+        if (wantsBand) {
+            renderer.readSpreadChannel(spread.percentiles.indexOf(bandPercentile()), spread);
+        } else {
+            renderer.readRainFrames();
+        }
         renderer.draw(image);
     } else {
+        // Nothing to show yet: a spread frame still in flight, or a rain frame
+        // that never arrived. Either way an empty map beats a stale one.
         renderer.clear();
     }
 
     if (inspectPoint) updateInspectPopup();
     // The cursor has not moved, but the rain under it has.
     if (hoverPixel) updateHoverReadout();
+}
+
+/** Which percentile the switch is asking for, as a number. */
+function bandPercentile() {
+    return currentBand === 'p10' ? 10 : 90;
+}
+
+const BAND_TITLES = {
+    mid: 'Rainfall rate',
+    p10: 'Rainfall rate — low',
+    p90: 'Rainfall rate — high',
+};
+
+/**
+ * The legend names what is on screen, not what the switch is set to.
+ *
+ * They part company over the measured hour, which has no ensemble and so is
+ * drawn as itself whatever the switch says. A bar labelled "high" above a radar
+ * measurement would be claiming a percentile of a single number.
+ */
+function updateScaleTitle(showingBand) {
+    el.scaleTitle.textContent = showingBand ? BAND_TITLES[currentBand] : BAND_TITLES.mid;
+}
+
+/**
+ * Switch which of the ensemble the map paints.
+ *
+ * Playback needs every step's spread frame, not just the one on screen, so
+ * moving off "Expected" prefetches them — the one moment the reader has said
+ * they want this layer. Moving back never fetches anything.
+ */
+async function setBand(band) {
+    if (band === currentBand) return;
+    currentBand = band;
+    for (const option of el.pctSwitch.querySelectorAll('.pct-option')) {
+        const active = option.dataset.band === band;
+        option.classList.toggle('is-active', active);
+        option.setAttribute('aria-pressed', String(active));
+    }
+    if (band !== 'mid') {
+        el.loading.hidden = false;
+        await store.prefetchSpread((progress) => {
+            el.loading.style.setProperty('--progress', `${Math.round(progress * 100)}%`);
+        });
+        el.loading.hidden = true;
+    }
+    scheduleRender();
+}
+
+/** Show the switch only where the server publishes a spread layer at all. */
+function setupBandSwitch() {
+    const spread = store.spreadInfo;
+    el.pctSwitch.hidden = !spread;
+    if (!spread) return;
+
+    const radius = Math.round(spread.radius_km);
+    el.pctSwitch.title =
+        `What the twenty ensemble members say, within ${radius} km: `
+        + `Low is p${spread.percentiles[0]}, High is p${spread.percentiles[2]}. `
+        + 'Expected is the field the map normally draws. The measured hour has '
+        + 'no ensemble, so it is shown as itself whichever you pick.';
+    // A span of its own rather than a search-and-replace across the paragraph:
+    // the prose wraps, so the phrase is not contiguous in textContent, and
+    // rewriting the paragraph would flatten the emphasis inside it.
+    if (el.aboutSpreadRadius) el.aboutSpreadRadius.textContent = `${radius} km`;
+    if (el.pctSwitch.dataset.wired) return;
+    el.pctSwitch.dataset.wired = '1';
+    for (const option of el.pctSwitch.querySelectorAll('.pct-option')) {
+        option.addEventListener('click', () => setBand(option.dataset.band));
+    }
 }
 
 function clampIndex(index) {
@@ -569,6 +702,7 @@ function updateHoverReadout() {
     // a frame still downloading is not the same as a point with no radar over it.
     let text;
     let colour = null;
+    let band = '';
     if (!store.isLoaded(frame)) {
         text = store.hasFailed(frame) ? 'unavailable' : 'loading…';
     } else {
@@ -581,15 +715,56 @@ function updateHoverReadout() {
             text = `${formatRate(mmh)} mm/h`;
             colour = colorForRate(mmh);
         }
+        if (mmh !== null) band = describeBand(frame, lng, lat);
     }
 
     el.hoverValue.textContent = text;
+    el.hoverBand.textContent = band;
+    if (band && store.spreadInfo) {
+        el.hoverReadout.title =
+            `The ensemble's 10th to 90th percentile within ${Math.round(store.spreadInfo.radius_km)}`
+            + ' km, each member taken at its wettest inside that radius.';
+    }
+    el.hoverBand.hidden = !band;
     el.hoverSwatch.hidden = colour === null;
     if (colour) el.hoverSwatch.style.background = colour;
     el.hoverReadout.classList.toggle('hover-readout--muted', colour === null);
     el.hoverReadout.hidden = false;
 
     positionHoverReadout();
+}
+
+/**
+ * The ensemble's range under the cursor, as "0.1–2.4".
+ *
+ * Asks for the spread frame as a side effect: the first hover on a step fetches
+ * it, and `onSpreadLoaded` redraws the readout when it lands, so the band
+ * appears a moment after the rate rather than holding it up. A reader who never
+ * hovers never downloads any of this.
+ *
+ * Empty when the band is entirely dry — "0.3 mm/h · 0–0" is noise, and a point
+ * every member agrees is dry has no disagreement worth reporting.
+ *
+ * Prefixed "nearby", and that word is doing real work. Each member is taken at
+ * its wettest within the published radius before the percentiles are read, so
+ * the band sits *above* the rate under the cursor as often as around it — 3.9
+ * mm/h against 4.8–7.6 is not a contradiction, it is a pixel with heavier rain
+ * a couple of kilometres away. Without the word it reads as a bug.
+ */
+function describeBand(frame, lng, lat) {
+    if (!store.spreadInfo) return '';
+    // The measured hour has no band and never will: radar is one number, not
+    // twenty. Saying so beats saying nothing, which reads as a missing feature
+    // — the app opens on the newest observed frame, so an empty readout there
+    // is the first thing anyone sees.
+    if (frame.kind === 'observed') return 'measured';
+    store.requestSpread(frame);
+    const band = store.sampleSpread(frame, lng, lat);
+    if (!band) return '';
+    const low = band.p10 ?? 0;
+    const high = band.p90 ?? 0;
+    if (high < WET_THRESHOLD_MM_H) return '';
+    return `nearby ${formatRate(low)}–${formatRate(high)}`;
 }
 
 /** Offset from the cursor, flipped near an edge so it stays fully on screen. */
@@ -728,7 +903,7 @@ function buildInspectBody(mode) {
                 <span class="popup-at" id="popup-at"></span>
             </div>
             <canvas class="popup-spark" id="popup-spark" height="44"></canvas>
-            <p class="popup-summary">${summarise(inspectSeries, reference)}</p>
+            <p class="popup-summary">${summariseFrames(store, inspectPoint.lng, inspectPoint.lat, reference)}</p>
             ${trendLinkHtml()}
         </div>
     `);
@@ -795,79 +970,6 @@ function drawSparkline(canvas, series) {
     // Marker for the frame currently on screen.
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(currentIndex * barWidth, 0, Math.max(1.5, barWidth - 1), height);
-}
-
-/**
- * Plain-language read of the point series.
- *
- * Describes the *spell* — the contiguous run of wet steps — rather than the
- * moment it begins. The onset rate alone is close to useless: it is by
- * construction the instant the rate crosses the wet threshold, so it is always
- * a small number whether what follows is a five-minute drizzle or the leading
- * edge of a downpour. The peak, and how far ahead of the onset it sits, is what
- * says which.
- *
- * The peak is taken from the current spell only, not the whole series. A second
- * shower three hours later is a different event and should not be quoted as
- * this one's severity.
- */
-function summarise(series, reference) {
-    const future = series.filter((p) => p.t >= reference && p.mmh !== null);
-    if (!future.length) return 'No forecast for this point.';
-
-    const onsetIndex = future.findIndex((p) => (p.mmh ?? 0) >= WET_THRESHOLD_MM_H);
-    if (onsetIndex === -1) return 'Staying dry for the whole forecast.';
-
-    const dryAfter = future.findIndex(
-        (p, i) => i > onsetIndex && (p.mmh ?? 0) < WET_THRESHOLD_MM_H
-    );
-    const spell = future.slice(onsetIndex, dryAfter === -1 ? undefined : dryAfter);
-    const clearsAt = dryAfter === -1 ? null : future[dryAfter].t;
-
-    const onset = spell[0];
-    const peak = spell.reduce((best, p) => ((p.mmh ?? 0) > (best.mmh ?? 0) ? p : best), spell[0]);
-
-    // Only worth its own clause if it is meaningfully heavier than the start —
-    // otherwise it is the same number printed twice.
-    const peakMatters = peak.t !== onset.t && (peak.mmh ?? 0) >= (onset.mmh ?? 0) * 1.5 + 0.05;
-
-    const leadMinutes = Math.round((onset.t - reference) / 60);
-    // Whether the sentence is counting minutes from now or naming clock times.
-    // Mixing the two is what makes "rain at 11:25, up to 4 mm/h within 30 min"
-    // ambiguous — thirty minutes from now, or from the onset two hours away?
-    const relative = onsetIndex === 0 || leadMinutes < 90;
-
-    const parts = [];
-    if (onsetIndex === 0) {
-        // "now" is load-bearing: while the timeline is scrubbed, the line above
-        // this one shows the rate at the frame being looked at, and the two are
-        // different numbers. Without it they read as a contradiction.
-        parts.push(`Raining now at ${formatRate(onset.mmh)} mm/h`);
-    } else {
-        const when = relative ? `in ${leadMinutes} min` : `at ${formatClock(onset.t)}`;
-        // With no peak clause coming, the onset rate is the only figure there
-        // is, so it stays. With one, it would just be the smaller of two.
-        parts.push(peakMatters
-            ? `Dry now — rain ${when}`
-            : `Dry now — rain ${when} at ${formatRate(onset.mmh)} mm/h`);
-    }
-
-    if (peakMatters) {
-        // How fast it builds is the other half of the question, and it is the
-        // gap between onset and peak — so say it in minutes when the sentence
-        // is already relative and the gap is short, rather than making the
-        // reader subtract two clock times.
-        const climb = Math.round((peak.t - onset.t) / 60);
-        parts.push(relative && climb <= 30
-            ? `up to ${formatRate(peak.mmh)} mm/h within ${climb} min`
-            : `peaking ${formatRate(peak.mmh)} mm/h around ${formatClock(peak.t)}`);
-    }
-
-    parts.push(clearsAt
-        ? `easing off around ${formatClock(clearsAt)}`
-        : 'lasting past the end of the forecast');
-
-    return `${parts.join(', ')}.`;
 }
 
 // ---------------------------------------------------------------- trend panel
@@ -943,6 +1045,11 @@ function renderTrend(document_) {
         wrapper.append(heading, chart);
         el.trendBody.appendChild(wrapper);
         renderBandChart(chart, block.series, {
+            // The same choice of line and band the standalone page makes: a
+            // clicked point's series carries no `median` at all, so defaulting
+            // to one drew nothing here while the full page drew the forecast.
+            // No fallback label — `config.label` is this card's heading.
+            ...centreOf(block),
             colour: config.colour,
             zeroFloor: config.zeroFloor,
             minSpan: config.minSpan,
@@ -1168,6 +1275,8 @@ el.basemapSelect.addEventListener('change', (event) => {
 
 /** The basemap whose style is loading, and the one chosen while it loaded. */
 let loadingBasemap = null;
+/** Which stylesheet the map is showing, so a switch within one can stay in place. */
+let showingStyleUrl = initialConfig.styleUrl ?? null;
 let queuedBasemap = null;
 
 /**
@@ -1195,21 +1304,50 @@ function setBasemap(name) {
     else applyBasemap(name);
 }
 
-function applyBasemap(name) {
+async function applyBasemap(name) {
     const config = BASEMAPS[name];
     loadingBasemap = name;
+
+    let pristine = null;
+    try {
+        pristine = await pristineStyle(config);
+    } catch {
+        // Unreachable style: leave the map showing what it has rather than
+        // tearing it down for a replacement that is not coming.
+        finishBasemap(name);
+        return;
+    }
+
+    // Three of the basemaps are the same OpenFreeMap stylesheet, told apart only
+    // by the overrides below. Reloading it to switch between them is not just
+    // waste: setStyle finds a stylesheet it already has, decides the difference
+    // is not worth applying, and the map keeps the repaint or the hidden names
+    // it was already wearing - the picker moves and nothing else does. So a
+    // switch within one stylesheet is only the overrides, applied in place.
+    if (config.styleUrl && config.styleUrl === showingStyleUrl) {
+        applyStyleOverrides(map, config, pristine);
+        finishBasemap(name);
+        return;
+    }
+
+    showingStyleUrl = config.styleUrl ?? null;
     map.setStyle(styleFor(config), { transformStyle: carryRadarOver });
     // Not onStyleReady: right after setStyle the *old* style can still report
     // itself loaded, which would repaint layers that are about to be replaced.
     map.once('styledata', () => {
-        loadingBasemap = null;
-        applyPaintOverrides(map, config);
+        applyStyleOverrides(map, config, pristine);
         // A new style brings a new credits line, opened by MapLibre again.
         collapseAttribution();
-        const queued = queuedBasemap;
-        queuedBasemap = null;
-        if (queued && queued !== name) applyBasemap(queued);
+        finishBasemap(name);
     });
+}
+
+/** Release the lock, and honour a choice made while this one was being applied. */
+function finishBasemap(name) {
+    loadingBasemap = null;
+    const queued = queuedBasemap;
+    queuedBasemap = null;
+    if (queued && queued !== name) applyBasemap(queued);
 }
 
 el.settingsBtn.addEventListener('click', () => togglePopover(el.settingsPopover, el.settingsBtn));
@@ -1385,10 +1523,19 @@ function updateControlClearance() {
  * licences ask for.
  *
  * Re-applied on styledata because switching basemaps rebuilds the control.
+ *
+ * Both halves of MapLibre's open/closed state have to go. It keeps the state
+ * twice — the `open` attribute, which decides whether the credits render, and
+ * the `compact-show` class, which its CSS hangs the expanded padding on — and
+ * its click handler branches on the class alone. Clearing only `open` left the
+ * class saying "expanded", so the chip sat there as an empty pill, and the
+ * first click read the stale class, took the collapse branch, and cancelled
+ * out the browser's own <details> toggle. It took two clicks to open.
  */
 function collapseAttribution() {
-    for (const node of document.querySelectorAll('details.maplibregl-ctrl-attrib[open]')) {
+    for (const node of document.querySelectorAll('details.maplibregl-ctrl-attrib')) {
         node.removeAttribute('open');
+        node.classList.remove('maplibregl-compact-show');
     }
 }
 

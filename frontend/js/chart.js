@@ -35,12 +35,45 @@ function niceStep(range, target = 4) {
 }
 
 /**
+ * Which of a chain's keys an entry's line comes from, or undefined if it
+ * carries none of them.
+ *
+ * Absent is resolved to absent rather than to a number. Reading a key straight
+ * off an entry gave `undefined` for a step that did not have it, and undefined
+ * arrives at the axis as NaN: one such step took `Math.max` for the whole
+ * series with it, so the axis had no range, every coordinate was NaN and the
+ * chart went blank — the forecast half that did have the key included.
+ */
+export function centreKeyFor(entry, centreKeys) {
+    return centreKeys.find((key) => entry[key] != null);
+}
+
+/** The value a chart draws for one entry, or null where it draws nothing. */
+export function centreValue(entry, centreKeys) {
+    const key = centreKeyFor(entry, centreKeys);
+    return key === undefined ? null : entry[key];
+}
+
+/**
  * Render one series into a container.
  *
  * `series` entries are `{t, p10, p25, median, p75, p90}`. `options.zeroFloor`
  * pins the axis at zero, which is right for rain and solar (a band dipping
  * below zero would be nonsense) but wrong for temperature, where the interesting
  * variation is a few degrees somewhere well above it.
+ *
+ * `options.centreKeys` names the entry fields the line may come from, best
+ * first, because it is not always a median and calling it one in the code is how
+ * it ends up being called one to a reader. A temperature series really is a
+ * median of its members; a rain series is drawn as the neighbourhood median the
+ * map's spread layer carries. `options.centreLabels` names them in the tooltip,
+ * one label per key, so the tooltip says which of them the number under the
+ * pointer actually came from.
+ *
+ * More than one key because a series need not be homogeneous. A clicked point's
+ * rain series is an hour of observed radar in front of the forecast, and a
+ * measurement has no ensemble behind it, so those steps carry no neighbourhood
+ * median and the chain falls through to the measured value for them alone.
  */
 /** Floor for a chart with nothing to stretch into — a narrow single column. */
 const MIN_CHART_HEIGHT = 190;
@@ -54,7 +87,20 @@ export function renderBandChart(container, series, options = {}) {
         formatValue = (value) => String(value),
         now = null,
         minSpan = 1,
+        centreKeys = ['median'],
+        centreLabels = [''],
+        // Outer band first, inner second. Named rather than assumed, because a
+        // line and a band drawn from different kinds of number look unrelated:
+        // a neighbourhood median rises when rain arrives near you, a per-cell
+        // p10–p90 rises when it arrives *on* you, and plotting one inside the
+        // other put the peak of each an hour from the other.
+        bands = [['p10', 'p90', 0.16], ['p25', 'p75', 0.26]],
     } = options;
+    const centre = (entry) => centreValue(entry, centreKeys);
+    const centreLabel = (entry) => {
+        const index = centreKeys.indexOf(centreKeyFor(entry, centreKeys));
+        return index === -1 ? '' : centreLabels[index] ?? '';
+    };
 
     container.innerHTML = '';
     if (!series || series.length < 2) {
@@ -77,8 +123,36 @@ export function renderBandChart(container, series, options = {}) {
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
 
-    const lows = series.map((entry) => entry.p10);
-    const highs = series.map((entry) => entry.p90);
+    // The centre has to be inside the axis, not merely near it. It used to be
+    // safe to derive the range from the band alone, back when the line was that
+    // band's own median and could not leave it. A rain chart draws the field
+    // instead, which is a whole-domain reconstruction and can sit well above
+    // p90 — 141 mm/h against a p90 of 3.1 where a shower only a fifth of the
+    // members forecast lands on one cell — and the line simply left the plot.
+    //
+    // Collected rather than reduced per entry, so a step missing the centre or
+    // the band contributes nothing instead of poisoning the pair it is in:
+    // `Math.min(Infinity, undefined)` is NaN, and one NaN in here is a chart
+    // with no axis at all.
+    const [outerLow, outerHigh] = bands[0] ?? [];
+    const lows = [];
+    const highs = [];
+    for (const entry of series) {
+        const value = centre(entry);
+        if (value !== null) {
+            lows.push(value);
+            highs.push(value);
+        }
+        if (entry[outerLow] != null) lows.push(entry[outerLow]);
+        if (entry[outerHigh] != null) highs.push(entry[outerHigh]);
+    }
+    if (!lows.length) {
+        const empty = document.createElement('p');
+        empty.className = 'chart-empty';
+        empty.textContent = 'No data for this location.';
+        container.appendChild(empty);
+        return;
+    }
     let min = zeroFloor ? 0 : Math.min(...lows);
     let max = Math.max(...highs);
     // A flat series - a dry night, darkness - would otherwise collapse the axis
@@ -112,25 +186,78 @@ export function renderBandChart(container, series, options = {}) {
         svg.appendChild(label);
     }
 
+    // One polygon per unbroken run that has the pair, rather than one for the
+    // whole series. Skipped where it is missing, because a band faked from
+    // absent keys collapses onto the line and reads as certainty — but skipped
+    // per step, not wholesale. A clicked point's series carries an hour of
+    // observed radar in front of the forecast, and a measurement has no
+    // ensemble behind it, so those thirteen steps have no band; dropping the
+    // whole thing over them left every clicked point with a bare line and no
+    // spread anywhere, which is how this was found.
     const band = (lowKey, highKey, opacity) => {
-        const top = series.map((entry) => `${x(entry.t)},${y(entry[highKey])}`);
-        const bottom = series.map((entry) => `${x(entry.t)},${y(entry[lowKey])}`).reverse();
-        svg.appendChild(element('polygon', {
-            points: [...top, ...bottom].join(' '),
-            fill: colour,
-            'fill-opacity': opacity,
-        }));
+        let run = [];
+        const flush = () => {
+            if (run.length > 1) {
+                const top = run.map((entry) => `${x(entry.t)},${y(entry[highKey])}`);
+                const bottom = run.map((entry) => `${x(entry.t)},${y(entry[lowKey])}`).reverse();
+                svg.appendChild(element('polygon', {
+                    points: [...top, ...bottom].join(' '),
+                    fill: colour,
+                    'fill-opacity': opacity,
+                }));
+            }
+            run = [];
+        };
+        for (const entry of series) {
+            if (entry[lowKey] == null || entry[highKey] == null) flush();
+            else run.push(entry);
+        }
+        flush();
     };
-    band('p10', 'p90', 0.16);
-    band('p25', 'p75', 0.26);
+    for (const [low, high, opacity] of bands) band(low, high, opacity);
 
-    svg.appendChild(element('polyline', {
-        points: series.map((entry) => `${x(entry.t)},${y(entry.median)}`).join(' '),
-        fill: 'none',
-        stroke: colour,
-        'stroke-width': 2,
-        'stroke-linejoin': 'round',
-    }));
+    // One polyline per unbroken run that has a centre, on the same rule as the
+    // bands above: a step carrying none of the keys is a hole in the line, not a
+    // point at zero. With the chain in place a hole means the series really has
+    // nothing there, which is rare — but it used to render as NaN coordinates,
+    // and an SVG polyline with a NaN in its points draws nothing at all.
+    let line = [];
+    const flushLine = () => {
+        if (line.length > 1) {
+            svg.appendChild(element('polyline', {
+                points: line.map((entry) => `${x(entry.t)},${y(centre(entry))}`).join(' '),
+                fill: 'none',
+                stroke: colour,
+                'stroke-width': 2,
+                'stroke-linejoin': 'round',
+            }));
+        }
+        line = [];
+    };
+    for (const entry of series) {
+        if (centre(entry) === null) flushLine();
+        else line.push(entry);
+    }
+    flushLine();
+
+    // Steps the ingestor stood in for. KNMI publishes a timestep with no
+    // ensemble behind it about once a cycle, and what is plotted there is the
+    // average of the five minutes either side rather than anything forecast.
+    // Marked rather than broken out of the line: a gap in a rain chart reads as
+    // a dry spell, which is the very thing the stand-in exists to avoid.
+    for (const entry of series) {
+        if (!entry.estimated) continue;
+        const mark = element('line', {
+            x1: x(entry.t), x2: x(entry.t),
+            y1: pad.top, y2: pad.top + plotHeight,
+            class: 'chart-estimated',
+        });
+        const caption = element('title');
+        caption.textContent = 'Estimated from the steps either side — KNMI '
+            + 'published no ensemble for this one.';
+        mark.appendChild(caption);
+        svg.appendChild(mark);
+    }
 
     // Where "now" falls, so past and future are distinguishable at a glance.
     if (now !== null && now > firstTime && now < series[series.length - 1].t) {
@@ -202,6 +329,7 @@ export function renderBandChart(container, series, options = {}) {
     attachHover({
         container, svg, series, unit, colour, formatValue,
         width, padLeft: pad.left, plotWidth, firstTime, span, x, y,
+        centre, centreLabel, bands,
     });
 }
 
@@ -210,11 +338,17 @@ export function renderBandChart(container, series, options = {}) {
  *
  * Reading a band off an axis gives you the median easily enough; the useful
  * numbers — how far apart the members are at that moment — are the ones you
- * cannot eyeball. So the tooltip leads with the median and then names both
- * bands explicitly.
+ * cannot eyeball. So the tooltip leads with the median and then names each
+ * band it actually has explicitly.
  */
+/** Tooltip offset from the crosshair, and from the edges of the card. */
+const TIP_GAP = 10;
+const TIP_EDGE = 6;
+
 function attachHover({ container, svg, series, unit, colour, formatValue,
-                       width, padLeft, plotWidth, firstTime, span, x, y }) {
+                       width, padLeft, plotWidth, firstTime, span, x, y,
+                       centre, centreLabel, bands }) {
+    // `centreLabel` is a function of the entry here, not a string.
     const crosshair = element('line', { class: 'chart-crosshair', y1: 0, y2: 0, x1: 0, x2: 0 });
     crosshair.style.display = 'none';
     svg.appendChild(crosshair);
@@ -249,8 +383,11 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
         crosshair.setAttribute('y2', svg.viewBox.baseVal.height - 22);
         crosshair.style.display = '';
         marker.setAttribute('cx', px);
-        marker.setAttribute('cy', y(entry.median));
-        marker.style.display = '';
+        // Hidden rather than parked at NaN where this step has no line: the
+        // crosshair and the readings below it are still worth having.
+        const value = centre(entry);
+        marker.setAttribute('cy', value === null ? 0 : y(value));
+        marker.style.display = value === null ? 'none' : '';
 
         const stamp = span > 18 * 3600 ? formatDayClock(entry.t) : formatClock(entry.t);
         // The axis formatter is deliberately coarse; reusing it here would round
@@ -259,22 +396,49 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
             Math.abs(value) < 100 ? (Math.round(value * 10) / 10).toFixed(1) : String(Math.round(value));
         const range = (low, high) =>
             (precise(low) === precise(high) ? precise(low) : `${precise(low)}–${precise(high)}`);
+        // A row per band the series actually carries, and nothing where it does
+        // not. A point read off the map frames has p10, the median and p90 and
+        // no quartiles — three channels is three percentiles — and naming a
+        // band that is not there printed "50% of members NaN–NaN". Same rule as
+        // the polygons above: absent is drawn as absent, never as a value.
+        const bandRow = (label, low, high) =>
+            (low == null || high == null
+                ? ''
+                : `<span class="tip-band"><i>${label}</i>${range(low, high)}</span>`);
 
+        // The label follows the value: which key supplied it varies along a
+        // mixed series, and naming the neighbourhood median over a measured
+        // step would describe a number that is not there.
+        const centreName = centreLabel(entry);
         tooltip.innerHTML =
             `<span class="tip-time">${stamp}</span>` +
-            `<span class="tip-value">${precise(entry.median)}<small>${unit}</small></span>` +
-            `<span class="tip-band"><i>50% of members</i>${range(entry.p25, entry.p75)}</span>` +
-            `<span class="tip-band"><i>80% of members</i>${range(entry.p10, entry.p90)}</span>` +
+            `<span class="tip-value">${value === null ? '—' : precise(value)}` +
+            `<small>${unit}</small></span>` +
+            (value !== null && centreName
+                ? `<span class="tip-centre">${centreName}</span>` : '') +
+            bands.map(([low, high, , label]) =>
+                bandRow(label ?? '80% of members', entry[low], entry[high])).join('') +
             (entry.probability !== undefined
                 ? `<span class="tip-band"><i>chance of rain</i>${Math.round(entry.probability * 100)}%</span>`
                 : '');
         tooltip.hidden = false;
 
-        // Flip to the other side of the crosshair near the right edge so the
-        // tooltip never leaves the card.
+        // Right of the crosshair by preference, flipped to its left where that
+        // would run past the card — and then clamped inside the card either
+        // way. Flipping alone is only enough while the card has room for the
+        // tooltip on both sides of the pointer; on a phone the card is barely
+        // wider than the tooltip, so a flip near the middle of the plot put its
+        // left edge at a negative offset and half the numbers off the screen.
+        const cardWidth = container.clientWidth || rect.width;
+        const tipWidth = tooltip.offsetWidth;
         const leftPx = (px / width) * rect.width;
-        const flip = leftPx > rect.width - tooltip.offsetWidth - 16;
-        tooltip.style.left = `${flip ? leftPx - tooltip.offsetWidth - 10 : leftPx + 10}px`;
+        let left = leftPx + TIP_GAP;
+        if (left + tipWidth > cardWidth - TIP_EDGE) left = leftPx - TIP_GAP - tipWidth;
+        // Lower bound last: where the tooltip is wider than the space either
+        // side of the pointer it sits against the left edge and overlaps the
+        // crosshair, which is still readable, unlike hanging off the card.
+        left = Math.max(TIP_EDGE, Math.min(left, cardWidth - tipWidth - TIP_EDGE));
+        tooltip.style.left = `${left}px`;
     };
 
     const hide = () => {

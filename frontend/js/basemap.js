@@ -10,14 +10,18 @@
  * app.js: there are two maps now.
  */
 
-const carto = (name) => `https://a.basemaps.cartocdn.com/${name}/{z}/{x}/{y}.png`;
-const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 // OpenFreeMap serves OpenStreetMap vector tiles without a key or a quota, and
 // its TileJSON carries its own attribution, so nothing needs crediting here.
-const OFM_DARK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
+//
+// Three of the five basemaps were CARTO's raster tiles until CARTO began
+// requiring an API key for that endpoint and watermarking every request without
+// one - "API KEY REQUIRED", diagonally, across every tile. A free key exists,
+// but it would be a key shipped in a public page, for a raster service CARTO is
+// retiring in favour of vector, and it would cost this app the one property
+// worth having here: that a reader can run it with nothing but a KNMI key.
+const ofm = (name) => `https://tiles.openfreemap.org/styles/${name}`;
+const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-const CARTO_CREDIT =
-    '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors';
 const OSM_CREDIT =
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
@@ -93,37 +97,35 @@ const HIGH_CONTRAST_DARK = {
 };
 
 /**
- * Raster basemaps are split into a label-free ground layer and a separate label
- * layer, so place names can be drawn back on top of the radar. Rain at 70%
- * opacity over an all-in-one basemap swallows exactly the city names you want
- * to locate it by.
+ * A `styleUrl` entry is a vector style: the whole style is JSON we can repaint,
+ * and MapLibre draws the place names as real text on top of the radar. That
+ * last part is what matters — rain at 70% opacity over a basemap with its names
+ * baked in swallows exactly the city names you want to locate it by. See
+ * HIGH_CONTRAST_DARK for how far the repainting is worth taking.
  *
- * A `styleUrl` entry is a vector style instead: the whole style is JSON we can
- * repaint, and MapLibre draws the place names as real text on top of the radar
- * rather than as a second image. See HIGH_CONTRAST_DARK for why the one style
- * that has to be legible is built that way.
+ * Three of these are the same OpenFreeMap style wearing different clothes,
+ * which is the point: one cartography, tuned three ways. Plain for a reader who
+ * wants the map to look like a map, repainted for one who needs to read rain
+ * over it, and stripped of its names for one who wants only the rain.
  *
- * OpenStreetMap's standard tiles are one image with the names baked in, so they
- * cannot be split — its labels necessarily sit *under* the radar. That is the
- * trade-off for the familiar look, and the radar opacity slider is the remedy.
+ * A `ground` entry is a raster sandwich instead, and OpenStreetMap's standard
+ * tiles are the reason that path still exists: one image with the names baked
+ * in, so they cannot be split and necessarily sit *under* the radar. That is
+ * the trade-off for the familiar look, and the opacity slider is the remedy.
  */
 export const BASEMAPS = {
     dark: {
         label: 'Dark',
-        ground: carto('dark_nolabels'),
-        labels: carto('dark_only_labels'),
-        credit: CARTO_CREDIT,
+        styleUrl: ofm('dark'),
     },
     contrast: {
         label: 'Dark, high contrast',
-        styleUrl: OFM_DARK_STYLE,
+        styleUrl: ofm('dark'),
         paint: HIGH_CONTRAST_DARK,
     },
     light: {
         label: 'Light',
-        ground: carto('light_nolabels'),
-        labels: carto('light_only_labels'),
-        credit: CARTO_CREDIT,
+        styleUrl: ofm('positron'),
         lightUi: true,
     },
     osm: {
@@ -135,13 +137,16 @@ export const BASEMAPS = {
     },
     minimal: {
         label: 'Dark, no labels',
-        ground: carto('dark_nolabels'),
-        labels: null,
-        credit: CARTO_CREDIT,
+        styleUrl: ofm('dark'),
+        hideLabels: true,
     },
 };
 
-const DEFAULT_BASEMAP = 'dark';
+// The repainted one, not the plain one. Both are now the same OpenFreeMap
+// cartography, so the only thing separating them is legibility under rain - and
+// on the plain style a place name sitting under a heavy cell loses. A first
+// visit should get the one that was tuned for the job.
+const DEFAULT_BASEMAP = 'contrast';
 export const BASEMAP_STORAGE_KEY = 'buitjes.basemap';
 const LEGACY_BASEMAP_KEY = 'stratus.basemap';
 
@@ -191,30 +196,83 @@ export function styleFor(config) {
 export const labelLayerId = (layers) =>
     layers.find((layer) => layer.id === 'labels' || layer.type === 'symbol')?.id;
 
+/** The ground layers any basemap repaints, so the others can put them back. */
+const GROUND_LAYERS = Object.assign({}, ...Object.values(BASEMAPS)
+    .filter((config) => config.paint)
+    .map((config) => config.paint.ground));
+
 const colourKey = (type) =>
     type === 'background' ? 'background-color' : type === 'fill' ? 'fill-color' : 'line-color';
 
-const setPaint = (map, id, paint) => {
-    for (const [property, value] of Object.entries(paint)) {
-        map.setPaintProperty(id, property, value);
-    }
-};
+/** Style JSON by URL, so three basemaps sharing one style cost a single fetch. */
+const styleCache = new Map();
 
 /**
- * Repaint a freshly loaded vector style. Done with setPaintProperty against the
- * live style rather than by rewriting the JSON on its way in, so the same call
- * covers the initial load and every later switch.
+ * A vector basemap's stylesheet as its author wrote it, fetched once and kept.
+ *
+ * Kept because it is the only record of what these layers look like untouched,
+ * and switching *away* from a repainted basemap needs that: nothing else can
+ * say what colour a layer is supposed to go back to.
  */
-export function applyPaintOverrides(map, config) {
-    if (!config.paint) return;
-    for (const layer of map.getStyle().layers) {
-        const ground = config.paint.ground[layer.id];
-        if (ground) {
-            map.setPaintProperty(layer.id, colourKey(layer.type), ground);
-        } else if (layer.id.startsWith('place_')) {
-            setPaint(map, layer.id, config.paint.place);
-        } else if (layer.id === 'water_name') {
-            setPaint(map, layer.id, config.paint.water);
+export async function pristineStyle(config) {
+    if (!config.styleUrl) return null;
+    if (!styleCache.has(config.styleUrl)) {
+        const response = await fetch(config.styleUrl);
+        if (!response.ok) throw new Error(`basemap style ${response.status}`);
+        styleCache.set(config.styleUrl, await response.json());
+    }
+    return styleCache.get(config.styleUrl);
+}
+
+/** Every paint property any basemap repaints, so the others can put it back. */
+function repaintedKeys() {
+    const keys = new Set();
+    for (const config of Object.values(BASEMAPS)) {
+        if (!config.paint) continue;
+        for (const key of Object.keys(config.paint.place)) keys.add(key);
+        for (const key of Object.keys(config.paint.water)) keys.add(key);
+    }
+    return keys;
+}
+
+/**
+ * Fix up a loaded vector style: hide its names, repaint them, or put both back.
+ *
+ * Every property is resolved against `pristine` and then set, whether this
+ * basemap changes it or not. That symmetry is the whole design. Applying only
+ * what a basemap overrides works exactly once - the first time - and after that
+ * leaves the last basemap's repaint sitting under the new one's name, because
+ * three of these are one OpenFreeMap stylesheet and switching between them
+ * gives MapLibre nothing to reload. Setting the pristine value *is* the undo.
+ *
+ * Done against the live style rather than by handing setStyle a rewritten one:
+ * a stylesheet that differs from the showing one only in paint is a diff
+ * MapLibre may decide is not worth applying, and it silently was not.
+ *
+ * `hideLabels` hides every symbol layer rather than only the place names,
+ * because the ones left behind are the giveaway: road shields and the little
+ * one-way arrows are not places, but a map that has dropped its city names and
+ * kept its motorway numbers looks broken rather than deliberate.
+ */
+export function applyStyleOverrides(map, config, pristine) {
+    if (!pristine) return;
+    const keys = repaintedKeys();
+    for (const layer of pristine.layers) {
+        if (layer.type === 'symbol') {
+            map.setLayoutProperty(layer.id, 'visibility',
+                config.hideLabels ? 'none' : layer.layout?.visibility ?? 'visible');
+        }
+
+        const wanted = config.paint;
+        if (layer.id in GROUND_LAYERS) {
+            const key = colourKey(layer.type);
+            map.setPaintProperty(layer.id, key,
+                wanted?.ground[layer.id] ?? layer.paint?.[key]);
+        } else if (layer.id.startsWith('place_') || layer.id === 'water_name') {
+            const source = layer.id === 'water_name' ? wanted?.water : wanted?.place;
+            for (const key of keys) {
+                map.setPaintProperty(layer.id, key, source?.[key] ?? layer.paint?.[key]);
+            }
         }
     }
 }

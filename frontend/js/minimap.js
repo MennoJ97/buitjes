@@ -13,7 +13,8 @@
 
 import { RadarRenderer, FrameStore } from './radar.js';
 import {
-    BASEMAPS, OWN_CREDIT, applyPaintOverrides, labelLayerId, storedBasemap, styleFor,
+    BASEMAPS, OWN_CREDIT, applyStyleOverrides, labelLayerId, pristineStyle, storedBasemap,
+    styleFor,
 } from './basemap.js';
 import { formatClock } from './time.js';
 import { apiFetch } from './key.js';
@@ -155,14 +156,21 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
         // MapLibre opens the compact attribution on load, which on a card this
         // small is a bar across the whole map. Same reasoning as the full map:
         // collapsed it is one ⓘ, and a click still shows every credit.
+        //
+        // The `compact-show` class has to go along with `open`: MapLibre holds
+        // its open/closed state in both, and its click handler reads the class,
+        // so leaving it set costs the reader their first click. See
+        // collapseAttribution in app.js.
         requestAnimationFrame(() => {
-            mapEl.querySelector('details.maplibregl-ctrl-attrib[open]')?.removeAttribute('open');
+            const attrib = mapEl.querySelector('details.maplibregl-ctrl-attrib');
+            attrib?.removeAttribute('open');
+            attrib?.classList.remove('maplibregl-compact-show');
         });
         mapEl.classList.toggle('theme-light', !!config.lightUi);
         map.on('error', (event) => fail('map error', event?.error));
-        map.once('load', () => {
+        map.once('load', async () => {
             try {
-                applyPaintOverrides(map, config);
+                applyStyleOverrides(map, config, await pristineStyle(config));
                 addRadarLayer();
             } catch (error) {
                 fail('could not add the radar layer', error);

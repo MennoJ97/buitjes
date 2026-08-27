@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 from .alerts import parse_rules
-from .points import parse_locations
+from .points import NEIGHBOURHOOD_KM, parse_locations
 
 
 def _float_list(raw: str):
@@ -32,6 +32,8 @@ class Config:
     crop_bounds: tuple | None
     output_height: int | None
     ensemble_stat: str
+    neighbourhood_km: float
+    spread_radius_km: float | None
     max_precip: float
     nowcast_minutes: int
     keep_cycles: int
@@ -49,6 +51,10 @@ class Config:
     alert_format: str
     alert_auth: str
     alert_state_file: str
+    stall_alert: int
+    stall_webhook: str
+    stall_format: str
+    stall_auth: str
 
     @classmethod
     def from_env(cls) -> 'Config':
@@ -62,6 +68,10 @@ class Config:
         alert_format = os.environ.get('ALERT_FORMAT', 'json').strip().lower()
         if alert_format not in ('json', 'ntfy'):
             raise SystemExit(f'ALERT_FORMAT must be json or ntfy (got {alert_format!r})')
+        stall_format = os.environ.get('STALL_ALERT_FORMAT', alert_format).strip().lower()
+        if stall_format not in ('json', 'ntfy'):
+            raise SystemExit(
+                f'STALL_ALERT_FORMAT must be json or ntfy (got {stall_format!r})')
         try:
             alert_rules = parse_rules(os.environ.get('ALERT_RULES', ''))
         except ValueError as error:
@@ -80,9 +90,23 @@ class Config:
 
         crop = os.environ.get('CROP_BOUNDS', '').strip()
         height = os.environ.get('OUTPUT_HEIGHT', '').strip()
-        stat = os.environ.get('ENSEMBLE_STAT', 'median').strip().lower()
-        if stat not in ('median', 'mean', 'max'):
-            raise SystemExit(f'ENSEMBLE_STAT must be median, mean or max (got {stat!r})')
+        stat = os.environ.get('ENSEMBLE_STAT', 'pmm').strip().lower()
+        if stat not in ('pmm', 'median', 'mean', 'max'):
+            raise SystemExit(
+                f'ENSEMBLE_STAT must be pmm, median, mean or max (got {stat!r})'
+            )
+
+        neighbourhood = float(os.environ.get('NEIGHBOURHOOD_KM', NEIGHBOURHOOD_KM))
+        if neighbourhood < 0:
+            raise SystemExit('NEIGHBOURHOOD_KM cannot be negative')
+
+        # Blank switches the spread layer off entirely rather than meaning zero,
+        # because zero is a legitimate setting here: it asks for the percentiles
+        # of this square kilometre alone. Same idea as OUTPUT_HEIGHT.
+        spread = os.environ.get('SPREAD_RADIUS_KM', '3').strip()
+        spread_radius = float(spread) if spread else None
+        if spread_radius is not None and spread_radius < 0:
+            raise SystemExit('SPREAD_RADIUS_KM cannot be negative (leave it blank to disable)')
 
         return cls(
             api_key=api_key,
@@ -110,6 +134,8 @@ class Config:
             crop_bounds=_float_list(crop) if crop else None,
             output_height=int(height) if height else None,
             ensemble_stat=stat,
+            neighbourhood_km=neighbourhood,
+            spread_radius_km=spread_radius,
             max_precip=float(os.environ.get('MAX_PRECIP_MM_H', '100')),
             # Where the timeline stops calling the blend a nowcast. The product
             # itself is seamless; this is a presentation cue, not a data boundary.
@@ -138,7 +164,7 @@ class Config:
             # every 5-minute precipitation cycle.
             conditions_refresh=int(os.environ.get('CONDITIONS_REFRESH_MINUTES', '30')) * 60,
             # "tell me when it is about to rain at X", as
-            # name:threshold_mm_h:lead_minutes[:probability[:quiet_minutes]],
+            # name:[metric@]threshold:lead_minutes[:probability[:quiet_minutes]],
             # semicolons between rules. Delivered to one webhook, which is what
             # ntfy, Gotify, Home Assistant and a shell script all accept.
             alert_rules=alert_rules,
@@ -151,4 +177,21 @@ class Config:
                 'ALERT_STATE_FILE',
                 os.path.join(os.environ.get('FRAME_DIR', '/data'), 'alerts.json'),
             ),
+            # How long the forecast may stop advancing before that is worth an
+            # alert of its own. Wants only ALERT_WEBHOOK_URL: this reports the
+            # pipeline, not the weather, so it is useful to someone who
+            # configured no rain rules at all. 0 disables it.
+            stall_alert=int(os.environ.get('STALL_ALERT_SECONDS', '1800')),
+            # Its own webhook rather than the rain rules'. A stall is a
+            # different kind of news — it is about the pipeline, not the
+            # weather — and it usually wants a different ntfy topic, sometimes
+            # a different service, and often a reader who set no rain rules at
+            # all. Each of the three falls back to its ALERT_* equivalent, so a
+            # deployment that wants one webhook for both still gets it by
+            # setting only those.
+            stall_webhook=(os.environ.get('STALL_WEBHOOK_URL', '').strip()
+                           or os.environ.get('ALERT_WEBHOOK_URL', '').strip()),
+            stall_format=stall_format,
+            stall_auth=(os.environ.get('STALL_WEBHOOK_AUTH', '').strip()
+                        or os.environ.get('ALERT_WEBHOOK_AUTH', '').strip()),
         )

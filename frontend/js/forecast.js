@@ -7,8 +7,8 @@
  * ingestor publishes.
  */
 
-import { renderBandChart } from './chart.js';
-import { pointForName, pointForCoordinates } from './point.js';
+import { renderBandChart, centreValue } from './chart.js';
+import { centreOf, pointForName, pointForCoordinates } from './point.js';
 import { apiFetch, hasApiKey } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
@@ -40,6 +40,10 @@ const CHARTS = [
     {
         key: 'precipitation_outlook', container: 'chart-outlook', meta: 'outlook-meta',
         colour: '#818cf8', zeroFloor: true, minSpan: 1,
+        // Named because the card above it draws a different statistic, and two
+        // rain charts with unlabelled lines invite the reader to compare them
+        // as though they were the same measurement.
+        label: 'median of the members at this point',
         format: (value) => (value >= 10 ? value.toFixed(0) : value.toFixed(1)),
     },
 ];
@@ -156,9 +160,31 @@ function render(document_) {
     $('summary-text').textContent = document_.summary?.text ?? '';
     $('location-coords').textContent =
         `${document_.location.lat.toFixed(4)}, ${document_.location.lon.toFixed(4)}`;
-    $('rain-note').textContent = document_.precipitation?.median_only
-        ? 'KNMI ensemble median · 5-minute steps · no spread away from a sampled location'
-        : 'KNMI ensemble · 5-minute steps';
+    // The note names the statistic on the line, since the two rain cards now
+    // carry different ones — a neighbourhood median here, a per-cell median in
+    // the outlook, and no radius small enough to change that; see below.
+    const rain = document_.precipitation;
+    const radius = rain?.nearby_radius_km ?? rain?.band_radius_km;
+    $('rain-note').textContent = describeSeries(
+        radius
+            ? `KNMI ensemble · 5-minute steps · median and spread within ${Math.round(radius)} km`
+            : rain?.frame_only
+                ? 'KNMI ensemble, probability-matched mean · 5-minute steps · no spread away from a sampled location'
+                : 'KNMI ensemble · 5-minute steps',
+        rain,
+    );
+    // Not a neighbourhood: this model's grid is about 0.125 degrees, so every
+    // point within ten kilometres of another returns the identical series and a
+    // radius would be a no-op. Per-cell members is what it can honestly offer.
+    const outlookNote = $('outlook-note');
+    if (outlookNote) {
+        outlookNote.textContent = describeSeries(
+            "Beyond KNMI's 6 hours · hourly · "
+            + `${document_.conditions_source?.model ?? 'separate model'} `
+            + '· median and spread of the members at this point',
+            document_.precipitation_outlook,
+        );
+    }
 
     renderSummaryStats(document_);
     showRadar(document_.location);
@@ -174,6 +200,7 @@ function render(document_) {
         }
         meta.textContent = describeRange(block);
         renderBandChart(container, block.series, {
+            ...centreOf(block, config.label),
             unit: block.unit,
             colour: config.colour,
             zeroFloor: config.zeroFloor,
@@ -192,11 +219,30 @@ function render(document_) {
     ].filter(Boolean).join(' · ');
 }
 
-/** Min/max of the median line, which is what a glance at a card wants. */
+/**
+ * A card's note, plus a word about the dashed marker when the series has one.
+ *
+ * The marker is amber, sits on one timestep, and is otherwise explained only by
+ * a hover title — which is no use to anyone wondering what the orange line in
+ * their chart is.
+ */
+function describeSeries(note, block) {
+    const estimated = (block?.series ?? []).some((entry) => entry.estimated);
+    return estimated ? `${note} · dashed: estimated step` : note;
+}
+
+/** Min/max of the line, which is what a glance at a card wants. */
 function describeRange(block) {
-    const medians = block.series.map((entry) => entry.median);
-    const low = Math.min(...medians);
-    const high = Math.max(...medians);
+    // The range names what the card actually plots, band included. Reporting
+    // the line alone had the header saying "0–0.5 mm/h" over an axis running to
+    // 1.5, because the axis has to fit a band the header never mentioned.
+    const { centreKeys, bands = [['p10', 'p90']] } = centreOf(block);
+    const [low_, high_] = bands[0];
+    const values = block.series.flatMap((entry) => [
+        centreValue(entry, centreKeys), entry[low_], entry[high_],
+    ].filter((value) => value != null));
+    const low = Math.min(...values);
+    const high = Math.max(...values);
     const round = (value) => (Math.abs(value) >= 10 ? Math.round(value) : Math.round(value * 10) / 10);
     return `${round(low)}–${round(high)} ${block.unit}`;
 }
@@ -215,9 +261,14 @@ function renderSummaryStats(document_) {
     const ahead = (block) => (block?.series ?? []).filter((entry) => entry.t >= reference);
 
     const rain = ahead(document_.precipitation);
-    const peak = rain.length ? Math.max(...rain.map((entry) => entry.median)) : 0;
+    // Down the same chain the chart draws, so these describe the line above
+    // them. A step with none of its keys counts as nothing rather than as NaN,
+    // which one missing step used to make of both numbers.
+    const rainCentre = centreOf(document_.precipitation).centreKeys;
+    const drawn = (entry) => centreValue(entry, rainCentre) ?? 0;
+    const peak = rain.length ? Math.max(...rain.map(drawn)) : 0;
     // 5-minute steps, so a rate in mm/h contributes a twelfth of an hour.
-    const total = rain.reduce((sum, entry) => sum + entry.median / 12, 0);
+    const total = rain.reduce((sum, entry) => sum + drawn(entry) / 12, 0);
     const items = [
         ['Peak rate', `${peak.toFixed(1)} mm/h`],
         ['Total expected', `${total.toFixed(1)} mm`],

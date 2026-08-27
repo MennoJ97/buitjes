@@ -59,6 +59,7 @@
     <div class="hover-readout" id="hover-readout" aria-hidden="true" hidden>
         <span class="hover-swatch" id="hover-swatch"></span>
         <span class="hover-value" id="hover-value"></span>
+        <span class="hover-band" id="hover-band" hidden></span>
     </div>
 
     <div class="banner" id="banner" role="alert" hidden>
@@ -103,8 +104,10 @@
 
         <div class="modal-body">
             <p>Rainfall over the Netherlands in 5-minute steps: an hour of measured
-               radar behind you, six hours of forecast ahead. Everything is
-               self-hosted — the page talks only to this server.</p>
+               radar behind you, six hours of forecast ahead. Every number on this
+               page comes from this server, which fetches and reduces the weather
+               data itself; the only thing the browser asks anyone else for is the
+               basemap under the rain.</p>
 
             <section class="about-section">
                 <h3>Reading the timeline</h3>
@@ -119,6 +122,37 @@
                 <p class="about-note">The forecast is <em>seamless</em> — that split is a
                    reading aid, not a change of data source. Accuracy drops the further
                    right you scrub.</p>
+                <p class="about-note">A step badged <strong>Estimated</strong> is one KNMI
+                   published empty: all twenty runs identical and the country dry in the
+                   middle of a rain band. Rather than draw that, this stands in for it with
+                   the average of the steps five minutes either side, and says so — on the
+                   map as the badge, on a chart as a dashed line.</p>
+            </section>
+
+            <section class="about-section">
+                <h3>How sure is it?</h3>
+                <p class="about-note">The forecast is twenty runs, not one. What the map
+                   paints — <strong>Expected</strong> on the switch — is the twenty pooled
+                   into a single field: their average decides where the rain is, and the runs'
+                   own range of intensities decides how hard it falls, so a shower keeps its
+                   edges instead of being smeared across twenty guesses at its position. But
+                   where a shower lands is the thing twenty runs disagree about most, long
+                   before they disagree that one is coming at all.</p>
+                <p class="about-note"><strong>Low</strong> and <strong>High</strong> above the
+                   colour bar redraw the map as the dry and wet ends of that disagreement:
+                   the rate that all but two of the runs beat, and the one only two of them
+                   reach. The gap between them is how much the ensemble is arguing. Hover
+                   anywhere to read all three at once.</p>
+                <p class="about-note">Both are taken over
+                   <span id="about-spread-radius">a small radius</span>
+                   rather than a single square kilometre, which is deliberate: at one
+                   kilometre the low end reads zero almost everywhere, because a shower two
+                   streets away counts as a miss. So read them as <em>near here</em> rather
+                   than <em>exactly here</em>.</p>
+                <p class="about-note">None of this exists over the measured hour: radar is one
+                   number, not twenty, and a measurement has no percentiles to take. Scrub back
+                   into it and the map shows what was measured whichever end you have selected,
+                   and the readout says <em>measured</em> rather than naming a band.</p>
             </section>
 
             <section class="about-section">
@@ -130,10 +164,12 @@
                 <ul class="about-list">
                     <li>
                         <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>
-                        <span class="about-kind">temperature</span>
-                        <p>The KNMI product is precipitation only, so temperature comes from
+                        <span class="about-kind">temperature, wind, solar, rain outlook</span>
+                        <p>The KNMI product is precipitation only, so everything else comes from
                            Open-Meteo's ensemble endpoint — which returns every member, giving
-                           the same kind of spread the rain forecast has. Fetched server-side.</p>
+                           the same kind of spread the rain forecast has. It also carries the rain
+                           outlook past KNMI's six hours, hourly instead of every five minutes.
+                           Fetched server-side.</p>
                     </li>
                 </ul>
             </section>
@@ -147,20 +183,16 @@
                         <p>Open-source GPU map rendering, served from this host rather than a CDN.</p>
                     </li>
                     <li>
-                        <a href="https://carto.com/basemaps" target="_blank" rel="noopener">CARTO basemaps</a>
-                        <span class="about-kind">tiles</span>
-                        <p>Ground and label layers drawn separately so place names stay readable
-                           through the rain. Built from
-                           <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
-                           data.</p>
-                    </li>
-                    <li>
                         <a href="https://openfreemap.org/" target="_blank" rel="noopener">OpenFreeMap</a>
                         <span class="about-kind">tiles</span>
-                        <p>OpenStreetMap vector tiles, free and without a key. The high-contrast
-                           dark style is their Dark style recoloured here: quiet roads, white
-                           place names on a heavy halo, and the rain ramp left as the only real
-                           colour on the map.</p>
+                        <p><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+                           vector tiles, free and without a key. Four of the five basemaps come
+                           from here: their Dark and Positron styles as they are, plus two more
+                           built from Dark — the high-contrast one recoloured here for quiet
+                           roads and white place names on a heavy halo, and a plain one with the
+                           names taken off altogether. Because the names are real text rather
+                           than part of a picture, the rain slides underneath them instead of
+                           over them.</p>
                     </li>
                     <li>
                         <a href="https://www.openstreetmap.org/" target="_blank" rel="noopener">OpenStreetMap standard tiles</a>
@@ -183,8 +215,9 @@
                         both are resampled onto a single Web Mercator raster so the map can
                         stretch one canvas over them.</li>
                     <li><strong>16-bit WebP packing.</strong> Each rain rate is split across the red
-                        and green channels of a lossless WebP, so a whole 6-hour cycle is about
-                        a megabyte.</li>
+                        and green channels of a lossless WebP, and blue flags the pixels no radar
+                        measured — so a frame of the whole domain is around 30 KB and a full
+                        6-hour cycle a couple of megabytes.</li>
                     <li><strong>Colour on the GPU.</strong> A WebGL shader recombines those bytes and
                         applies the colour scale, so frames can be recoloured without
                         refetching. A Rust server hands out the finished frames.</li>
@@ -281,7 +314,12 @@
             <div class="zone-key" id="zone-key"></div>
             <div class="scale">
                 <div class="scale-head">
-                    <span class="scale-title">Rainfall rate</span>
+                    <span class="scale-title" id="scale-title">Rainfall rate</span>
+                    <div class="pct-switch" id="pct-switch" role="group" aria-label="Which of the ensemble to draw" hidden>
+                        <button type="button" class="pct-option" data-band="p10">Low</button>
+                        <button type="button" class="pct-option is-active" data-band="mid" aria-pressed="true">Expected</button>
+                        <button type="button" class="pct-option" data-band="p90">High</button>
+                    </div>
                     <span class="scale-unit">mm/h</span>
                 </div>
                 <canvas id="legend-canvas" class="scale-bar"></canvas>

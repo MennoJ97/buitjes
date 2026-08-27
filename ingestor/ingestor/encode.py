@@ -1,12 +1,35 @@
 """Encoding a precipitation field into the frame format the frontend decodes.
 
 Each pixel carries a 16-bit fraction of full-scale rain rate, split high byte
-into R and low byte into G, with alpha 0 where it is dry. The frontend
-recombines the bytes in a shader and applies the colour ramp on the GPU, so a
-frame can be recoloured without refetching it.
+into R and low byte into G. The frontend recombines the bytes in a shader and
+applies the colour ramp on the GPU, so a frame can be recoloured without
+refetching it. Rain rate zero is dry; there is no separate flag for it.
 
-Dry pixels are written as fully zeroed RGBA rather than just transparent: large
-uniform runs are what make the lossless WebP small.
+Blue carries a flag rather than data: 255 marks a pixel no radar measured, as
+distinct from one measured and found dry. Both are invisible on the map - there
+is nothing to draw either way - but they are different answers to "is it raining
+there", and the readout under the cursor says so. Observed frames are the ones
+that need it; a forecast covers its whole domain by construction.
+
+**Alpha is 255 everywhere, and that is the whole reason the flag works.** It
+used to be zero on dry pixels, which read as the obvious choice - nothing to
+draw, so draw nothing - and quietly broke the feature it shared a pixel with. A
+browser reading a frame back gets it through a 2D canvas, whose backing store is
+premultiplied: a pixel at alpha zero has its colour multiplied away before
+anything can ask what it was, and comes back (0, 0, 0, 0) no matter what was
+encoded. So every unmeasured pixel - a quarter of an observed frame - arrived at
+the readout indistinguishable from dry, which is exactly the bug the blue flag
+was added to fix. Opaque frames survive that round trip.
+
+It costs nothing: a constant alpha plane compresses better than a varying one,
+and the frames came out 5% *smaller*. The shader does not need alpha either -
+it already returns nothing for a rate of zero, which dry and unmeasured pixels
+both are - and `exact` is no longer needed, since a frame with no transparent
+pixels has nothing for the encoder to rewrite underneath.
+
+Dry pixels are otherwise written as fully zeroed RGB: large uniform runs are
+what make the lossless WebP small. Unmeasured pixels are a uniform run of their
+own, so the flag costs essentially nothing.
 """
 
 from __future__ import annotations
@@ -20,11 +43,39 @@ from PIL import Image
 #: colour ramp (0.1 mm/h), so nothing visible is discarded.
 DRY_THRESHOLD_MM_H = 0.05
 
+#: Blue channel value marking a pixel no radar looked at.
+NO_DATA_FLAG = 255
 
-def encode_frame(values_mm_h, max_precip_mm_h: float) -> bytes:
-    """Encode a (h, w) array of mm/h into a lossless WebP frame."""
+#: How hard libwebp tries. It is a speed/size knob and 4 - Pillow's default -
+#: sits well past the knee for this data, which is mostly long uniform runs:
+#:
+#: ::
+#:
+#:     method   time/frame   per cycle     size
+#:          0        17 ms       1.2 s    92.6 K
+#:          1        87 ms       6.2 s    31.3 K
+#:          4       155 ms      11.1 s    30.7 K
+#:          6       552 ms      39.7 s    30.7 K
+#:
+#: One is 1.8x faster than four for 2% more bytes - 45 KiB on a 2.2 MiB cycle,
+#: which nobody downloads twice. Six spends half a minute a cycle to save
+#: nothing at all, and zero triples the frame to save 70 ms. The two frames a
+#: step now cost about 10 s of the cycle rather than 24.
+ENCODER_EFFORT = 1
+
+
+def encode_frame(values_mm_h, max_precip_mm_h: float, measured=None) -> bytes:
+    """Encode a (h, w) array of mm/h into a lossless WebP frame.
+
+    ``measured`` is an optional boolean mask; where it is False the pixel is
+    flagged as unmeasured instead of dry. See the module docstring for why the
+    result is opaque rather than transparent where it is dry.
+    """
     values = np.asarray(values_mm_h, dtype=np.float32)
     wet = values >= DRY_THRESHOLD_MM_H
+    if measured is not None:
+        measured = np.asarray(measured, dtype=bool)
+        wet = wet & measured
 
     scaled = np.rint(np.clip(values / max_precip_mm_h, 0.0, 1.0) * 65535.0)
     packed = np.where(wet, scaled, 0).astype(np.uint16)
@@ -33,16 +84,99 @@ def encode_frame(values_mm_h, max_precip_mm_h: float) -> bytes:
     rgba = np.zeros((height, width, 4), dtype=np.uint8)
     rgba[:, :, 0] = (packed >> 8).astype(np.uint8)
     rgba[:, :, 1] = (packed & 0xFF).astype(np.uint8)
-    rgba[:, :, 3] = np.where(wet, 255, 0).astype(np.uint8)
+    if measured is not None:
+        rgba[:, :, 2] = np.where(measured, 0, NO_DATA_FLAG).astype(np.uint8)
+    rgba[:, :, 3] = 255
 
     buffer = io.BytesIO()
-    Image.fromarray(rgba, 'RGBA').save(buffer, format='WEBP', lossless=True, quality=100, method=4)
+    Image.fromarray(rgba, 'RGBA').save(
+        buffer, format='WEBP', lossless=True, quality=100, method=ENCODER_EFFORT
+    )
     return buffer.getvalue()
 
 
 def decode_frame(data: bytes, max_precip_mm_h: float):
-    """Inverse of :func:`encode_frame`, for tests and verification."""
+    """Inverse of :func:`encode_frame`, for tests and verification.
+
+    Returns ``(values, measured)``, matching what was encoded.
+    """
     rgba = np.array(Image.open(io.BytesIO(data)).convert('RGBA'))
     packed = rgba[:, :, 0].astype(np.uint32) * 256 + rgba[:, :, 1].astype(np.uint32)
     values = packed.astype(np.float32) / 65535.0 * max_precip_mm_h
-    return np.where(rgba[:, :, 3] == 0, 0.0, values)
+    measured = rgba[:, :, 2] < NO_DATA_FLAG
+    # Dry is a rate of zero rather than an alpha of zero, so nothing here reads
+    # alpha - which also means this still decodes frames written before the
+    # format went opaque.
+    return values, measured
+
+
+# -------------------------------------------------------------------- spread
+
+#: Bottom of the log scale the spread frames use, matching the bottom of the
+#: colour ramp. Below it there is nothing to draw, so nothing to resolve.
+SPREAD_FLOOR_MM_H = 0.1
+
+#: Byte 0 means dry; 1..255 span the scale, so 255 steps carry the decades.
+_SPREAD_LEVELS = 255
+
+
+def encode_spread_frame(fields, max_precip_mm_h: float) -> bytes:
+    """Encode three rate fields into one lossless WebP, a byte each.
+
+    A rate fits in a byte if the scale is logarithmic. The rain frames spend
+    sixteen bits on a *linear* scale, which is the wasteful way round: at the
+    bottom of the ramp a step is 0.0015 mm/h, finer than KNMI's own 0.01 mm/h
+    quantisation, and at 90 mm/h it is the same absolute step where nobody can
+    read it. Over the ramp's own range - 0.1 to 100 mm/h, three decades - one
+    byte gives steps of 2.8% *of the rate*, which is 0.0028 mm/h at the bottom.
+    Still finer than the source, and far finer than a colour ramp can show.
+
+    ``fields`` are packed into R, G and B in the order given; the caller decides
+    what they mean and the manifest records it. Alpha is opaque everywhere, and
+    that is load-bearing rather than lazy: a browser reading a frame back
+    through a 2D canvas gets premultiplied pixels, so anything stored under
+    alpha zero comes back as zeros. A band's lower edge lives exactly where the
+    map is dry, so it has to sit on an opaque frame to survive being read.
+    """
+    fields = [np.asarray(field, dtype=np.float32) for field in fields]
+    if len(fields) != 3:
+        raise ValueError(f'a spread frame carries exactly three fields, got {len(fields)}')
+
+    height, width = fields[0].shape
+    rgba = np.zeros((height, width, 4), dtype=np.uint8)
+    for channel, field in enumerate(fields):
+        rgba[:, :, channel] = _to_log_byte(field, max_precip_mm_h)
+    rgba[:, :, 3] = 255
+
+    buffer = io.BytesIO()
+    Image.fromarray(rgba, 'RGBA').save(
+        buffer, format='WEBP', lossless=True, quality=100, method=ENCODER_EFFORT,
+        exact=True,
+    )
+    return buffer.getvalue()
+
+
+def _to_log_byte(values, max_precip_mm_h: float):
+    decades = np.log10(max_precip_mm_h / SPREAD_FLOOR_MM_H)
+    clipped = np.clip(values, SPREAD_FLOOR_MM_H, max_precip_mm_h)
+    scaled = 1 + np.rint(
+        np.log10(clipped / SPREAD_FLOOR_MM_H) / decades * (_SPREAD_LEVELS - 1)
+    )
+    return np.where(values >= SPREAD_FLOOR_MM_H, scaled, 0).astype(np.uint8)
+
+
+def decode_spread_frame(data: bytes, max_precip_mm_h: float):
+    """Inverse of :func:`encode_spread_frame`, for tests and verification.
+
+    Returns the three fields in the order they were packed. Zero comes back as
+    zero rather than as the floor, so a dry pixel stays dry through the round
+    trip instead of acquiring 0.1 mm/h it never had.
+    """
+    rgba = np.array(Image.open(io.BytesIO(data)).convert('RGBA'))
+    decades = np.log10(max_precip_mm_h / SPREAD_FLOOR_MM_H)
+    fields = []
+    for channel in range(3):
+        byte = rgba[:, :, channel].astype(np.float32)
+        rate = SPREAD_FLOOR_MM_H * 10 ** ((byte - 1) / (_SPREAD_LEVELS - 1) * decades)
+        fields.append(np.where(byte == 0, 0.0, rate).astype(np.float32))
+    return fields

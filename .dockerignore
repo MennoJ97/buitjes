@@ -16,6 +16,12 @@ docs/
 # Rust build output (the image builds its own)
 backend/target/
 
+# The Android app. Nothing in either image reads it, and its Gradle caches are
+# large, numerous, and — on this FUSE mount — the thing most likely to be
+# half-synced when a build runs. A stale handle under android/.gradle fails the
+# whole context transfer, not just that file.
+android/
+
 # Python
 __pycache__/
 *.py[cod]

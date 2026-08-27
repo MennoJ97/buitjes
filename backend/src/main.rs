@@ -41,6 +41,8 @@ struct AppState {
     /// the same kilometre does not re-decode a cycle of frames to be told the
     /// same thing.
     documents: point::DocumentCache,
+    /// The published extent, cached from the manifest. See `served_domain`.
+    domain: Arc<Mutex<Option<(Instant, Domain)>>>,
     /// Whether the newest forecast was stale the last time anyone asked.
     ///
     /// Only so that going stale — and coming back — is logged once each, on the
@@ -70,6 +72,69 @@ struct ConditionsProxy {
     forecast_hours: u32,
     cache: Arc<Mutex<HashMap<(i32, i32), (Instant, Arc<Vec<u8>>)>>>,
     ttl: Duration,
+    budget: Arc<TokenBucket>,
+    /// Whether the budget was spent the last time anyone asked, so running out
+    /// — and recovering — is logged once each rather than on every request.
+    /// Same reasoning as `AppState::was_stale`.
+    budget_spent: Arc<AtomicBool>,
+}
+
+/// Why a conditions fetch produced no body. The two want different answers:
+/// a spent budget is this server declining to spend more, and is worth a
+/// Retry-After; an upstream failure is Open-Meteo's problem and is a 502.
+enum ConditionsError {
+    Budget,
+    Upstream(String),
+}
+
+/// A ceiling on how often this server calls Open-Meteo, across every caller.
+///
+/// The per-IP rate limit in front of `/api/conditions` bounds any one client.
+/// This bounds the *sum* of them, which is the number Open-Meteo's free tier
+/// actually counts. Without it, a sweep spread over enough source addresses —
+/// or one page bug that refetches on every mouse move — spends the day's quota
+/// in an afternoon, and click-anywhere then fails for everyone until midnight.
+///
+/// Deliberately not per-IP: a quota is a shared resource, so the thing being
+/// protected is shared too. Only an *uncached* coordinate takes a token.
+struct TokenBucket {
+    /// Tokens and the instant they were last computed, under one lock so the
+    /// two cannot drift apart when several requests refill concurrently.
+    state: Mutex<(f64, Instant)>,
+    capacity: f64,
+    per_second: f64,
+}
+
+impl TokenBucket {
+    fn new(capacity: f64, per_second: f64) -> Self {
+        Self {
+            state: Mutex::new((capacity, Instant::now())),
+            capacity,
+            per_second,
+        }
+    }
+
+    fn take(&self) -> bool {
+        self.take_at(Instant::now())
+    }
+
+    /// Split from `take` so refill can be asserted without sleeping.
+    fn take_at(&self, now: Instant) -> bool {
+        // A poisoned lock means some other request panicked mid-refill. Fail
+        // closed: declining to spend quota is the safe direction to be wrong in.
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let (tokens, refilled) = *state;
+        let elapsed = now.saturating_duration_since(refilled).as_secs_f64();
+        let tokens = (tokens + elapsed * self.per_second).min(self.capacity);
+        if tokens < 1.0 {
+            *state = (tokens, now);
+            return false;
+        }
+        *state = (tokens - 1.0, now);
+        true
+    }
 }
 
 const OPEN_METEO_ENDPOINT: &str = "https://ensemble-api.open-meteo.com/v1/ensemble";
@@ -89,6 +154,16 @@ impl ConditionsProxy {
             forecast_hours: env_number("CONDITIONS_FORECAST_HOURS", 48),
             cache: Arc::new(Mutex::new(HashMap::new())),
             ttl: Duration::from_secs(60 * env_number("CONDITIONS_REFRESH_MINUTES", 30) as u64),
+            // Sized against Open-Meteo's free tier (order 10k calls/day, which
+            // the ingestor barely touches: one call per configured location per
+            // refresh). 3/minute sustained is ~4.3k/day, comfortably under it,
+            // and the burst of 60 means a person clicking around the map never
+            // notices the cap exists — only a sweep does.
+            budget: Arc::new(TokenBucket::new(
+                env_number("CONDITIONS_UPSTREAM_BURST", 60) as f64,
+                env_number("CONDITIONS_UPSTREAM_PER_MINUTE", 3) as f64 / 60.0,
+            )),
+            budget_spent: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -104,10 +179,28 @@ impl ConditionsProxy {
         (stored.elapsed() < self.ttl).then(|| Arc::clone(body))
     }
 
-    async fn fetch(&self, latitude: f64, longitude: f64) -> Result<Arc<Vec<u8>>, String> {
+    async fn fetch(&self, latitude: f64, longitude: f64) -> Result<Arc<Vec<u8>>, ConditionsError> {
         let key = Self::key(latitude, longitude);
         if let Some(body) = self.cached(key) {
             return Ok(body);
+        }
+
+        // Charged here rather than in the handler: a cache hit costs Open-Meteo
+        // nothing, so it should not cost a token either.
+        //
+        // Running out — and recovering — is logged on the edge from here for
+        // the same reason. Only a call that actually reaches for a token can
+        // tell the two states apart: with the bucket empty, a cached
+        // coordinate still answers 200, so a handler watching for a successful
+        // response would call that a recovery and flap on every cache hit.
+        if !self.budget.take() {
+            if !self.budget_spent.swap(true, Ordering::Relaxed) {
+                warn!("conditions budget is spent - declining upstream fetches until it refills");
+            }
+            return Err(ConditionsError::Budget);
+        }
+        if self.budget_spent.swap(false, Ordering::Relaxed) {
+            info!("conditions budget has refilled");
         }
 
         let response = self
@@ -125,17 +218,20 @@ impl ConditionsProxy {
             ])
             .send()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ConditionsError::Upstream(error.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(format!("upstream returned {}", response.status()));
+            return Err(ConditionsError::Upstream(format!(
+                "upstream returned {}",
+                response.status()
+            )));
         }
 
         let body = Arc::new(
             response
                 .bytes()
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(|error| ConditionsError::Upstream(error.to_string()))?
                 .to_vec(),
         );
         if let Ok(mut cache) = self.cache.lock() {
@@ -369,6 +465,7 @@ async fn main() {
         )),
         conditions: ConditionsProxy::from_env(),
         documents: point::DocumentCache::new(),
+        domain: Arc::new(Mutex::new(None)),
         was_stale: Arc::new(AtomicBool::new(false)),
     };
 
@@ -405,12 +502,16 @@ async fn main() {
         )
         .with_state(state.clone());
 
-    // /healthz sits outside that trace on purpose. It answers 503 when the
-    // *data* is stale, which is not a failed request, and the container health
-    // check asks every 30 seconds — inside, one KNMI outage would be a WARN
-    // every half minute saying nothing the staleness edge has not said once.
+    // Both probes sit outside that trace on purpose. /healthz answers 503 when
+    // the *data* is stale, which is not a failed request, and the container
+    // health check asks every 30 seconds — inside, one KNMI outage would be a
+    // WARN every half minute saying nothing the staleness edge has not said
+    // once. They are also outside `require_api_key`, which is layered onto
+    // `served` alone: no setting of API_KEY_PROTECTED_PREFIXES can close the
+    // endpoints you need most when something is wrong.
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/livez", get(livez))
         .with_state(state.clone())
         .merge(served);
 
@@ -448,23 +549,53 @@ async fn forecast_age(state: &AppState) -> Option<u64> {
     Some(now.saturating_sub(reference))
 }
 
-/// Reports the freshness of the ingestor's output, so Traefik and the Docker
-/// healthcheck notice a poller that has died or lost its API key.
+/// Is the process serving?
+///
+/// Deliberately says nothing about how fresh the data is. This is what the
+/// container healthcheck reads, and an unhealthy container is dropped from
+/// Traefik's routing table — so anything that answers 503 here takes the whole
+/// site down. An upstream publishing gap must degrade the map, not delete it.
+/// Freshness is /healthz, which the browser reads.
+///
+/// The one thing worth failing on is a frame directory that cannot be read at
+/// all: the mount is broken and no request can be answered correctly anyway.
+/// Keep it to this single stat — a probe that does real work against a volume
+/// that might block would reintroduce the very failure this endpoint removes.
+async fn livez(State(state): State<AppState>) -> impl IntoResponse {
+    let readable = tokio::fs::metadata(&state.frame_dir).await.is_ok();
+    let (status, detail) = liveness(readable);
+    (
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(json!({
+            "status": if readable { "alive" } else { "unavailable" },
+            "detail": detail,
+        })),
+    )
+}
+
+/// Split from the handler so the verdict can be asserted without a router.
+fn liveness(frame_dir_readable: bool) -> (StatusCode, &'static str) {
+    if frame_dir_readable {
+        (StatusCode::OK, "serving")
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "frame directory is not readable",
+        )
+    }
+}
+
+/// Reports the freshness of the ingestor's output, for the browser's staleness
+/// banner and for anyone asking by hand.
+///
+/// Explicitly *not* the container's liveness probe. A 503 here means the data
+/// is old, not that the process is broken, and wiring it into a container
+/// health check deletes the router in front of a server that is working — see
+/// the warning in the README. That job belongs to /livez.
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     let age = forecast_age(&state).await;
-    let (status, ok, detail) = match age {
-        None => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            false,
-            "no manifest yet - the ingestor has not published a cycle",
-        ),
-        Some(seconds) if seconds > state.max_manifest_age => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            false,
-            "the newest forecast is stale - the ingestor is not keeping up",
-        ),
-        Some(_) => (StatusCode::OK, true, "ok"),
-    };
+    let (status, ok, detail) = freshness(age, state.max_manifest_age);
 
     // Log the transition, not the state. See `AppState::was_stale`.
     if state.was_stale.swap(!ok, Ordering::Relaxed) != !ok {
@@ -489,6 +620,26 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
             "max_forecast_age_seconds": state.max_manifest_age,
         })),
     )
+}
+
+/// Split from the handler so the stale case can be asserted without a router.
+///
+/// It is also the guard against the two endpoints quietly collapsing back into
+/// one answer: this one is allowed to say 503, /livez is not.
+fn freshness(age: Option<u64>, max_age: u64) -> (StatusCode, bool, &'static str) {
+    match age {
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "no manifest yet - the ingestor has not published a cycle",
+        ),
+        Some(seconds) if seconds > max_age => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "the newest forecast is stale - the ingestor is not keeping up",
+        ),
+        Some(_) => (StatusCode::OK, true, "ok"),
+    }
 }
 
 /// The manifest, with the list of published locations removed for callers who
@@ -566,7 +717,9 @@ fn is_valid_frame_name(name: &str) -> bool {
     let is_number = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
 
     match prefix {
-        "p" => match rest.split_once('_') {
+        // "p" is the rain field, "s" the ensemble spread that accompanies it;
+        // both are named for the cycle and the timestep, so both prune together.
+        "p" | "s" => match rest.split_once('_') {
             Some((reference, valid)) => is_number(reference) && is_number(valid),
             None => false,
         },
@@ -642,6 +795,17 @@ async fn serve_point_document(state: &AppState, name: &str, prefix: &str) -> Res
             [
                 (header::CONTENT_TYPE, "application/json"),
                 (header::CACHE_CONTROL, "public, max-age=120"),
+                // This body is only served to a request that presented a key,
+                // and it carries the location's coordinates - so a shared cache
+                // must not be free to hand it to the next caller who presents
+                // none. Same reasoning as /api/config, which has always said
+                // this; these two were the pair that did not.
+                //
+                // Only on the 200: the unauthorised answer is a 401 from
+                // require_api_key and the not-found answer below are both
+                // no-store, and a response that is never stored has nothing to
+                // key on.
+                (header::VARY, "x-api-key"),
             ],
             body,
         )
@@ -769,9 +933,15 @@ async fn serve_point_at(
     });
     let conditions = match conditions {
         Ok(body) => serde_json::from_slice::<serde_json::Value>(&body).ok(),
-        Err(error) => {
-            // Worth a line, not worth a failed request: the rain series is the
-            // part a caller at this endpoint actually came for.
+        // Worth a line, not worth a failed request: the rain series is the
+        // part a caller at this endpoint actually came for. A spent budget is
+        // named as such rather than logged as an upstream failure — the two
+        // send whoever reads this to different places.
+        Err(ConditionsError::Budget) => {
+            warn!("conditions skipped for an ad-hoc point: the Open-Meteo budget is spent");
+            None
+        }
+        Err(ConditionsError::Upstream(error)) => {
             warn!("conditions unavailable for an ad-hoc point: {error}");
             None
         }
@@ -828,6 +998,92 @@ fn point_response(body: Vec<u8>) -> Response {
         .into_response()
 }
 
+/// The rectangle this server publishes frames for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Domain {
+    west: f64,
+    east: f64,
+    south: f64,
+    north: f64,
+}
+
+impl Domain {
+    /// Inclusive, so a click on the very edge of the rendered image counts.
+    /// A NaN coordinate compares false against everything and so is rejected
+    /// here rather than needing a check of its own — `"NaN".parse::<f64>()`
+    /// succeeds, so one does reach this.
+    fn contains(&self, latitude: f64, longitude: f64) -> bool {
+        (self.south..=self.north).contains(&latitude)
+            && (self.west..=self.east).contains(&longitude)
+    }
+}
+
+/// How long a read extent is reused before the manifest is consulted again.
+/// The bounds only change when the ingestor's crop configuration does, which is
+/// a restart-level event; this is just so such a change is eventually noticed.
+const DOMAIN_REFRESH: Duration = Duration::from_secs(300);
+
+/// Pull the extent out of the manifest's `bounds` polygon.
+///
+/// Takes the extremes of the corners rather than assuming which corner comes
+/// first: the winding order is the ingestor's business, and a reader that
+/// silently depends on it is a reader that breaks quietly when it changes.
+fn domain_from_manifest(raw: &[u8]) -> Option<Domain> {
+    let manifest: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    let corners = manifest.get("bounds")?.as_array()?;
+    if corners.is_empty() {
+        return None;
+    }
+
+    let (mut longitudes, mut latitudes) = (Vec::new(), Vec::new());
+    for corner in corners {
+        let pair = corner.as_array()?;
+        longitudes.push(pair.first()?.as_f64()?);
+        latitudes.push(pair.get(1)?.as_f64()?);
+    }
+
+    Some(Domain {
+        west: longitudes.iter().copied().fold(f64::INFINITY, f64::min),
+        east: longitudes.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        south: latitudes.iter().copied().fold(f64::INFINITY, f64::min),
+        north: latitudes.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    })
+}
+
+/// The served extent, read from the manifest and cached.
+///
+/// A failed re-read keeps the extent already in hand rather than discarding it:
+/// the manifest is rewritten every cycle, and catching it mid-write must not
+/// turn into either an open proxy or a dead click-anywhere feature. Only the
+/// very first read can come up empty, and at that point nothing else works
+/// either — there are no frames to click on yet.
+async fn served_domain(state: &AppState) -> Option<Domain> {
+    if let Ok(cached) = state.domain.lock() {
+        if let Some((read, domain)) = *cached {
+            if read.elapsed() < DOMAIN_REFRESH {
+                return Some(domain);
+            }
+        }
+    }
+
+    let fresh = tokio::fs::read(state.frame_dir.join(MANIFEST_NAME))
+        .await
+        .ok()
+        .as_deref()
+        .and_then(domain_from_manifest);
+
+    match state.domain.lock() {
+        Ok(mut cached) => match fresh {
+            Some(domain) => {
+                *cached = Some((Instant::now(), domain));
+                Some(domain)
+            }
+            None => (*cached).map(|(_, domain)| domain),
+        },
+        Err(_) => fresh,
+    }
+}
+
 /// Conditions for any coordinate inside the served domain.
 ///
 /// Returns Open-Meteo's ensemble response unchanged: the client already knows
@@ -842,6 +1098,40 @@ async fn serve_conditions(
         Err(response) => return response,
     };
 
+    // The whole globe used to be in range here, which made the set of distinct
+    // cache keys — and so the set of possible outbound calls — effectively
+    // unbounded. The map can only show what the ingestor publishes frames for,
+    // so anything outside that rectangle is a typo or a sweep either way.
+    //
+    // Rejected rather than clamped on purpose: clamping would answer a click on
+    // London with Amsterdam's weather and label it London, which is a worse
+    // failure than saying no. The frontend already treats a failed conditions
+    // fetch as "no extra conditions" and still draws the radar series.
+    let Some(domain) = served_domain(&state).await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::RETRY_AFTER, "10"),
+            ],
+            br#"{"status":"warming_up","error":"the served area is not known yet"}"#.to_vec(),
+        )
+            .into_response();
+    };
+
+    if !domain.contains(latitude, longitude) {
+        return (
+            StatusCode::BAD_REQUEST,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            br#"{"error":"lat and lon must be inside the area this server publishes"}"#.to_vec(),
+        )
+            .into_response();
+    }
+
     match state.conditions.fetch(latitude, longitude).await {
         Ok(body) => (
             StatusCode::OK,
@@ -852,7 +1142,20 @@ async fn serve_conditions(
             body.to_vec(),
         )
             .into_response(),
-        Err(error) => {
+        // Not the caller's fault and not Open-Meteo's: this server is declining
+        // to spend more of its quota. Retry-After rather than a bare failure.
+        Err(ConditionsError::Budget) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::RETRY_AFTER, "60"),
+            ],
+            br#"{"error":"this server is out of on-demand forecast budget; try again shortly"}"#
+                .to_vec(),
+        )
+            .into_response(),
+        Err(ConditionsError::Upstream(error)) => {
             error!("conditions fetch failed: {error}");
             (
                 StatusCode::BAD_GATEWAY,
@@ -869,11 +1172,42 @@ async fn serve_conditions(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_frame_name, is_valid_point_name};
+    use super::{
+        domain_from_manifest, freshness, is_valid_frame_name, is_valid_point_name, liveness,
+        Duration, Instant, StatusCode, TokenBucket,
+    };
+
+    /// The real shape the ingestor publishes: a four-corner polygon, and not in
+    /// an order this code is allowed to assume.
+    const BOUNDS: &[u8] = br#"{"bounds":[[-0.0145,56.011],[11.2955,56.011],[11.2955,48.991],[-0.0145,48.991]]}"#;
+
+    /// The two endpoints answer different questions, and the whole point of
+    /// /livez is that no state of the *data* can make it fail. If someone ever
+    /// wires freshness back into liveness, these are what should stop them.
+    #[test]
+    fn liveness_fails_only_on_an_unreadable_frame_dir() {
+        assert_eq!(liveness(true).0, StatusCode::OK);
+        assert_eq!(liveness(false).0, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn freshness_still_degrades_on_a_stale_manifest() {
+        let max = 1200;
+        assert_eq!(freshness(Some(0), max).0, StatusCode::OK);
+        assert_eq!(freshness(Some(max), max).0, StatusCode::OK);
+        assert!(freshness(Some(max), max).1);
+
+        for age in [Some(max + 1), None] {
+            let (status, ok, _) = freshness(age, max);
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "age {age:?}");
+            assert!(!ok, "age {age:?}");
+        }
+    }
 
     #[test]
     fn accepts_generated_names() {
         assert!(is_valid_frame_name("p_1787583900_1787584200.webp"));
+        assert!(is_valid_frame_name("s_1787583900_1787584200.webp"));
         assert!(is_valid_frame_name("o_1787584200.webp"));
     }
 
@@ -887,6 +1221,7 @@ mod tests {
             "grid.json",
             "p_abc_123.webp",
             "p_123.webp",
+            "s_123.webp",
             "p__123.webp",
             "x_1_2.webp",
             "p_1_2.png",
@@ -904,6 +1239,69 @@ mod tests {
         for name in ["home", "den-haag", "office_2"] {
             assert!(is_valid_point_name(name), "should accept {name}");
         }
+    }
+
+    #[test]
+    fn reads_the_extent_from_the_manifest_polygon() {
+        let domain = domain_from_manifest(BOUNDS).expect("bounds should parse");
+        assert_eq!(domain.west, -0.0145);
+        assert_eq!(domain.east, 11.2955);
+        assert_eq!(domain.south, 48.991);
+        assert_eq!(domain.north, 56.011);
+
+        for junk in [
+            &b"not json"[..],
+            br#"{}"#,
+            br#"{"bounds":[]}"#,
+            br#"{"bounds":[["west","north"]]}"#,
+        ] {
+            assert!(domain_from_manifest(junk).is_none(), "should reject {junk:?}");
+        }
+    }
+
+    /// The point of the extent check is that the set of coordinates that can
+    /// cause an outbound call is finite. A globe-wide check does not do that.
+    #[test]
+    fn the_extent_admits_only_what_is_published() {
+        let domain = domain_from_manifest(BOUNDS).unwrap();
+
+        assert!(domain.contains(52.08, 4.31), "Den Haag is on the map");
+        assert!(domain.contains(48.991, -0.0145), "the corner counts as inside");
+
+        for (latitude, longitude) in [
+            (35.68, 139.69),          // Tokyo
+            (51.51, -0.13),           // London: just west of the domain
+            (56.02, 5.0),             // just north
+            (f64::NAN, 4.31),         // "NaN".parse::<f64>() succeeds
+            (52.08, f64::NAN),
+        ] {
+            assert!(
+                !domain.contains(latitude, longitude),
+                "should reject {latitude},{longitude}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_budget_stops_at_its_capacity_and_refills_over_time() {
+        // Three per minute, holding at most two.
+        let bucket = TokenBucket::new(2.0, 3.0 / 60.0);
+        let start = Instant::now();
+
+        assert!(bucket.take_at(start));
+        assert!(bucket.take_at(start));
+        assert!(!bucket.take_at(start), "capacity is two");
+
+        // Twenty seconds buys exactly one token back, and no more.
+        let later = start + Duration::from_secs(20);
+        assert!(bucket.take_at(later));
+        assert!(!bucket.take_at(later));
+
+        // An idle hour cannot bank more than the bucket holds.
+        let much_later = start + Duration::from_secs(3600);
+        assert!(bucket.take_at(much_later));
+        assert!(bucket.take_at(much_later));
+        assert!(!bucket.take_at(much_later), "capacity still caps the refill");
     }
 
     #[test]
