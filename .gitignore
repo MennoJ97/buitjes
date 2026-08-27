@@ -41,5 +41,15 @@ frontend/vendor/**/*.map
 # specific server — its middleware names, directory layout and container names
 # describe that machine — and IMPLEMENTATION_PLAN.md is the working record
 # behind it. Neither is needed to run this; .env.example documents every option.
+# ANDROID_PLAN.md is the same kind of working record for the android-app branch.
 docs/DEPLOYMENT.md
 docs/IMPLEMENTATION_PLAN.md
+docs/ANDROID_PLAN.md
+
+# Android build output. The app source lives on the android-app branch,
+# which has its own android/.gitignore; on master only the residue is left.
+android/.gradle/
+android/.idea/
+android/.kotlin/
+android/local.properties
+android/**/build/
