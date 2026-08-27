@@ -13,7 +13,8 @@
 
 import { RadarRenderer, FrameStore } from './radar.js';
 import {
-    BASEMAPS, OWN_CREDIT, applyStyleOverrides, labelLayerId, storedBasemap, styleFor,
+    BASEMAPS, OWN_CREDIT, applyStyleOverrides, labelLayerId, pristineStyle, storedBasemap,
+    styleFor,
 } from './basemap.js';
 import { formatClock } from './time.js';
 import { apiFetch } from './key.js';
@@ -167,9 +168,9 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
         });
         mapEl.classList.toggle('theme-light', !!config.lightUi);
         map.on('error', (event) => fail('map error', event?.error));
-        map.once('load', () => {
+        map.once('load', async () => {
             try {
-                applyStyleOverrides(map, config);
+                applyStyleOverrides(map, config, await pristineStyle(config));
                 addRadarLayer();
             } catch (error) {
                 fail('could not add the radar layer', error);

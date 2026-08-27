@@ -7,7 +7,7 @@ import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.j
 import { formatClock } from './time.js';
 import {
     BASEMAPS, BASEMAP_STORAGE_KEY, OWN_CREDIT,
-    applyStyleOverrides, labelLayerId, storedBasemap, styleFor,
+    applyStyleOverrides, labelLayerId, pristineStyle, storedBasemap, styleFor,
 } from './basemap.js';
 
 /** How each timeline zone is described in the UI. */
@@ -168,7 +168,9 @@ map.addControl(
 );
 el.basemapSelect.value = initialBasemap;
 document.body.classList.toggle('theme-light', !!initialConfig.lightUi);
-onStyleReady(() => applyStyleOverrides(map, initialConfig));
+onStyleReady(async () => {
+    applyStyleOverrides(map, initialConfig, await pristineStyle(initialConfig));
+});
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
 // ---------------------------------------------------------------- boot
@@ -1273,6 +1275,8 @@ el.basemapSelect.addEventListener('change', (event) => {
 
 /** The basemap whose style is loading, and the one chosen while it loaded. */
 let loadingBasemap = null;
+/** Which stylesheet the map is showing, so a switch within one can stay in place. */
+let showingStyleUrl = initialConfig.styleUrl ?? null;
 let queuedBasemap = null;
 
 /**
@@ -1300,21 +1304,50 @@ function setBasemap(name) {
     else applyBasemap(name);
 }
 
-function applyBasemap(name) {
+async function applyBasemap(name) {
     const config = BASEMAPS[name];
     loadingBasemap = name;
+
+    let pristine = null;
+    try {
+        pristine = await pristineStyle(config);
+    } catch {
+        // Unreachable style: leave the map showing what it has rather than
+        // tearing it down for a replacement that is not coming.
+        finishBasemap(name);
+        return;
+    }
+
+    // Three of the basemaps are the same OpenFreeMap stylesheet, told apart only
+    // by the overrides below. Reloading it to switch between them is not just
+    // waste: setStyle finds a stylesheet it already has, decides the difference
+    // is not worth applying, and the map keeps the repaint or the hidden names
+    // it was already wearing - the picker moves and nothing else does. So a
+    // switch within one stylesheet is only the overrides, applied in place.
+    if (config.styleUrl && config.styleUrl === showingStyleUrl) {
+        applyStyleOverrides(map, config, pristine);
+        finishBasemap(name);
+        return;
+    }
+
+    showingStyleUrl = config.styleUrl ?? null;
     map.setStyle(styleFor(config), { transformStyle: carryRadarOver });
     // Not onStyleReady: right after setStyle the *old* style can still report
     // itself loaded, which would repaint layers that are about to be replaced.
     map.once('styledata', () => {
-        loadingBasemap = null;
-        applyStyleOverrides(map, config);
+        applyStyleOverrides(map, config, pristine);
         // A new style brings a new credits line, opened by MapLibre again.
         collapseAttribution();
-        const queued = queuedBasemap;
-        queuedBasemap = null;
-        if (queued && queued !== name) applyBasemap(queued);
+        finishBasemap(name);
     });
+}
+
+/** Release the lock, and honour a choice made while this one was being applied. */
+function finishBasemap(name) {
+    loadingBasemap = null;
+    const queued = queuedBasemap;
+    queuedBasemap = null;
+    if (queued && queued !== name) applyBasemap(queued);
 }
 
 el.settingsBtn.addEventListener('click', () => togglePopover(el.settingsPopover, el.settingsBtn));

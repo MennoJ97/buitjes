@@ -196,42 +196,83 @@ export function styleFor(config) {
 export const labelLayerId = (layers) =>
     layers.find((layer) => layer.id === 'labels' || layer.type === 'symbol')?.id;
 
+/** The ground layers any basemap repaints, so the others can put them back. */
+const GROUND_LAYERS = Object.assign({}, ...Object.values(BASEMAPS)
+    .filter((config) => config.paint)
+    .map((config) => config.paint.ground));
+
 const colourKey = (type) =>
     type === 'background' ? 'background-color' : type === 'fill' ? 'fill-color' : 'line-color';
 
-const setPaint = (map, id, paint) => {
-    for (const [property, value] of Object.entries(paint)) {
-        map.setPaintProperty(id, property, value);
-    }
-};
+/** Style JSON by URL, so three basemaps sharing one style cost a single fetch. */
+const styleCache = new Map();
 
 /**
- * Fix up a freshly loaded vector style: hide its names, repaint them, or
- * neither. Done against the live style rather than by rewriting the JSON on its
- * way in, so the same call covers the initial load and every later switch.
+ * A vector basemap's stylesheet as its author wrote it, fetched once and kept.
+ *
+ * Kept because it is the only record of what these layers look like untouched,
+ * and switching *away* from a repainted basemap needs that: nothing else can
+ * say what colour a layer is supposed to go back to.
+ */
+export async function pristineStyle(config) {
+    if (!config.styleUrl) return null;
+    if (!styleCache.has(config.styleUrl)) {
+        const response = await fetch(config.styleUrl);
+        if (!response.ok) throw new Error(`basemap style ${response.status}`);
+        styleCache.set(config.styleUrl, await response.json());
+    }
+    return styleCache.get(config.styleUrl);
+}
+
+/** Every paint property any basemap repaints, so the others can put it back. */
+function repaintedKeys() {
+    const keys = new Set();
+    for (const config of Object.values(BASEMAPS)) {
+        if (!config.paint) continue;
+        for (const key of Object.keys(config.paint.place)) keys.add(key);
+        for (const key of Object.keys(config.paint.water)) keys.add(key);
+    }
+    return keys;
+}
+
+/**
+ * Fix up a loaded vector style: hide its names, repaint them, or put both back.
+ *
+ * Every property is resolved against `pristine` and then set, whether this
+ * basemap changes it or not. That symmetry is the whole design. Applying only
+ * what a basemap overrides works exactly once - the first time - and after that
+ * leaves the last basemap's repaint sitting under the new one's name, because
+ * three of these are one OpenFreeMap stylesheet and switching between them
+ * gives MapLibre nothing to reload. Setting the pristine value *is* the undo.
+ *
+ * Done against the live style rather than by handing setStyle a rewritten one:
+ * a stylesheet that differs from the showing one only in paint is a diff
+ * MapLibre may decide is not worth applying, and it silently was not.
  *
  * `hideLabels` hides every symbol layer rather than only the place names,
  * because the ones left behind are the giveaway: road shields and the little
  * one-way arrows are not places, but a map that has dropped its city names and
  * kept its motorway numbers looks broken rather than deliberate.
  */
-export function applyStyleOverrides(map, config) {
-    if (config.hideLabels) {
-        for (const layer of map.getStyle().layers) {
-            if (layer.type === 'symbol') {
-                map.setLayoutProperty(layer.id, 'visibility', 'none');
-            }
+export function applyStyleOverrides(map, config, pristine) {
+    if (!pristine) return;
+    const keys = repaintedKeys();
+    for (const layer of pristine.layers) {
+        if (layer.type === 'symbol') {
+            map.setLayoutProperty(layer.id, 'visibility',
+                config.hideLabels ? 'none' : layer.layout?.visibility ?? 'visible');
         }
-    }
-    if (!config.paint) return;
-    for (const layer of map.getStyle().layers) {
-        const ground = config.paint.ground[layer.id];
-        if (ground) {
-            map.setPaintProperty(layer.id, colourKey(layer.type), ground);
-        } else if (layer.id.startsWith('place_')) {
-            setPaint(map, layer.id, config.paint.place);
-        } else if (layer.id === 'water_name') {
-            setPaint(map, layer.id, config.paint.water);
+
+        const wanted = config.paint;
+        if (layer.id in GROUND_LAYERS) {
+            const key = colourKey(layer.type);
+            map.setPaintProperty(layer.id, key,
+                wanted?.ground[layer.id] ?? layer.paint?.[key]);
+        } else if (layer.id.startsWith('place_') || layer.id === 'water_name') {
+            const source = layer.id === 'water_name' ? wanted?.water : wanted?.place;
+            for (const key of keys) {
+                map.setPaintProperty(layer.id, key, source?.[key] ?? layer.paint?.[key]);
+            }
         }
     }
 }
