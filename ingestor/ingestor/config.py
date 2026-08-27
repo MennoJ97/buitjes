@@ -33,6 +33,7 @@ class Config:
     output_height: int | None
     ensemble_stat: str
     neighbourhood_km: float
+    spread_radius_km: float | None
     max_precip: float
     nowcast_minutes: int
     keep_cycles: int
@@ -99,6 +100,14 @@ class Config:
         if neighbourhood < 0:
             raise SystemExit('NEIGHBOURHOOD_KM cannot be negative')
 
+        # Blank switches the spread layer off entirely rather than meaning zero,
+        # because zero is a legitimate setting here: it asks for the percentiles
+        # of this square kilometre alone. Same idea as OUTPUT_HEIGHT.
+        spread = os.environ.get('SPREAD_RADIUS_KM', '3').strip()
+        spread_radius = float(spread) if spread else None
+        if spread_radius is not None and spread_radius < 0:
+            raise SystemExit('SPREAD_RADIUS_KM cannot be negative (leave it blank to disable)')
+
         return cls(
             api_key=api_key,
             dataset=os.environ.get('KNMI_DATASET', 'seamless_precipitation_ensemble_forecast_members'),
@@ -126,6 +135,7 @@ class Config:
             output_height=int(height) if height else None,
             ensemble_stat=stat,
             neighbourhood_km=neighbourhood,
+            spread_radius_km=spread_radius,
             max_precip=float(os.environ.get('MAX_PRECIP_MM_H', '100')),
             # Where the timeline stops calling the blend a nowcast. The product
             # itself is seamless; this is a presentation cue, not a data boundary.

@@ -84,6 +84,25 @@ on the GPU, so changing the palette costs no refetching. Dry pixels are fully
 zeroed rather than merely transparent — the long uniform runs are what keep a
 780×780 frame around 30 KB.
 
+**A band for every pixel, not just the configured points.** Alongside each rain
+frame is a second one carrying p10, p50 and p90 of the ensemble — three rates,
+one byte each. A byte is enough because the scale is logarithmic: over the
+ramp's own range a step is 2.8% *of the rate*, finer than KNMI's 0.01 mm/h
+quantisation at the bottom and far finer than a colour ramp can show, where the
+16-bit linear encoding the rain frames use spends its precision at 90 mm/h
+where nobody can read it.
+
+The percentiles are taken after each member's maximum over a small
+neighbourhood, and that is the part that matters. Percentiles of one square
+kilometre are dominated by the members disagreeing about *where* a shower lands
+rather than whether one is coming, so on 60% of the pixels the map paints rain
+such a band has its lower edge pinned to zero — it can say "up to" and never "at
+least". A radius turns that position disagreement into a spatial tolerance. It
+also lifts the whole band, so too wide and it climbs off the field it describes:
+at 3 km the drawn value still falls inside the band 91% of the time, at 20 km
+only 66%. `SPREAD_RADIUS_KM` documents the trade and blank switches the layer
+off; it is a separate file so a reader who never opens it never downloads it.
+
 **The timestep that isn't there.** Roughly once a cycle, somewhere around the
 three-hour lead, KNMI's blend publishes a dead step: all twenty members
 byte-identical, the field empty but for a stripe of exactly 1.00 mm/h along the

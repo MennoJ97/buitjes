@@ -25,9 +25,12 @@ import re
 import tempfile
 import time
 
-from .blend import REDUCER_LABELS, BlendFile, reduce_members, repaired_steps
+from .blend import (
+    REDUCER_LABELS, SPREAD_PERCENTILES, BlendFile, cell_reach, reduce_members,
+    repaired_steps, spread_fields,
+)
 from .config import Config
-from .encode import encode_frame
+from .encode import SPREAD_FLOOR_MM_H, encode_frame, encode_spread_frame
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
@@ -41,6 +44,7 @@ MANIFEST_NAME = 'manifest.json'
 GRID_NAME = 'grid.json'
 FORECAST_PATTERN = re.compile(r'^p_(\d+)_(\d+)\.webp$')
 OBSERVED_PATTERN = re.compile(r'^o_(\d+)\.webp$')
+SPREAD_PATTERN = re.compile(r'^s_(\d+)_(\d+)\.webp$')
 
 #: Keep observed frames a little past the display window so a browser still
 #: loading the previous manifest does not start hitting 404s.
@@ -51,6 +55,12 @@ def forecast_frame_name(reference_time: int, valid_time: int) -> str:
     # The reference time is part of the name so a re-forecast of the same valid
     # time gets a new URL: frames are served with immutable caching.
     return f'p_{reference_time}_{valid_time}.webp'
+
+
+def spread_frame_name(reference_time: int, valid_time: int) -> str:
+    # Same two stamps as the frame it accompanies, so the pair prunes together
+    # and a re-forecast gets a new URL for both halves at once.
+    return f's_{reference_time}_{valid_time}.webp'
 
 
 def observed_frame_name(valid_time: int) -> str:
@@ -89,9 +99,25 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             config.widget_locations, source.lat, source.lon, config.neighbourhood_km
         )
 
+        # Cells, not kilometres, and worked out once: the grid is regular, so
+        # the reach is the same for every pixel and every timestep.
+        reach = None
+        if config.spread_radius_km is not None:
+            reach = cell_reach(
+                config.spread_radius_km,
+                float(source.lat[1] - source.lat[0]),
+                float(source.lon[1] - source.lon[0]),
+                # The middle of the domain: longitude cells shrink towards the
+                # pole, so one reach for all of them is a compromise, and the
+                # middle is where it is least wrong.
+                float(source.lat[len(source.lat) // 2]),
+            )
+            log.info('spread: %.1f km is %d x %d cells', config.spread_radius_km, *reach)
+
         nowcast_until = source.reference_time + config.nowcast_minutes * 60
         frames = []
         written = 0
+        spread_written = 0
         estimated_steps = 0
         # One read serves both outputs: the reduced field for the map and, while
         # the members are still in memory, the point samples. Timesteps KNMI
@@ -114,6 +140,18 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
                 'kind': 'nowcast' if valid_time <= nowcast_until else 'forecast',
                 'file': name,
             }
+            if reach is not None:
+                # Same members, still in memory: the spread costs a dilation and
+                # a percentile rather than a second read of the file. Dilated
+                # before the crop, so a pixel at the crop edge still sees the
+                # neighbours that exist just outside it.
+                spread = [resampler(resampler.crop(percentile))
+                          for percentile in spread_fields(members, *reach)]
+                spread_payload = encode_spread_frame(spread, config.max_precip)
+                spread_name = spread_frame_name(source.reference_time, valid_time)
+                write_atomic(config.frame_dir, spread_name, spread_payload)
+                spread_written += len(spread_payload)
+                frame['spread'] = spread_name
             # Present only when true: a reader that has never heard of the flag
             # reads exactly what it read before, and one that has can say so.
             if estimated:
@@ -121,8 +159,9 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
                 estimated_steps += 1
             frames.append(frame)
 
-        log.info('forecast %s: wrote %d frames, %.1f MiB%s',
+        log.info('forecast %s: wrote %d frames, %.1f MiB%s%s',
                  source.reference_time, len(frames), written / 1024 / 1024,
+                 f' + {spread_written / 1024 / 1024:.1f} MiB spread' if spread_written else '',
                  f' ({estimated_steps} estimated)' if estimated_steps else '')
         dropped = len(source) - len(frames)
         if dropped:
@@ -136,6 +175,18 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             'reference_time': source.reference_time,
             'product': (f'{REDUCER_LABELS[config.ensemble_stat]} of '
                         f'{source.member_count} ensemble members'),
+            # What the second file on each frame holds, and how to read it. The
+            # frames are useless without this: three bytes on a log scale say
+            # nothing about which percentile or how far around each pixel.
+            'spread': None if reach is None else {
+                'radius_km': config.spread_radius_km,
+                'percentiles': list(SPREAD_PERCENTILES),
+                'channels': ['r', 'g', 'b'],
+                'encoding': 'log8',
+                'floor_mm_h': SPREAD_FLOOR_MM_H,
+                'max_mm_h': config.max_precip,
+                'shape': 'square',
+            },
             # Coordinates too: a client that knows where the user clicked can
             # then pick the nearest published location without another request.
             'points': [
@@ -323,7 +374,7 @@ def prune(config: Config, keep_references: set[int], reference_time: int) -> Non
     oldest_observed = reference_time - config.history_minutes * 60 - OBSERVED_GRACE_SECONDS
     removed = 0
     for entry in os.listdir(config.frame_dir):
-        forecast = FORECAST_PATTERN.match(entry)
+        forecast = FORECAST_PATTERN.match(entry) or SPREAD_PATTERN.match(entry)
         observed = OBSERVED_PATTERN.match(entry)
         stale = (
             (forecast and int(forecast.group(1)) not in keep_references)
@@ -393,6 +444,7 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
             'attribution': 'KNMI (CC BY 4.0)',
         },
         'points': meta.get('points', []),
+        'spread': meta.get('spread'),
         'frames': frames,
     }
     write_atomic(config.frame_dir, MANIFEST_NAME, json.dumps(manifest).encode())

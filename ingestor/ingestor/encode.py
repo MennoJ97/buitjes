@@ -30,7 +30,6 @@ DRY_THRESHOLD_MM_H = 0.05
 #: Blue channel value marking a pixel no radar looked at.
 NO_DATA_FLAG = 255
 
-
 def encode_frame(values_mm_h, max_precip_mm_h: float, measured=None) -> bytes:
     """Encode a (h, w) array of mm/h into a lossless WebP frame.
 
@@ -75,3 +74,74 @@ def decode_frame(data: bytes, max_precip_mm_h: float):
     values = packed.astype(np.float32) / 65535.0 * max_precip_mm_h
     measured = rgba[:, :, 2] < NO_DATA_FLAG
     return np.where(rgba[:, :, 3] == 0, 0.0, values), measured
+
+
+# -------------------------------------------------------------------- spread
+
+#: Bottom of the log scale the spread frames use, matching the bottom of the
+#: colour ramp. Below it there is nothing to draw, so nothing to resolve.
+SPREAD_FLOOR_MM_H = 0.1
+
+#: Byte 0 means dry; 1..255 span the scale, so 255 steps carry the decades.
+_SPREAD_LEVELS = 255
+
+
+def encode_spread_frame(fields, max_precip_mm_h: float) -> bytes:
+    """Encode three rate fields into one lossless WebP, a byte each.
+
+    A rate fits in a byte if the scale is logarithmic. The rain frames spend
+    sixteen bits on a *linear* scale, which is the wasteful way round: at the
+    bottom of the ramp a step is 0.0015 mm/h, finer than KNMI's own 0.01 mm/h
+    quantisation, and at 90 mm/h it is the same absolute step where nobody can
+    read it. Over the ramp's own range - 0.1 to 100 mm/h, three decades - one
+    byte gives steps of 2.8% *of the rate*, which is 0.0028 mm/h at the bottom.
+    Still finer than the source, and far finer than a colour ramp can show.
+
+    ``fields`` are packed into R, G and B in the order given; the caller decides
+    what they mean and the manifest records it. Alpha is opaque everywhere, and
+    that is load-bearing rather than lazy: a browser reading a frame back
+    through a 2D canvas gets premultiplied pixels, so anything stored under
+    alpha zero comes back as zeros. A band's lower edge lives exactly where the
+    map is dry, so it has to sit on an opaque frame to survive being read.
+    """
+    fields = [np.asarray(field, dtype=np.float32) for field in fields]
+    if len(fields) != 3:
+        raise ValueError(f'a spread frame carries exactly three fields, got {len(fields)}')
+
+    height, width = fields[0].shape
+    rgba = np.zeros((height, width, 4), dtype=np.uint8)
+    for channel, field in enumerate(fields):
+        rgba[:, :, channel] = _to_log_byte(field, max_precip_mm_h)
+    rgba[:, :, 3] = 255
+
+    buffer = io.BytesIO()
+    Image.fromarray(rgba, 'RGBA').save(
+        buffer, format='WEBP', lossless=True, quality=100, method=4, exact=True
+    )
+    return buffer.getvalue()
+
+
+def _to_log_byte(values, max_precip_mm_h: float):
+    decades = np.log10(max_precip_mm_h / SPREAD_FLOOR_MM_H)
+    clipped = np.clip(values, SPREAD_FLOOR_MM_H, max_precip_mm_h)
+    scaled = 1 + np.rint(
+        np.log10(clipped / SPREAD_FLOOR_MM_H) / decades * (_SPREAD_LEVELS - 1)
+    )
+    return np.where(values >= SPREAD_FLOOR_MM_H, scaled, 0).astype(np.uint8)
+
+
+def decode_spread_frame(data: bytes, max_precip_mm_h: float):
+    """Inverse of :func:`encode_spread_frame`, for tests and verification.
+
+    Returns the three fields in the order they were packed. Zero comes back as
+    zero rather than as the floor, so a dry pixel stays dry through the round
+    trip instead of acquiring 0.1 mm/h it never had.
+    """
+    rgba = np.array(Image.open(io.BytesIO(data)).convert('RGBA'))
+    decades = np.log10(max_precip_mm_h / SPREAD_FLOOR_MM_H)
+    fields = []
+    for channel in range(3):
+        byte = rgba[:, :, channel].astype(np.float32)
+        rate = SPREAD_FLOOR_MM_H * 10 ** ((byte - 1) / (_SPREAD_LEVELS - 1) * decades)
+        fields.append(np.where(byte == 0, 0.0, rate).astype(np.float32))
+    return fields

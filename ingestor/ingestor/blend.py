@@ -21,6 +21,7 @@ shower; :func:`repaired_steps` is the loop that notices and stands in for it.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from datetime import datetime, timezone
 
@@ -287,3 +288,123 @@ def repaired_steps(source):
         log.warning('step %d (%d) carries no ensemble; estimated from the step %s it',
                     index, valid_time, ' and '.join(sides))
         yield valid_time, repaired, True
+
+
+# ------------------------------------------------------------------- spread
+
+#: Degrees of latitude per kilometre, near enough over a domain this size.
+#: :mod:`ingestor.points` does the same arithmetic for its disc; the shapes
+#: differ on purpose - see :func:`cell_reach`.
+_KM_PER_DEGREE = 111.32
+
+#: What the spread frames carry, low to high. The median rides along because a
+#: band without a middle cannot be compared with the field it describes.
+SPREAD_PERCENTILES = (10, 50, 90)
+
+
+def cell_reach(radius_km: float, dlat: float, dlon: float, latitude: float):
+    """``(rows, columns)`` spanning ``radius_km`` from a cell, as a rectangle.
+
+    A rectangle rather than the disc :mod:`ingestor.points` uses, because this
+    one is applied to every pixel rather than to a handful of locations, and a
+    rectangle is separable: a running maximum along the rows and then along the
+    columns costs O(log r) passes over the array, where a disc costs O(r^2)
+    gathers. The corners reach r*sqrt(2) instead of r, which for a band that is
+    already a statement about "somewhere near here" is a rounding error on a
+    radius chosen by taste.
+
+    Longitude degrees are shorter than latitude ones, by more at 53 N than at
+    50 N; without the cosine the rectangle would stretch east-west.
+    """
+    if radius_km <= 0:
+        return 0, 0
+    rows = int(math.ceil(radius_km / (abs(dlat) * _KM_PER_DEGREE)))
+    lon_km = abs(dlon) * _KM_PER_DEGREE * math.cos(math.radians(latitude))
+    return rows, int(math.ceil(radius_km / lon_km))
+
+
+def _shift(values, offset: int, axis: int):
+    """``values`` moved along ``axis``, vacating with zeros."""
+    if offset == 0:
+        return values
+    out = np.zeros_like(values)
+    source = [slice(None)] * values.ndim
+    target = [slice(None)] * values.ndim
+    if offset > 0:
+        target[axis], source[axis] = slice(offset, None), slice(None, -offset)
+    else:
+        target[axis], source[axis] = slice(None, offset), slice(-offset, None)
+    out[tuple(target)] = values[tuple(source)]
+    return out
+
+
+def neighbourhood_maximum(values, reach: int, axis: int):
+    """Running maximum over +-``reach`` cells along one axis.
+
+    Doubling, not a sliding window: maximum over +-1, then that result over
+    +-2, then +-4, and each pass doubles the span already covered. Ten cells
+    take four passes instead of twenty-one comparisons, and the cost grows with
+    the logarithm of the radius rather than with the radius, which is what makes
+    a wider neighbourhood free to try.
+
+    Zeros vacate at the domain edge, which is the identity for a maximum over
+    rain rates - a cell near the border takes the maximum of the cells that
+    exist, exactly as the point forecasts' disc clips rather than wraps.
+
+    The two directions are folded in one at a time, in place. Written the
+    obvious way - ``maximum(maximum(out, shift(+s)), shift(-s))`` - a pass holds
+    five copies of a 48 MiB member stack at once, which on this container is the
+    difference between fitting and being killed. One at a time is also correct:
+    after the forward pass a cell already holds the maximum over ``[i-s, i]``,
+    so the backward pass over that spans ``[i-s, i+s]``.
+    """
+    out = np.array(values, dtype=np.float32, copy=True)
+    covered, span = 0, 1
+    while covered < reach:
+        step = min(span, reach - covered)
+        np.maximum(out, _shift(out, step, axis), out=out)
+        np.maximum(out, _shift(out, -step, axis), out=out)
+        covered += step
+        span *= 2
+    return out
+
+
+def spread_fields(members, reach_rows: int, reach_columns: int,
+                  percentiles=SPREAD_PERCENTILES):
+    """Percentiles of what each member puts *within reach* of every pixel.
+
+    The map draws the probability-matched mean, which is a statement about the
+    field: the pooled intensities of the whole ensemble, placed by the mean's
+    spatial ranking. Percentiles taken at a single cell are a statement about
+    that cell, and for showers they are dominated by the members disagreeing
+    about *where* rather than *whether* - which is why the point forecasts'
+    median sits at zero through a cycle the map paints rain in. A band built
+    that way brackets a value it is not describing.
+
+    Taking each member's maximum over a small neighbourhood first collapses the
+    position disagreement into a spatial tolerance, so what comes out is "how
+    hard could it rain within r of here, according to each member" - a field
+    statement, like the one it accompanies. The radius is the whole trade:
+    wider lifts the band's floor off dry but eventually lifts it past the field
+    it describes. Measured over one cycle, the share of painted pixels whose
+    value falls inside the band, against the share whose p25 is pinned at dry:
+
+    ::
+
+        radius   pmm inside band   p25 pinned dry   band width
+        per-cell          94.0%            60.2%     3.08 mm/h
+        3 km              90.6%            42.6%     4.86 mm/h
+        10 km             82.6%            25.2%     7.49 mm/h
+        20 km             66.3%            13.0%    10.99 mm/h
+
+    Returned in the order given, so the caller can pack them without guessing.
+    """
+    members = np.asarray(members, dtype=np.float32)
+    near = neighbourhood_maximum(members, reach_rows, 1)
+    # In place along the second axis: the first pass already returned a copy of
+    # its own, and nothing else refers to it.
+    near = neighbourhood_maximum(near, reach_columns, 2)
+    # overwrite_input, because `near` is ours and percentile would otherwise
+    # copy the whole stack again just to partition it.
+    return np.percentile(near, list(percentiles), axis=0,
+                         overwrite_input=True).astype(np.float32)

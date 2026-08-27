@@ -14,20 +14,25 @@ apart, and that a step with nothing to stand in for it disappears rather than
 reading as dry.
 """
 
+import io
 import math
 import os
 import sys
 
 import numpy as np
+from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from ingestor.alerts import Rule, evaluate, parse_rules  # noqa: E402
 from ingestor.blend import (  # noqa: E402
-    estimate_step, is_degenerate, probability_matched_mean, reduce_members,
-    repaired_steps,
+    cell_reach, estimate_step, is_degenerate, neighbourhood_maximum,
+    probability_matched_mean, reduce_members, repaired_steps, spread_fields,
 )
-from ingestor.encode import decode_frame, encode_frame  # noqa: E402
+from ingestor.encode import (  # noqa: E402
+    SPREAD_FLOOR_MM_H, decode_frame, decode_spread_frame, encode_frame,
+    encode_spread_frame,
+)
 from ingestor.points import Location, PointExtractor, summarise  # noqa: E402
 from ingestor.raster import MercatorResampler  # noqa: E402
 
@@ -353,6 +358,73 @@ published = flagged.series_for(0)
 check('an ordinary step says nothing about being estimated',
       'estimated' not in published[0])
 check('a stood-in step says so', published[1]['estimated'] is True)
+
+
+print('the spread layer')
+
+# The running maximum has to equal the thing it is an optimisation of.
+rng = np.random.default_rng(11)
+noisy = rng.random((3, 40, 40)).astype(np.float32)
+for radius in (0, 1, 3, 7, 10):
+    fast = neighbourhood_maximum(neighbourhood_maximum(noisy, radius, 1), radius, 2)
+    slow = np.zeros_like(noisy)
+    for y in range(noisy.shape[1]):
+        for x in range(noisy.shape[2]):
+            window = noisy[:, max(0, y - radius):y + radius + 1,
+                           max(0, x - radius):x + radius + 1]
+            slow[:, y, x] = window.max(axis=(1, 2))
+    check(f'dilation by doubling matches a plain window at r={radius}',
+          np.allclose(fast, slow), f'max off by {np.abs(fast - slow).max()}')
+
+check('a zero radius leaves the field alone',
+      np.array_equal(neighbourhood_maximum(noisy, 0, 1), noisy))
+edge = np.zeros((1, 5, 5), np.float32)
+edge[0, 0, 0] = 4.0
+check('the domain edge clips rather than wraps',
+      neighbourhood_maximum(neighbourhood_maximum(edge, 1, 1), 1, 2)[0, -1, -1] == 0.0)
+
+# Degrees of longitude are shorter than degrees of latitude, more so further north.
+# At 52 N a 0.0145 deg longitude cell is 0.994 km against a 1.002 km latitude
+# one, so ten kilometres is eleven cells across and ten down.
+rows, columns = cell_reach(10.0, 0.009, 0.0145, 52.0)
+check('a radius in km becomes a reach in cells', (rows, columns) == (10, 11), (rows, columns))
+check('and reaches further east-west at higher latitude',
+      cell_reach(10.0, 0.009, 0.0145, 56.0)[1] > columns)
+check('no radius means no reach', cell_reach(0.0, 0.009, 0.0145, 52.0) == (0, 0))
+
+# The whole point: a neighbourhood band lifts off dry where a per-cell one cannot.
+shower = np.zeros((20, 60, 60), np.float32)
+for member in range(20):
+    shower[member, 30, 20 + member] = 5.0      # one shower, twenty positions
+low, mid, high = spread_fields(shower, 10, 10)
+cell_low, cell_mid, cell_high = np.percentile(shower, [10, 50, 90], axis=0)
+check('per-cell percentiles are dry at every one of those positions',
+      cell_high[30, 20:40].max() == 0.0)
+check('the neighbourhood band is not', high[30, 25].item() == 5.0)
+# Column 29 is within reach of all twenty positions, column 15 of only six -
+# so the median is the line between "most of the ensemble gets here" and not.
+check('and its median tracks whether most of the ensemble reaches',
+      mid[30, 29].item() == 5.0 and mid[30, 15].item() == 0.0,
+      f'{mid[30, 29]} {mid[30, 15]}')
+check('the band is ordered low <= mid <= high',
+      bool((low <= mid).all() and (mid <= high).all()))
+
+# The log byte has to survive the round trip better than the data it carries.
+rates = np.array([[0.0, 0.05, SPREAD_FLOOR_MM_H, 0.3, 1.0, 7.5, 42.0, 100.0]], np.float32)
+payload = encode_spread_frame([rates, rates * 0.5, rates * 2], 100.0)
+back = decode_spread_frame(payload, 100.0)
+check('dry stays dry rather than becoming the floor', back[0][0, 0] == 0.0)
+check('below the floor is dry too', back[0][0, 1] == 0.0)
+wet = rates[0, 2:]
+check('every rate returns within one log step',
+      np.all(np.abs(back[0][0, 2:] - wet) / wet < 0.03),
+      str(np.abs(back[0][0, 2:] - wet) / wet))
+check('all three channels come back in the order they went in',
+      np.allclose(back[1][0, 4], 0.5, rtol=0.03) and np.allclose(back[2][0, 4], 2.0, rtol=0.03))
+check('a spread frame is opaque, so a 2D canvas can read it back',
+      (np.array(Image.open(io.BytesIO(payload)).convert('RGBA'))[:, :, 3] == 255).all())
+check('exactly three fields, or it is refused',
+      _caught(lambda: encode_spread_frame([rates, rates], 100.0)))
 
 
 print()

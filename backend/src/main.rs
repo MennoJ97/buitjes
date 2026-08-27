@@ -709,7 +709,9 @@ fn is_valid_frame_name(name: &str) -> bool {
     let is_number = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
 
     match prefix {
-        "p" => match rest.split_once('_') {
+        // "p" is the rain field, "s" the ensemble spread that accompanies it;
+        // both are named for the cycle and the timestep, so both prune together.
+        "p" | "s" => match rest.split_once('_') {
             Some((reference, valid)) => is_number(reference) && is_number(valid),
             None => false,
         },
@@ -1028,6 +1030,7 @@ mod tests {
     #[test]
     fn accepts_generated_names() {
         assert!(is_valid_frame_name("p_1787583900_1787584200.webp"));
+        assert!(is_valid_frame_name("s_1787583900_1787584200.webp"));
         assert!(is_valid_frame_name("o_1787584200.webp"));
     }
 
@@ -1041,6 +1044,7 @@ mod tests {
             "grid.json",
             "p_abc_123.webp",
             "p_123.webp",
+            "s_123.webp",
             "p__123.webp",
             "x_1_2.webp",
             "p_1_2.png",
