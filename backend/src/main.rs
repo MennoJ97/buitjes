@@ -920,7 +920,11 @@ async fn serve_point_at(
                 .and_then(serde_json::Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            point::sample_series(&frame_dir, &grid, &frames, pixel)
+            // `None` when the ingestor publishes no spread layer, which costs
+            // the band and nothing else: the series is still sampled and the
+            // document still says what it is drawn from.
+            let spread = point::Spread::from_manifest(&manifest);
+            point::sample_series(&frame_dir, &grid, spread.as_ref(), &frames, pixel)
         })
     };
 
