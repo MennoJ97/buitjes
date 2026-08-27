@@ -132,6 +132,25 @@ export function renderBandChart(container, series, options = {}) {
         'stroke-linejoin': 'round',
     }));
 
+    // Steps the ingestor stood in for. KNMI publishes a timestep with no
+    // ensemble behind it about once a cycle, and what is plotted there is the
+    // average of the five minutes either side rather than anything forecast.
+    // Marked rather than broken out of the line: a gap in a rain chart reads as
+    // a dry spell, which is the very thing the stand-in exists to avoid.
+    for (const entry of series) {
+        if (!entry.estimated) continue;
+        const mark = element('line', {
+            x1: x(entry.t), x2: x(entry.t),
+            y1: pad.top, y2: pad.top + plotHeight,
+            class: 'chart-estimated',
+        });
+        const caption = element('title');
+        caption.textContent = 'Estimated from the steps either side — KNMI '
+            + 'published no ensemble for this one.';
+        mark.appendChild(caption);
+        svg.appendChild(mark);
+    }
+
     // Where "now" falls, so past and future are distinguishable at a glance.
     if (now !== null && now > firstTime && now < series[series.length - 1].t) {
         svg.appendChild(element('line', {

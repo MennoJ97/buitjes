@@ -84,6 +84,20 @@ on the GPU, so changing the palette costs no refetching. Dry pixels are fully
 zeroed rather than merely transparent — the long uniform runs are what keep a
 780×780 frame around 30 KB.
 
+**The timestep that isn't there.** Roughly once a cycle, somewhere around the
+three-hour lead, KNMI's blend publishes a dead step: all twenty members
+byte-identical, the field empty but for a stripe of exactly 1.00 mm/h along the
+southern edge of the domain. Read literally it is five minutes of nationwide dry
+in the middle of a rain band — a hole in the chart, a blank frame in the loop,
+and a shower the summary line calls over an hour early. An ensemble whose
+members agree to the bit is the one thing a real ensemble cannot be, so the
+ingestor catches it on that, stands in for it with the member-wise average of
+the steps five minutes either side, and publishes the result marked
+`estimated` — a badge on the map, a hairline on the chart. Where there is
+nothing either side to stand in for it, the step is dropped instead: a gap in
+the timeline is the honest answer, and "we don't know" beats "it's dry"
+everywhere else in this app too.
+
 **Why rows get resampled.** MapLibre stretches an image across four corners
 linearly *in Web Mercator space*. KNMI's grid is regular in latitude, and
 latitude is not linear in Mercator, so handing the grid over unchanged would

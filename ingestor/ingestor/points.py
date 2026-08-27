@@ -110,11 +110,12 @@ class PointExtractor:
         self._times: list[int] = []
         self._samples: list[np.ndarray] = []  # one (locations, members) array per step
         self._nearby: list[np.ndarray] = []   # one (locations,) array of NEP per step
+        self._estimated: list[bool] = []      # was this step stood in for?
 
     def __bool__(self):
         return bool(self.locations)
 
-    def observe(self, valid_time: int, members) -> None:
+    def observe(self, valid_time: int, members, estimated: bool = False) -> None:
         """Record every member's value at each location for one timestep.
 
         Two probabilities come out of this, and the difference between them is
@@ -126,11 +127,19 @@ class PointExtractor:
         nobody doubts. The neighbourhood count asks the question a reader
         actually means - how many members put rain anywhere near here - by
         letting each member be wet within a radius before counting it.
+
+        ``estimated`` says the members are not KNMI's for this timestep but a
+        stand-in for a dead one, built from the steps either side of it - see
+        :func:`ingestor.blend.repaired_steps`. It rides through to the published
+        entry unchanged; the numbers are computed exactly as any other step's,
+        because by this point they are ordinary member values and the only thing
+        that differs is where they came from.
         """
         if not self.locations:
             return
         members = np.asarray(members)
         self._times.append(valid_time)
+        self._estimated.append(bool(estimated))
         self._samples.append(
             np.stack([members[:, row, column] for row, column in self._cells])
         )
@@ -142,7 +151,8 @@ class PointExtractor:
     def series_for(self, index: int) -> list[dict]:
         """The published series for one location, one entry per timestep."""
         entries = []
-        for valid_time, sample, nearby in zip(self._times, self._samples, self._nearby):
+        for valid_time, sample, nearby, estimated in zip(
+                self._times, self._samples, self._nearby, self._estimated):
             values = np.asarray(sample[index], dtype=np.float64)
             quantiles = np.percentile(values, PERCENTILES)
             entry = {'t': int(valid_time)}
@@ -153,6 +163,9 @@ class PointExtractor:
             # What the ensemble is really for: how many members say it rains.
             entry['probability'] = round(float((values >= WET_THRESHOLD_MM_H).mean()), 2)
             entry['probability_nearby'] = round(float(nearby[index]), 2)
+            # Only when true, so a reader that predates the flag is unaffected.
+            if estimated:
+                entry['estimated'] = True
             entries.append(entry)
         return entries
 
@@ -369,6 +382,10 @@ def current_conditions(document: dict) -> dict:
             'probability': rain['probability'],
             'probability_nearby': _nearby_probability(rain),
         }
+        # A widget with one line of room still should not present a stand-in
+        # for a dead timestep as a measurement of the present.
+        if rain.get('estimated'):
+            now['precipitation']['estimated'] = True
 
     for key in ('temperature', 'wind', 'solar'):
         block = document.get(key)

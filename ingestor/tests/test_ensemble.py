@@ -8,7 +8,10 @@ What is worth testing here is not "does it produce numbers" but the two claims
 the map rests on: that the probability-matched mean keeps the ensemble's own
 intensity distribution while keeping the mean's placement, and that a pixel no
 radar looked at survives the round trip through the frame format as something
-other than dry.
+other than dry. The same goes for the timestep KNMI publishes empty: what is
+worth testing is that it is caught, that standing in for it keeps the members
+apart, and that a step with nothing to stand in for it disappears rather than
+reading as dry.
 """
 
 import math
@@ -20,7 +23,10 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from ingestor.alerts import Rule, evaluate, parse_rules  # noqa: E402
-from ingestor.blend import probability_matched_mean, reduce_members  # noqa: E402
+from ingestor.blend import (  # noqa: E402
+    estimate_step, is_degenerate, probability_matched_mean, reduce_members,
+    repaired_steps,
+)
 from ingestor.encode import decode_frame, encode_frame  # noqa: E402
 from ingestor.points import Location, PointExtractor, summarise  # noqa: E402
 from ingestor.raster import MercatorResampler  # noqa: E402
@@ -267,6 +273,86 @@ check('a document without neighbourhood counts still evaluates',
       evaluate(legacy, median_rule, NOW).matched)
 check('and prob_nearby falls back to the point count on it',
       evaluate(legacy, Rule('home', 'prob_nearby', 0.8, 3600, 0.0, 3600), NOW).matched)
+
+
+print('a dead timestep')
+
+
+class FakeSource:
+    """Just enough of BlendFile for repaired_steps, counting its reads."""
+
+    def __init__(self, steps):
+        self._steps = list(steps)
+        self.valid_times = [1_700_000_000 + i * 300 for i in range(len(self._steps))]
+        self.reads = 0
+
+    def members(self, index):
+        self.reads += 1
+        return self._steps[index]
+
+
+def dead_step(size=64, members=20):
+    """What KNMI actually publishes: every member the same, one wet stripe."""
+    field = np.zeros((size, size), np.float32)
+    field[-1, 10:30] = 1.0
+    return np.repeat(field[None], members, axis=0)
+
+
+live = ensemble(size=64)
+dead = dead_step()
+
+check('a real ensemble is not mistaken for a dead step', not is_degenerate(live))
+check('twenty identical members is a dead step', is_degenerate(dead))
+check('a dead step is not merely a dry one', float(dead.max()) > 0)
+check('an all-dry ensemble reads as degenerate, and harmlessly so',
+      is_degenerate(np.zeros((20, 8, 8), np.float32)))
+check('a one-member product is never degenerate',
+      not is_degenerate(np.zeros((1, 8, 8), np.float32)))
+
+before, after = ensemble(size=64, seed=1), ensemble(size=64, seed=2)
+stood_in = estimate_step(before, after)
+check('the stand-in is member-wise, not pooled',
+      np.allclose(stood_in[7], (before[7] + after[7]) / 2))
+check('and so the members still disagree',
+      not is_degenerate(stood_in) and float(stood_in.std(axis=0).max()) > 0)
+check('one side alone is used as it stands', estimate_step(before, None) is before)
+check('nothing on either side has no answer', estimate_step(None, None) is None)
+
+source = FakeSource([live, before, dead, after, live])
+steps = list(repaired_steps(source))
+check('every step is published', len(steps) == 5)
+check('only the dead one is flagged',
+      [flag for _, _, flag in steps] == [False, False, True, False, False])
+check('the flagged step is the blend of its neighbours',
+      np.allclose(steps[2][1][7], (before[7] + after[7]) / 2))
+check('the stamps are untouched',
+      [t for t, _, _ in steps] == source.valid_times)
+check('each step is read once, the look-ahead reused',
+      source.reads == 5, f'{source.reads} reads')
+
+first_dead = list(repaired_steps(FakeSource([dead, live, before])))
+check('a dead first step leans on the one after it',
+      len(first_dead) == 3 and first_dead[0][2] and np.array_equal(first_dead[0][1], live))
+last_dead = list(repaired_steps(FakeSource([live, before, dead])))
+check('a dead last step leans on the one before it',
+      len(last_dead) == 3 and last_dead[2][2] and np.array_equal(last_dead[2][1], before))
+
+surrounded = list(repaired_steps(FakeSource([live, dead, dead, dead, after])))
+stamps = [t for t, _, _ in surrounded]
+check('a run of dead steps leans outward, one to each side',
+      np.array_equal(surrounded[1][1], live) and np.array_equal(surrounded[2][1], after))
+check('the one in the middle, with nothing either side, is dropped rather than dry',
+      len(surrounded) == 4 and 1_700_000_000 + 2 * 300 not in stamps)
+check('a wholly dead cycle publishes nothing at all',
+      list(repaired_steps(FakeSource([dead, dead]))) == [])
+
+flagged = PointExtractor(locations, lat, lon, neighbourhood_km=10.0)
+flagged.observe(1_700_000_000, np.zeros((20, 200, 180), np.float32))
+flagged.observe(1_700_000_300, np.zeros((20, 200, 180), np.float32), estimated=True)
+published = flagged.series_for(0)
+check('an ordinary step says nothing about being estimated',
+      'estimated' not in published[0])
+check('a stood-in step says so', published[1]['estimated'] is True)
 
 
 print()

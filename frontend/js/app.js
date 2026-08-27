@@ -421,10 +421,34 @@ function showFrame(index, { fromSlider = false } = {}) {
 
     const reference = store.manifest.reference_time ?? frames[0].t;
     el.stepLabel.textContent = formatOffset(frame.t - reference);
-    el.kindBadge.textContent = ZONES[frame.kind]?.label ?? frame.kind;
-    el.kindBadge.className = `kind-badge kind-badge--${frame.kind}`;
+    describeFrame(frame);
 
     scheduleRender();
+}
+
+/**
+ * The badge beside the clock: which kind of frame this is, or that it is not
+ * really a frame at all.
+ *
+ * KNMI publishes a timestep with no ensemble behind it about once a cycle, and
+ * the ingestor stands in for it with the average of the steps five minutes
+ * either side rather than let it read as five minutes of nationwide dry. That
+ * is worth saying, and it takes the badge rather than sitting next to it: the
+ * readout is a fixed width so that scrubbing does not shuffle the panel about,
+ * and a badge that appears and disappears per frame is exactly the jitter that
+ * width exists to prevent. The zone bar under the slider still says which part
+ * of the timeline this is, so the kind is not lost — only demoted, for one
+ * frame, under the more important fact that nobody forecast it.
+ */
+function describeFrame(frame) {
+    const zone = ZONES[frame.kind];
+    const kind = zone?.label ?? frame.kind;
+    el.kindBadge.textContent = frame.estimated ? 'Estimated' : kind;
+    el.kindBadge.className = `kind-badge kind-badge--${frame.estimated ? 'estimated' : frame.kind}`;
+    el.kindBadge.title = frame.estimated
+        ? `${kind}, estimated: KNMI published no ensemble for this step, so this `
+          + 'is the average of the steps five minutes either side.'
+        : zone?.hint ?? '';
 }
 
 let renderHandle = null;

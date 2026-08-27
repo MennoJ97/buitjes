@@ -25,7 +25,7 @@ import re
 import tempfile
 import time
 
-from .blend import REDUCER_LABELS, BlendFile, reduce_members
+from .blend import REDUCER_LABELS, BlendFile, reduce_members, repaired_steps
 from .config import Config
 from .encode import encode_frame
 from .knmi import KnmiClient, RateLimited
@@ -92,11 +92,13 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
         nowcast_until = source.reference_time + config.nowcast_minutes * 60
         frames = []
         written = 0
-        for index, valid_time in enumerate(source.valid_times):
-            # One read serves both outputs: the reduced field for the map and,
-            # while the members are still in memory, the point samples.
-            members = source.members(index)
-            extractor.observe(valid_time, members)
+        estimated_steps = 0
+        # One read serves both outputs: the reduced field for the map and, while
+        # the members are still in memory, the point samples. Timesteps KNMI
+        # published without an ensemble behind them are stood in for or dropped
+        # before they get here; see :func:`ingestor.blend.repaired_steps`.
+        for valid_time, members, estimated in repaired_steps(source):
+            extractor.observe(valid_time, members, estimated=estimated)
             # Cropped before reducing, not after: pmm pools every value it is
             # given, so the reduction has to see exactly what will be published
             # and nothing else.
@@ -107,14 +109,26 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             name = forecast_frame_name(source.reference_time, valid_time)
             write_atomic(config.frame_dir, name, payload)
             written += len(payload)
-            frames.append({
+            frame = {
                 't': valid_time,
                 'kind': 'nowcast' if valid_time <= nowcast_until else 'forecast',
                 'file': name,
-            })
+            }
+            # Present only when true: a reader that has never heard of the flag
+            # reads exactly what it read before, and one that has can say so.
+            if estimated:
+                frame['estimated'] = True
+                estimated_steps += 1
+            frames.append(frame)
 
-        log.info('forecast %s: wrote %d frames, %.1f MiB',
-                 source.reference_time, len(frames), written / 1024 / 1024)
+        log.info('forecast %s: wrote %d frames, %.1f MiB%s',
+                 source.reference_time, len(frames), written / 1024 / 1024,
+                 f' ({estimated_steps} estimated)' if estimated_steps else '')
+        dropped = len(source) - len(frames)
+        if dropped:
+            log.warning('forecast %s: %d of %d steps had nothing to stand in for them '
+                        'and are published as a gap in the timeline',
+                        source.reference_time, dropped, len(source))
 
         publish_points(config, source, extractor, conditions, alert_runner)
 

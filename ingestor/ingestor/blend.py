@@ -12,15 +12,22 @@ dry and too flat. See :func:`probability_matched_mean`.
 
 The point forecasts keep the members themselves rather than a reduction, which
 is what makes real spread available; see :mod:`ingestor.points`.
+
+Not every timestep KNMI publishes is usable. Roughly once a cycle the blend
+emits a dead one, and reading it literally puts a hole in the middle of a
+shower; :func:`repaired_steps` is the loop that notices and stands in for it.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 
 import h5py
 import numpy as np
+
+log = logging.getLogger('ingestor.blend')
 
 _UNITS_PATTERN = re.compile(
     r'seconds since (\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})'
@@ -153,3 +160,130 @@ def reduce_members(values, stat: str = 'pmm'):
     Randstad.
     """
     return _REDUCERS[stat](values)
+
+
+# --------------------------------------------------------------- dead steps
+
+
+def is_degenerate(members) -> bool:
+    """Whether a timestep carries no ensemble at all.
+
+    KNMI's blend publishes a dead timestep roughly once per cycle, somewhere
+    around the three-hour lead — the index moves between cycles, so it is not a
+    fixed step going wrong. What it looks like in the file, taking the 06:25Z
+    cycle of 27 August 2026 as the example, is step 36 (+185 min):
+
+    ::
+
+        step       wet cells per member    peak mm/h per member
+        35 (+180)  ~30,500, all different  29.6 … 35.5, varying
+        36 (+185)  173, all identical      1.00, all identical
+        37 (+190)  ~30,200, all different  29.7 … 35.6, varying
+
+    All twenty members byte-identical, the field empty but for 173 cells on the
+    southernmost grid row each holding exactly 1.00 mm/h. That is a placeholder,
+    not a forecast, and taken at face value it reads as five minutes of
+    nationwide dry in the middle of a rain band.
+
+    Identical members is the test, because it is the one thing a real ensemble
+    cannot be. Twenty members of a convective blend agreeing to the bit over
+    600,000 grid points does not happen; the only lawful way it could is a
+    domain — half of western Europe, here — with no precipitation anywhere at
+    all, and in that case the steps either side are dry too and standing in for
+    this one changes nothing but the label.
+
+    Deliberately narrow. A looser test (a collapse in wet area, say) would catch
+    more shapes of corruption, and would also eventually fire on real weather,
+    which is the worse failure: inventing rain over a genuine lull is a bigger
+    lie than the one being fixed. Every hit is logged, so a variant this misses
+    should show up as an unexplained blip rather than stay invisible.
+    """
+    members = np.asarray(members)
+    if len(members) < 2:
+        return False  # nothing to disagree with; a one-member product is not this
+    first = members[0]
+    return all(np.array_equal(members[i], first) for i in range(1, len(members)))
+
+
+def estimate_step(before, after):
+    """Stand in for a dead timestep with the members either side of it.
+
+    Member-wise rather than pooled: member 7 at +185 min is the average of
+    member 7 at +180 and +190, so each member keeps its own field and the
+    ensemble keeps its spread. Averaging across members instead would hand every
+    one of them the same field and reproduce, in a subtler form, exactly the
+    defect being repaired.
+
+    Five minutes either side is a short enough hop that the field barely moves.
+    It does smear a fast shower over the two positions it held, which is a real
+    cost and the reason the step is published flagged rather than silently.
+
+    With only one neighbour — the step is first or last, or its other side is
+    dead too — that neighbour is used alone, which is persistence over five
+    minutes. Returned as-is rather than copied; nothing downstream writes to a
+    member array. ``None`` when there is nothing on either side, which is the
+    caller's cue that the step is genuinely unavailable.
+    """
+    if before is None:
+        return after
+    if after is None:
+        return before
+    return (before + after) * np.float32(0.5)
+
+
+def repaired_steps(source):
+    """Yield ``(valid_time, members, estimated)`` for every usable timestep.
+
+    ``estimated`` marks a step that :func:`is_degenerate` rejected and
+    :func:`estimate_step` stood in for. A step that could not be stood in for is
+    not yielded at all: a gap in the timeline is the honest answer, and every
+    consumer of the manifest and the point series already copes with the frame
+    list being any subset of the cadence.
+
+    Only immediately adjacent steps are blended from, so nothing is ever
+    estimated across more than five minutes. Two dead steps in a row therefore
+    lean outward, one to each side, rather than both reaching for the same
+    distant survivor.
+
+    Reads each step once. The step read ahead to repair its predecessor is
+    carried into the next iteration rather than fetched again — the read is
+    ~24 MiB off disk and an HDF5 decompression, which is the expensive part of a
+    cycle. Peak memory is three member arrays during a repair (the two sides and
+    the average) against one in the normal case; see the ingestor's `mem_limit`.
+    """
+    count = len(source.valid_times)
+    pending = None    # already read while looking ahead from the previous step
+    previous = None   # the step just before this one, and only if it was sound
+
+    for index, valid_time in enumerate(source.valid_times):
+        members = pending if pending is not None else source.members(index)
+        pending = None
+
+        if not is_degenerate(members):
+            previous = members
+            yield valid_time, members, False
+            continue
+
+        # Drop the dead array before reading its neighbour, so the repair costs
+        # one extra step in memory rather than two.
+        del members
+        following = None
+        if index + 1 < count:
+            pending = source.members(index + 1)
+            if not is_degenerate(pending):
+                following = pending
+
+        sides = [name for name, side in (('before', previous), ('after', following))
+                 if side is not None]
+        repaired = estimate_step(previous, following)
+        previous = None
+        if repaired is None:
+            log.warning(
+                'step %d (%d) carries no ensemble and neither neighbour can '
+                'stand in for it; publishing a gap', index, valid_time,
+            )
+            continue
+
+        log.warning('step %d (%d) carries no ensemble; estimated from the step %s it',
+                    index, valid_time, ' and '.join(sides))
+        yield valid_time, repaired, True

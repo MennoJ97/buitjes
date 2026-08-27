@@ -42,9 +42,12 @@ services:
       - frames:/data
     # One cycle holds all 20 members of a single 5-minute step at once
     # (20 x 780 x 780 float32), then drops them; the arrays never stack up
-    # across steps. Measured peak for the container is ~330 MB including the
-    # page cache from the HDF5 reads, so this is roughly 1.5x headroom and not
-    # a target to run against.
+    # across steps. The exception is a step KNMI published without an ensemble
+    # behind it, which briefly holds three - the steps either side and the
+    # average standing in for it - about once a cycle. Measured peak is ~330 MB
+    # for a clean cycle and ~380 MB for one carrying a repair, both including
+    # the page cache from the HDF5 reads. That is 1.3x headroom on the worse of
+    # the two, and not a target to run against.
     mem_limit: 512m
     networks:
       # `proxy` is here only so alerts can reach ntfy by container name
