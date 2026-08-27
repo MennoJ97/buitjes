@@ -30,6 +30,24 @@ DRY_THRESHOLD_MM_H = 0.05
 #: Blue channel value marking a pixel no radar looked at.
 NO_DATA_FLAG = 255
 
+#: How hard libwebp tries. It is a speed/size knob and 4 - Pillow's default -
+#: sits well past the knee for this data, which is mostly long uniform runs:
+#:
+#: ::
+#:
+#:     method   time/frame   per cycle     size
+#:          0        17 ms       1.2 s    92.6 K
+#:          1        87 ms       6.2 s    31.3 K
+#:          4       155 ms      11.1 s    30.7 K
+#:          6       552 ms      39.7 s    30.7 K
+#:
+#: One is 1.8x faster than four for 2% more bytes - 45 KiB on a 2.2 MiB cycle,
+#: which nobody downloads twice. Six spends half a minute a cycle to save
+#: nothing at all, and zero triples the frame to save 70 ms. The two frames a
+#: step now cost about 10 s of the cycle rather than 24.
+ENCODER_EFFORT = 1
+
+
 def encode_frame(values_mm_h, max_precip_mm_h: float, measured=None) -> bytes:
     """Encode a (h, w) array of mm/h into a lossless WebP frame.
 
@@ -59,7 +77,8 @@ def encode_frame(values_mm_h, max_precip_mm_h: float, measured=None) -> bytes:
     # silent data loss for us, since the no-data flag lives in exactly those
     # pixels. It costs a percent or two of frame size.
     Image.fromarray(rgba, 'RGBA').save(
-        buffer, format='WEBP', lossless=True, quality=100, method=4, exact=True
+        buffer, format='WEBP', lossless=True, quality=100, method=ENCODER_EFFORT,
+        exact=True,
     )
     return buffer.getvalue()
 
@@ -116,7 +135,8 @@ def encode_spread_frame(fields, max_precip_mm_h: float) -> bytes:
 
     buffer = io.BytesIO()
     Image.fromarray(rgba, 'RGBA').save(
-        buffer, format='WEBP', lossless=True, quality=100, method=4, exact=True
+        buffer, format='WEBP', lossless=True, quality=100, method=ENCODER_EFFORT,
+        exact=True,
     )
     return buffer.getvalue()
 
