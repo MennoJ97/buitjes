@@ -17,6 +17,9 @@
 import { conditionsFromEnsemble } from './ensemble.js';
 import { FrameStore } from './radar.js';
 import { apiFetch } from './key.js';
+import { centreValue } from './chart.js';
+import { formatRate } from './ramp.js';
+import { formatClock } from './time.js';
 
 const WET_THRESHOLD_MM_H = 0.1;
 
@@ -100,31 +103,15 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
                 // same statistic through the same path: the neighbourhood
                 // median as the line, its own p10–p90 around it. `field` rides
                 // along for anyone who wants the number the map paints.
-                series: sampled.map((point) => {
-                    // An observed frame is the radar composite - a measurement,
-                    // with no ensemble behind it and so never a band. Under its
-                    // own key because `field_product` names what the *forecast*
-                    // frames were reduced into, and the tooltip would otherwise
-                    // caption an hour of measured rain as a probability-matched
-                    // mean of members that were never involved in it.
-                    const value = point.kind === 'observed'
-                        ? { measured: point.mmh }
-                        : { field: point.mmh };
-                    const band = bands?.get(point.t);
-                    return band
-                        ? { t: point.t, ...value, nearby_p10: band.p10,
-                            nearby_median: band.p50, nearby_p90: band.p90 }
-                        : { t: point.t, ...value };
-                }),
+                series: frameSeries(sampled, bands),
             };
-            const reference = document_.reference_time;
-            const wet = sampled.filter(
-                (point) => point.t >= reference && point.mmh >= WET_THRESHOLD_MM_H
-            );
+            // The same sentence a named location gets, off the same number the
+            // chart draws. It used to be a one-liner built from the field, which
+            // is how the headline came to say 40 mm/h over a PEAK RATE of 3.1.
+            const block = document_.precipitation;
             document_.summary = {
-                text: wet.length
-                    ? `Rain expected here, peaking at ${Math.max(...wet.map((p) => p.mmh)).toFixed(1)} mm/h.`
-                    : 'No rain expected here in the next six hours.',
+                text: summarise(block.series, centreOf(block).centreKeys,
+                                document_.reference_time),
             };
         }
     }
@@ -136,6 +123,32 @@ export async function pointForCoordinates({ lat, lon }, options = {}) {
             document_.precipitation_outlook.series.filter((entry) => entry.t > knmiEnds);
     }
     return document_;
+}
+
+
+/**
+ * Frame samples as the entries a published document carries.
+ *
+ * One definition, because the detail page and the map's popup both read points
+ * off the same frames and must not disagree about what they found there.
+ *
+ * An observed frame is the radar composite - a measurement, with no ensemble
+ * behind it and so never a band. Under its own key because `field_product`
+ * names what the *forecast* frames were reduced into, and the tooltip would
+ * otherwise caption an hour of measured rain as a probability-matched mean of
+ * members that were never involved in it.
+ */
+function frameSeries(sampled, bands) {
+    return sampled.map((point) => {
+        const value = point.kind === 'observed'
+            ? { measured: point.mmh }
+            : { field: point.mmh };
+        const band = bands?.get(point.t);
+        return band
+            ? { t: point.t, ...value, nearby_p10: band.p10,
+                nearby_median: band.p50, nearby_p90: band.p90 }
+            : { t: point.t, ...value };
+    });
 }
 
 
@@ -190,4 +203,119 @@ export function centreOf(block, fallbackLabel = '') {
                          `80% of members within ${radius} km`]];
     }
     return centre;
+}
+
+
+/**
+ * Plain-language read of a precipitation series, for the one line of room a
+ * headline, a map popup or a dashboard widget has.
+ *
+ * Reads through `centreKeys`, so it describes whatever the page beside it
+ * draws. That is the whole point of it living here: the number in the sentence
+ * and the number in the chart under it have to be the same number, and they
+ * were not while this function existed twice.
+ *
+ * Describes the *spell* — the contiguous run of wet steps — rather than the
+ * moment it begins. The onset rate alone is close to useless: it is by
+ * construction the instant the rate crosses the wet threshold, so it is always
+ * a small number whether what follows is a five-minute drizzle or the leading
+ * edge of a downpour. The peak, and how far ahead of the onset it sits, is what
+ * says which.
+ *
+ * The peak is taken from the current spell only, not the whole series. A second
+ * shower three hours later is a different event and should not be quoted as
+ * this one's severity.
+ *
+ * Three clauses at the outside — when, how hard, until when — and that ceiling
+ * is deliberate. This has to fit a widget with a single line, so the peak earns
+ * its clause only by being meaningfully heavier than the onset, and the onset
+ * rate drops out when the peak is already saying it. The longest sentence it
+ * can produce is around ninety characters.
+ */
+export function summarise(series, centreKeys, reference) {
+    const valueOf = (entry) => centreValue(entry, centreKeys);
+    const future = (series ?? []).filter(
+        (entry) => entry.t >= reference && valueOf(entry) !== null
+    );
+    if (!future.length) return 'No forecast for this point.';
+
+    const onsetIndex = future.findIndex((entry) => (valueOf(entry) ?? 0) >= WET_THRESHOLD_MM_H);
+    if (onsetIndex === -1) return 'Staying dry for the whole forecast.';
+
+    const dryAfter = future.findIndex(
+        (entry, i) => i > onsetIndex && (valueOf(entry) ?? 0) < WET_THRESHOLD_MM_H
+    );
+    const spell = future.slice(onsetIndex, dryAfter === -1 ? undefined : dryAfter);
+    const clearsAt = dryAfter === -1 ? null : future[dryAfter].t;
+
+    const onset = spell[0];
+    const peak = spell.reduce(
+        (best, entry) => ((valueOf(entry) ?? 0) > (valueOf(best) ?? 0) ? entry : best),
+        spell[0],
+    );
+
+    // Only worth its own clause if it is meaningfully heavier than the start —
+    // otherwise it is the same number printed twice.
+    const peakMatters = peak.t !== onset.t
+        && (valueOf(peak) ?? 0) >= (valueOf(onset) ?? 0) * 1.5 + 0.05;
+
+    const leadMinutes = Math.round((onset.t - reference) / 60);
+    // Whether the sentence is counting minutes from now or naming clock times.
+    // Mixing the two is what makes "rain at 11:25, up to 4 mm/h within 30 min"
+    // ambiguous — thirty minutes from now, or from the onset two hours away?
+    const relative = onsetIndex === 0 || leadMinutes < 90;
+
+    const parts = [];
+    if (onsetIndex === 0) {
+        // "now" is load-bearing: while the timeline is scrubbed, the line above
+        // this one shows the rate at the frame being looked at, and the two are
+        // different numbers. Without it they read as a contradiction.
+        parts.push(`Raining now at ${formatRate(valueOf(onset))} mm/h`);
+    } else {
+        const when = relative ? `in ${leadMinutes} min` : `at ${formatClock(onset.t)}`;
+        // With no peak clause coming, the onset rate is the only figure there
+        // is, so it stays. With one, it would just be the smaller of two.
+        parts.push(peakMatters
+            ? `Dry now — rain ${when}`
+            : `Dry now — rain ${when} at ${formatRate(valueOf(onset))} mm/h`);
+    }
+
+    if (peakMatters) {
+        // How fast it builds is the other half of the question, and it is the
+        // gap between onset and peak — so say it in minutes when the sentence
+        // is already relative and the gap is short, rather than making the
+        // reader subtract two clock times.
+        const climb = Math.round((peak.t - onset.t) / 60);
+        parts.push(relative && climb <= 30
+            ? `up to ${formatRate(valueOf(peak))} mm/h within ${climb} min`
+            : `peaking ${formatRate(valueOf(peak))} mm/h around ${formatClock(peak.t)}`);
+    }
+
+    parts.push(clearsAt
+        ? `easing off around ${formatClock(clearsAt)}`
+        : 'lasting past the end of the forecast');
+
+    return `${parts.join(', ')}.`;
+}
+
+
+/**
+ * The same sentence, for a point read straight off the frames — the map's
+ * inspect popup, which has no published document behind it.
+ *
+ * Takes whatever spread frames have arrived rather than waiting for them: the
+ * popup answers a click immediately, and an entry with no band falls through
+ * `centreKeys` to the field on its own. Clicking through to the detail page is
+ * what buys the full band, and that path does wait.
+ */
+export function summariseFrames(frames, lng, lat, reference) {
+    const spread = frames.spreadInfo;
+    const bands = spread ? new Map(
+        frames.spreadSeries(lng, lat).map((entry) => [entry.t, entry.band])
+    ) : null;
+    const series = frameSeries(
+        frames.series(lng, lat).filter((point) => point.mmh !== null), bands
+    );
+    const block = { series, nearby_radius_km: spread?.radius_km };
+    return summarise(series, centreOf(block).centreKeys, reference);
 }
