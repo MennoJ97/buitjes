@@ -57,10 +57,30 @@ export const OWN_CREDIT =
  * where the old grey text disappeared into downpours; the halo is what keeps a
  * city readable whichever end of the ramp happens to be sitting on top of it.
  *
- * Roads stay deliberately quiet. They are here to place the rain, not to be
- * read — a first pass lifted the motorway network to luminance 103 and produced
- * a road atlas with some weather on it.
+ * Roads are a hierarchy of one: the motorways are lit, everything below them is
+ * pushed down. They are here to place the rain, not to be read, and one legible
+ * class is all that placing takes - "the cell is over the A12" needs the A12 and
+ * nothing else. An earlier pass lifted the whole network to luminance 103 at
+ * once and produced a road atlas with some weather on it; the web of minor roads
+ * was what made it one, not the motorways.
+ *
+ * The numbers come from the borders, the one line colour already chosen to read
+ * through rain. Against this ground they carry 143 luminance steps, and under a
+ * 70% radar layer 30% of that survives: a margin of 43. A motorway at the old
+ * #46525f kept 19, which is why it vanished under so much as drizzle. At
+ * luminance 110 it keeps 28 - readable, and still visibly quieter than a border.
+ *
+ * That arithmetic only works now that the radar is drawn above the road layers.
+ * While it sat below them (see labelLayerId) a road's contrast was never scaled
+ * by the rain at all, so anything bright enough to read through a shower was
+ * far too loud over dry ground. These colours are not portable back.
  */
+const MOTORWAY_COLOUR = [
+    'interpolate', ['linear'], ['zoom'],
+    7, '#46525f',
+    10, '#74828f',
+];
+
 const HIGH_CONTRAST_DARK = {
     ground: {
         background: '#0e1116',
@@ -70,13 +90,19 @@ const HIGH_CONTRAST_DARK = {
         landuse_residential: '#151b24',
         landuse_park: '#141d1a',
         building: '#181f29',
-        highway_minor: '#222932',
+        highway_minor: '#1e242c',
         highway_major_casing: '#161c23',
         highway_major_inner: '#333c47',
         highway_major_subtle: '#333c47',
         highway_motorway_casing: '#1b222b',
-        highway_motorway_inner: '#46525f',
-        highway_motorway_subtle: '#46525f',
+        // Lit where a motorway is a landmark, quiet where it is not. At the
+        // default zoom the borders and the city names do the placing and the
+        // motorway network is just texture over four countries; by the time you
+        // have zoomed to a single shower it is the only thing on the map that
+        // says which side of town the rain is on. One colour cannot be both, and
+        // zoom is what separates them.
+        highway_motorway_inner: MOTORWAY_COLOUR,
+        highway_motorway_subtle: MOTORWAY_COLOUR,
         // Borders are the one line work worth seeing through rain: at the
         // default zoom they are what tells you which country you are looking at.
         boundary_state: '#4d5665',
@@ -190,11 +216,27 @@ export function styleFor(config) {
 }
 
 /**
- * Where the radar belongs: under the place names, over the ground. Raster styles
- * name their label layer; a vector style's names are the first symbol layer.
+ * Where the radar belongs: under the place names, over every line and fill.
+ *
+ * Raster styles name their label layer. A vector style's names are the run of
+ * symbol layers at the *end* of the list - not the first symbol layer, which is
+ * what this looked for until the basemaps moved to OpenFreeMap. In its dark
+ * style the first symbol layer is `water_name`, at index 8 of 47, and inserting
+ * the radar there put every road, railway, building and border on top of the
+ * rain. Positron happens to order its labels so that the old rule worked, which
+ * is why only the three dark basemaps showed it.
+ *
+ * Walking back from the end is the rule that holds without knowing whether this
+ * style calls its cities `place_*` or `label_*`: the names are whatever sits
+ * above the last thing that is drawn rather than written.
  */
-export const labelLayerId = (layers) =>
-    layers.find((layer) => layer.id === 'labels' || layer.type === 'symbol')?.id;
+export const labelLayerId = (layers) => {
+    const named = layers.find((layer) => layer.id === 'labels');
+    if (named) return named.id;
+    let at = layers.length;
+    while (at > 0 && layers[at - 1].type === 'symbol') at--;
+    return layers[at]?.id;
+};
 
 /** The ground layers any basemap repaints, so the others can put them back. */
 const GROUND_LAYERS = Object.assign({}, ...Object.values(BASEMAPS)
