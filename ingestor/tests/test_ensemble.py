@@ -36,6 +36,7 @@ from ingestor.encode import (  # noqa: E402
 from ingestor.points import (  # noqa: E402
     Location, PointExtractor, current_conditions, summarise,
 )
+from ingestor.main import published_steps  # noqa: E402
 from ingestor.raster import MercatorResampler  # noqa: E402
 
 failures = []
@@ -108,6 +109,41 @@ check('nothing negative', pmm.min() >= 0.0)
 dry = np.zeros((4, 8, 8), np.float32)
 check('an all-dry ensemble reduces to all dry',
       float(probability_matched_mean(dry).max()) == 0.0)
+
+def pmm_reference(values):
+    """The straightforward reading: sort the whole pool, zeros and all.
+
+    What :func:`probability_matched_mean` used to do, kept here because what it
+    does now - sorting only the wet values and leaving the dry ranks at zero -
+    is an optimisation whose whole claim is that it changes nothing. Nineteen
+    values in twenty are zero on this product, so the claim is worth a test
+    rather than a comment.
+    """
+    values = np.asarray(values, dtype=np.float32)
+    members = values.shape[0]
+    mean = values.mean(axis=0)
+    ranks = np.argsort(mean, axis=None)[::-1]
+    pooled = np.sort(values, axis=None)[::-1]
+    points = ranks.size
+    blocks = pooled[:points * members].reshape(points, members).mean(axis=1)
+    matched = np.empty(points, dtype=np.float32)
+    matched[ranks] = blocks
+    return matched.reshape(mean.shape)
+
+
+check('bit-identical to sorting the whole pool',
+      np.array_equal(pmm, pmm_reference(ens)))
+# The block that straddles the wet/dry boundary is the one the shortcut has to
+# get right by arithmetic rather than by having the zeros there, and it only
+# exists when the wet count is not a whole multiple of the member count.
+for wet_cells in (0, 1, 19, 20, 21, 40, 41):
+    sparse = np.zeros((20, 8, 8), np.float32)
+    sparse.reshape(20, -1)[:, :1] = 0.0
+    flat = sparse.reshape(-1)
+    flat[:wet_cells] = np.linspace(0.5, 9.0, wet_cells) if wet_cells else 0.0
+    check(f'identical with {wet_cells} wet values in the pool',
+          np.array_equal(probability_matched_mean(sparse), pmm_reference(sparse)),
+          f'{wet_cells}')
 
 check('reachable through reduce_members',
       np.array_equal(reduce_members(ens, 'pmm'), pmm))
@@ -582,6 +618,80 @@ check('a spread frame is opaque, so a 2D canvas can read it back',
 check('exactly three fields, or it is refused',
       _caught(lambda: encode_spread_frame([rates, rates], 100.0)))
 
+
+print()
+print('the published cadence')
+
+
+class Cadence:
+    """Just the two settings :func:`published_steps` reads."""
+
+    def __init__(self, full_cadence_minutes=120, tail_step_minutes=10):
+        self.full_cadence_minutes = full_cadence_minutes
+        self.tail_step_minutes = tail_step_minutes
+
+
+REFERENCE = 1_700_000_000
+# What KNMI publishes: 72 steps, +5 min to +6 h.
+CYCLE = [REFERENCE + minute * 60 for minute in range(5, 361, 5)]
+
+
+def leads(stamps):
+    return sorted((t - REFERENCE) // 60 for t in stamps)
+
+
+def _walk(stamps, selected):
+    """Each stamp paired with the last selected stamp before it."""
+    last = None
+    for stamp in stamps:
+        yield stamp, last
+        if stamp in selected:
+            last = stamp
+
+
+kept = leads(published_steps(CYCLE, REFERENCE, Cadence()))
+check('every five-minute step survives inside the window',
+      kept[:24] == list(range(5, 125, 5)), f'{kept[:24]}')
+check('and ten-minute steps after it',
+      kept[24:] == list(range(130, 361, 10)), f'{kept[24:]}')
+check('48 of 72 steps published', len(kept) == 48, f'{len(kept)}')
+check('no gap wider than one tail step',
+      max(b - a for a, b in zip(kept, kept[1:])) == 10)
+check('the boundary itself is kept, and not twice', kept.count(120) == 1)
+check('the horizon is not cut short', kept[-1] == 360)
+
+check('a zero tail step publishes every step',
+      published_steps(CYCLE, REFERENCE, Cadence(tail_step_minutes=0)) == set(CYCLE))
+check('a tail step at the source cadence also publishes every step',
+      published_steps(CYCLE, REFERENCE, Cadence(tail_step_minutes=5)) == set(CYCLE))
+check('a window past the horizon publishes every step',
+      published_steps(CYCLE, REFERENCE, Cadence(full_cadence_minutes=999)) == set(CYCLE))
+
+# A cycle that already has a hole in it - a step nothing could stand in for -
+# must not let the tail drift onto a coarser spacing than it was asked for.
+gapped = [t for t in CYCLE if (t - REFERENCE) // 60 not in (200, 205, 210)]
+gap_selected = published_steps(gapped, REFERENCE, Cadence())
+gap_kept = leads(gap_selected)
+# The walk cannot fill a hole the source left, so the promise is not a spacing
+# it always achieves - it is that it never passes over a step that would have
+# made the spacing better. Anything it skips is inside one tail step of the
+# step it last kept, and so could only have made the timeline denser than asked.
+premature = [
+    (t - REFERENCE) // 60 for t, last in _walk(gapped, gap_selected)
+    if t not in gap_selected and last is not None and t - last >= 600
+]
+check('nothing is skipped that would have improved the spacing',
+      not premature, f'{premature}')
+check('and every kept stamp is one the source actually published',
+      set(gap_kept) <= set(leads(gapped)))
+check('the hole is reported at its real width, not papered over',
+      max(b - a for a, b in zip(gap_kept, gap_kept[1:])) == 25)
+
+# An hourly source, to show the walk is against the stamps and not a modulus
+# that happens to suit five-minute steps.
+hourly = [REFERENCE + hour * 3600 for hour in range(1, 13)]
+check('a coarser source than the tail step is left alone',
+      published_steps(hourly, REFERENCE, Cadence()) == set(hourly))
 
 print()
 if failures:

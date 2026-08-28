@@ -83,6 +83,38 @@ def write_atomic(directory: str, name: str, payload: bytes) -> None:
 # ------------------------------------------------------------------ forecast
 
 
+def published_steps(valid_times, reference_time: int, config: Config) -> set[int]:
+    """The valid times worth a frame of their own.
+
+    KNMI publishes 72 five-minute steps out to +6 h. The last two hours of that
+    were half the bytes and most of the CPU of a cycle, and a five-minute
+    cadence four hours out is a precision the blend does not have that far
+    ahead - past the nowcast horizon it is essentially the hourly HARMONIE
+    ensemble, and the intermediate steps are interpolation dressed as forecast.
+    So: every step inside the full-cadence window, then one every
+    ``tail_step_minutes`` after it.
+
+    Walked against the stamps rather than derived from a modulus, so it holds
+    up against a source cadence that is not five minutes and against a cycle
+    with a gap already in it. What it promises is not a spacing it always
+    achieves - it cannot fill a hole KNMI left, and a step dropped by
+    :func:`ingestor.blend.repaired_steps` afterwards leaves one too. The
+    promise is that it never passes over a step that would have made the
+    spacing better: anything skipped is within one tail step of the step last
+    kept, so keeping it could only have made the timeline denser than asked.
+    """
+    if config.tail_step_minutes <= 0:
+        return set(valid_times)  # thinning switched off; publish everything
+    window = reference_time + config.full_cadence_minutes * 60
+    spacing = config.tail_step_minutes * 60
+    kept, last = set(), None
+    for valid_time in valid_times:
+        if valid_time <= window or last is None or valid_time - last >= spacing:
+            kept.add(valid_time)
+            last = valid_time
+    return kept
+
+
 def build_forecast(path: str, config: Config, conditions=None, alert_runner=None):
     """Decode one forecast cycle into frames. Returns (frames, meta, grid)."""
     with BlendFile(path) as source:
@@ -118,6 +150,12 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             log.info('spread: %.1f km is %d x %d cells', config.spread_radius_km, *reach)
 
         nowcast_until = source.reference_time + config.nowcast_minutes * 60
+        wanted = published_steps(source.valid_times, source.reference_time, config)
+        if len(wanted) < len(source):
+            log.info('cadence: every step to +%d min, then one every %d min '
+                     '(%d of %d steps published)',
+                     config.full_cadence_minutes, config.tail_step_minutes,
+                     len(wanted), len(source))
         frames = []
         written = 0
         spread_written = 0
@@ -127,6 +165,14 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
         # published without an ensemble behind them are stood in for or dropped
         # before they get here; see :func:`ingestor.blend.repaired_steps`.
         for valid_time, members, estimated in repaired_steps(source):
+            # Before the reduction, the dilation and the two encodes, which is
+            # all of the expensive work: a step nobody publishes should cost no
+            # more than the read that proved it sound. The read itself stays -
+            # a dead step is stood in for by the members either side of it in
+            # the *source*, so those have to be looked at whether or not they
+            # are published themselves.
+            if valid_time not in wanted:
+                continue
             # Cropped before reducing, not after: pmm pools every value it is
             # given, so the reduction has to see exactly what will be published
             # and nothing else.
@@ -171,11 +217,13 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
                  source.reference_time, len(frames), written / 1024 / 1024,
                  f' + {spread_written / 1024 / 1024:.1f} MiB spread' if spread_written else '',
                  f' ({estimated_steps} estimated)' if estimated_steps else '')
-        dropped = len(source) - len(frames)
+        # Against the steps meant for publication, not every step in the file:
+        # one deliberately thinned away is not a gap anybody needs telling about.
+        dropped = len(wanted) - len(frames)
         if dropped:
             log.warning('forecast %s: %d of %d steps had nothing to stand in for them '
                         'and are published as a gap in the timeline',
-                        source.reference_time, dropped, len(source))
+                        source.reference_time, dropped, len(wanted))
 
         publish_points(config, source, extractor, conditions, alert_runner)
 

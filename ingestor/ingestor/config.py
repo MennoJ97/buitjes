@@ -36,6 +36,8 @@ class Config:
     spread_radius_km: float | None
     max_precip: float
     nowcast_minutes: int
+    full_cadence_minutes: int
+    tail_step_minutes: int
     keep_cycles: int
     observed_dataset: str
     observed_version: str
@@ -100,6 +102,10 @@ class Config:
         if neighbourhood < 0:
             raise SystemExit('NEIGHBOURHOOD_KM cannot be negative')
 
+        if int(os.environ.get('TAIL_STEP_MINUTES', '10')) < 0:
+            raise SystemExit(
+                'TAIL_STEP_MINUTES cannot be negative (0 publishes every step)')
+
         # Blank switches the spread layer off entirely rather than meaning zero,
         # because zero is a legitimate setting here: it asks for the percentiles
         # of this square kilometre alone. Same idea as OUTPUT_HEIGHT.
@@ -140,6 +146,18 @@ class Config:
             # Where the timeline stops calling the blend a nowcast. The product
             # itself is seamless; this is a presentation cue, not a data boundary.
             nowcast_minutes=int(os.environ.get('NOWCAST_MINUTES', '120')),
+            # How far out every published timestep gets a frame of its own, and
+            # how far apart they are after that. KNMI publishes 72 five-minute
+            # steps out to +6 h, and the last two hours of that were half the
+            # bytes and most of the CPU of a cycle - a five-minute cadence four
+            # hours out is a precision the blend does not have that far ahead,
+            # where it is essentially the hourly HARMONIE ensemble. The window
+            # defaults to the nowcast horizon because that is the same boundary
+            # under a different name; set TAIL_STEP_MINUTES to 0 to publish
+            # every step as before.
+            full_cadence_minutes=int(os.environ.get(
+                'FULL_CADENCE_MINUTES', os.environ.get('NOWCAST_MINUTES', '120'))),
+            tail_step_minutes=int(os.environ.get('TAIL_STEP_MINUTES', '10')),
             keep_cycles=int(os.environ.get('KEEP_CYCLES', '3')),
             # Observed history: KNMI's real-time gauge-corrected radar composite.
             observed_dataset=os.environ.get('KNMI_OBSERVED_DATASET', 'nl_rdr_data_rtcor_5m'),
