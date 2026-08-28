@@ -49,19 +49,29 @@ services:
     # the page cache from the HDF5 reads. That is 1.3x headroom on the worse of
     # the two, and not a target to run against.
     mem_limit: 512m
-    # Half a core, and the reason is thermal rather than fairness. A cycle is
-    # one long single-threaded burst - nothing here parallelises - so without a
-    # limit it pins one core at a flat 100% for the length of it and then does
-    # nothing for the rest of the five minutes. Measured, that was 1.00 cores
-    # for ~35 s out of every 300, which is only ~12% of a core on average but
-    # is a 0-to-100 step every five minutes, and a fan curve chases the step,
-    # not the average. Capping stretches the same work over roughly twice the
-    # wall clock at half the peak, which the schedule has room for many times
-    # over: the cycle has about four minutes of slack before the next file is
-    # due. The cost is freshness - the manifest lands perhaps half a minute
-    # later than it would - so raise this towards 1 if the map matters more
-    # than the noise, or drop it further if it still spins up.
-    cpus: 0.5
+    # Three quarters of a core, and the reason is thermal rather than fairness.
+    # A cycle is one long single-threaded burst - nothing here parallelises -
+    # so uncapped it pins one core flat at 100% for the length of it and then
+    # does nothing for the rest of the five minutes. A fan curve chases that
+    # step rather than the average, which is only ~10% of a core.
+    #
+    # Capping is not free, and the price climbs steeply as it tightens: the
+    # quota is handed out in 100 ms slices, so a memory-bandwidth-bound numpy
+    # loop keeps getting descheduled mid-array and pays to pick up where it
+    # left off. Measured on this host, three steady-state cycles each:
+    #
+    #   cap    wall    peak    CPU-seconds per cycle
+    #   none    29 s   1.00     29.1
+    #   0.75    46 s   0.75     34.8   (+20%)
+    #   0.50    87 s   0.50     43.4   (+49%)
+    #
+    # Half a core was the first guess and is the wrong trade - it burns more
+    # total CPU than this ingestor used before the frame count came down at
+    # all, and its worst observed cycle ran 110 s. 0.75 gives up a quarter of
+    # the peak for a fifth more work and still finishes inside a sixth of the
+    # 300 s budget. Raise it to 1, or drop the line, if the map's freshness
+    # matters more than the noise: the burst is then 29 s at a full core.
+    cpus: 0.75
     networks:
       # `proxy` is here only so alerts can reach ntfy by container name
       # (ALERT_WEBHOOK_URL=http://ntfy/<topic>). Going out to the public
