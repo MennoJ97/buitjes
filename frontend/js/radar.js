@@ -385,7 +385,19 @@ export class FrameStore {
      * as linear latitude would drift by kilometres at the edges.
      */
     /** Which pixel a coordinate lands on, or null if it lands off the frame. */
-    _pixelFor(lng, lat) {
+    /**
+     * The pixel a coordinate falls on, in a raster of `width` x `height`.
+     *
+     * The size is a parameter because not every raster here is the manifest's.
+     * The spread layer may be published coarser than the rain layer — it is a
+     * neighbourhood statistic, so it does not need the same resolution — and
+     * the two cover the same corner coordinates at different pixel counts.
+     * Drawing is unaffected, since the shader samples in normalised
+     * coordinates, but reading a *pixel* out of the band at the rain layer's
+     * size would land at roughly twice the offset and report the band from
+     * somewhere down the road.
+     */
+    _pixelFor(lng, lat, width = this.width, height = this.height) {
         if (!this.manifest) return null;
         const [[west, north], [east], , [, south]] = this.manifest.bounds;
         const xFraction = (lng - west) / (east - west);
@@ -394,8 +406,8 @@ export class FrameStore {
         const yFraction = (mercNorth - mercatorY(lat)) / (mercNorth - mercSouth);
         if (xFraction < 0 || xFraction >= 1 || yFraction < 0 || yFraction >= 1) return null;
         return [
-            Math.min(this.width - 1, Math.floor(xFraction * this.width)),
-            Math.min(this.height - 1, Math.floor(yFraction * this.height)),
+            Math.min(width - 1, Math.floor(xFraction * width)),
+            Math.min(height - 1, Math.floor(yFraction * height)),
         ];
     }
 
@@ -443,7 +455,16 @@ export class FrameStore {
         const spread = this.spreadInfo;
         const image = this.spreadImageFor(frame);
         if (!spread || !image) return null;
-        const pixel = this._pixelFor(lng, lat);
+        // The image's own size rather than the manifest's `spread.width`: it is
+        // the one thing that cannot disagree with the pixels being read, and it
+        // stays right for a frame still in the browser cache from before the
+        // layer was pooled. The manifest publishes the size too, for readers
+        // that have no decoded image to ask.
+        const pixel = this._pixelFor(
+            lng, lat,
+            image.width || spread.width || this.width,
+            image.height || spread.height || this.height,
+        );
         if (!pixel) return null;
 
         const channels = this._readPixel(image, pixel[0], pixel[1]);

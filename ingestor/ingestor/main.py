@@ -26,7 +26,8 @@ import tempfile
 import time
 
 from .blend import (
-    REDUCER_LABELS, SPREAD_PERCENTILES, BlendFile, cell_reach, reduce_members,
+    REDUCER_LABELS, SPREAD_PERCENTILES, BlendFile, cell_reach, pool_members,
+    pooled_axis, pooled_cell_reach, pooled_reach_km, reduce_members,
     repaired_steps, spread_fields,
 )
 from .config import Config
@@ -83,6 +84,83 @@ def write_atomic(directory: str, name: str, payload: bytes) -> None:
 # ------------------------------------------------------------------ forecast
 
 
+def _same_extent(one: MercatorResampler, other: MercatorResampler, tolerance: float) -> bool:
+    return all(abs(getattr(one, edge) - getattr(other, edge)) <= tolerance
+               for edge in ('west', 'east', 'south', 'north'))
+
+
+def spread_plan(source, resampler: MercatorResampler, config: Config):
+    """How the spread layer gets built: ``(factor, reach, resampler)``.
+
+    The band is a statement about a neighbourhood - "how hard could it rain
+    within SPREAD_RADIUS_KM of here" - so drawing it at the rain layer's own
+    1 km is finer than the quantity means, and it was costing half of every
+    cycle: the dilation over a full member stack, then a lossless WebP of three
+    busy channels. Pooling the members first makes both cheaper by the square
+    of the factor.
+
+    The reach is worked out against the *pooled* cell size rather than divided
+    down from the full-resolution one. Halving ``(3, 4)`` by integer division
+    gives ``(1, 2)``, which is a 2 km radius wearing a 3 km label; recomputing
+    gives ``(2, 2)``, and SPREAD_RADIUS_KM keeps meaning what it says.
+
+    The two layers have to describe the same rectangle, because the frontend
+    stretches both across one set of corner coordinates. The pooled grid is
+    built from cell centres half a source cell in from the originals, which
+    lands on the same outer edges when the crop starts on a whole block - the
+    ordinary case, and exactly true for an uncropped domain. A crop that
+    starts on an odd row would snap the pooled grid outward by up to one source
+    cell and shift the band against the rain underneath it, so that case falls
+    back to full resolution rather than publishing a layer that is quietly a
+    kilometre out.
+    """
+    if config.spread_radius_km is None:
+        return 1, None, None
+
+    dlat = float(source.lat[1] - source.lat[0])
+    dlon = float(source.lon[1] - source.lon[0])
+    # The middle of the domain: longitude cells shrink towards the pole, so one
+    # reach for all of them is a compromise, and the middle is least wrong.
+    middle = float(source.lat[len(source.lat) // 2])
+
+    factor = config.spread_downsample
+    spread_resampler = resampler
+    if factor > 1:
+        try:
+            candidate = MercatorResampler(
+                pooled_axis(source.lat, factor), pooled_axis(source.lon, factor),
+                (resampler.west, resampler.south, resampler.east, resampler.north),
+                out_height=max(1, resampler.height // factor),
+            )
+        except (ValueError, IndexError) as error:
+            # Pooled past the point where there is a grid left to resample onto
+            # - a big factor against a small crop. Both types on purpose: a
+            # factor that merely undershoots the two cells a resampler needs
+            # raises ValueError, while one that empties the axis outright fails
+            # earlier and differently. Nothing here is worth failing a cycle
+            # over; the layer is a nicety and full resolution works.
+            log.warning('spread: cannot pool %dx on this grid (%s); '
+                        'publishing the spread layer at full resolution',
+                        factor, error)
+            candidate = None
+        if candidate is not None and _same_extent(resampler, candidate, abs(dlon) / 10):
+            spread_resampler = candidate
+        else:
+            if candidate is not None:
+                log.warning(
+                    'spread: a %dx pooled grid does not line up with the crop '
+                    '(%s vs %s); publishing the spread layer at full resolution',
+                    factor, resampler.target.signature(), candidate.target.signature(),
+                )
+            factor = 1
+
+    # Counting the pooling block, which is itself a dilation - see
+    # :func:`ingestor.blend.pooled_cell_reach` for what going without
+    # that correction does to the band.
+    reach = pooled_cell_reach(config.spread_radius_km, dlat, dlon, middle, factor)
+    return factor, reach, spread_resampler
+
+
 def published_steps(valid_times, reference_time: int, config: Config) -> set[int]:
     """The valid times worth a frame of their own.
 
@@ -127,27 +205,31 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             resampler.width, resampler.height,
         )
 
+        # Cells, not kilometres, and worked out once: the grid is regular, so
+        # the reach is the same for every pixel and every timestep.
+        factor, reach, spread_resampler = spread_plan(source, resampler, config)
+
         extractor = PointExtractor(
             config.widget_locations, source.lat, source.lon, config.neighbourhood_km,
             # So it can read the reduced field, which is cropped where its own
             # cells are indices into the full KNMI grid.
             crop_origin=resampler.origin,
+            # And the band, which is on the spread layer's coarser grid.
+            nearby_scale=factor,
         )
 
-        # Cells, not kilometres, and worked out once: the grid is regular, so
-        # the reach is the same for every pixel and every timestep.
-        reach = None
-        if config.spread_radius_km is not None:
-            reach = cell_reach(
-                config.spread_radius_km,
-                float(source.lat[1] - source.lat[0]),
+        if reach is not None:
+            # The covered radius as well as the asked-for one: on a pooled grid
+            # they round apart, and a band a kilometre wider than its label is
+            # worth seeing in the log rather than inferring from the picture.
+            covered = pooled_reach_km(
+                reach, float(source.lat[1] - source.lat[0]),
                 float(source.lon[1] - source.lon[0]),
-                # The middle of the domain: longitude cells shrink towards the
-                # pole, so one reach for all of them is a compromise, and the
-                # middle is where it is least wrong.
-                float(source.lat[len(source.lat) // 2]),
-            )
-            log.info('spread: %.1f km is %d x %d cells', config.spread_radius_km, *reach)
+                float(source.lat[len(source.lat) // 2]), factor)
+            log.info('spread: %.1f km is %d x %d cells (covering %.1f x %.1f km) '
+                     'on a %dx%d grid, %dx pooled',
+                     config.spread_radius_km, *reach, *covered,
+                     spread_resampler.width, spread_resampler.height, factor)
 
         nowcast_until = source.reference_time + config.nowcast_minutes * 60
         wanted = published_steps(source.valid_times, source.reference_time, config)
@@ -179,7 +261,12 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
             reduced = reduce_members(resampler.crop(members), config.ensemble_stat)
             # Computed once and used twice: the point documents sample it at
             # their own cells, the frames carry it for every pixel.
-            nearby = spread_fields(members, *reach) if reach else None
+            # Pooled first, so the dilation and the sort run on a quarter of
+            # the array at 2x. The maximum is the pool that belongs here: see
+            # :func:`ingestor.blend.pool_members`. Percentiles are still taken
+            # across members, inside spread_fields, and are not pooled at all.
+            nearby = (spread_fields(pool_members(members, factor), *reach)
+                      if reach else None)
             # Three outputs off one read: the members for the point
             # percentiles, the field they were reduced into, and the
             # neighbourhood band that makes a usable line at a location.
@@ -200,7 +287,8 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
                 # a percentile rather than a second read of the file. Dilated
                 # before the crop, so a pixel at the crop edge still sees the
                 # neighbours that exist just outside it.
-                spread = [resampler(resampler.crop(percentile)) for percentile in nearby]
+                spread = [spread_resampler(spread_resampler.crop(percentile))
+                          for percentile in nearby]
                 spread_payload = encode_spread_frame(spread, config.max_precip)
                 spread_name = spread_frame_name(source.reference_time, valid_time)
                 write_atomic(config.frame_dir, spread_name, spread_payload)
@@ -242,6 +330,14 @@ def build_forecast(path: str, config: Config, conditions=None, alert_runner=None
                 'floor_mm_h': SPREAD_FLOOR_MM_H,
                 'max_mm_h': config.max_precip,
                 'shape': 'square',
+                # The band's own raster size, which is not the manifest's when
+                # the layer is pooled. Both cover the same corner coordinates,
+                # so a shader sampling in normalised coordinates needs nothing
+                # from this - but anything reading a *pixel* does, and reading
+                # it at the rain layer's size lands somewhere else entirely.
+                'width': spread_resampler.width,
+                'height': spread_resampler.height,
+                'downsample': factor,
             },
             # Coordinates too: a client that knows where the user clicked can
             # then pick the nearest published location without another request.

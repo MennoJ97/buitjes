@@ -34,6 +34,7 @@ class Config:
     ensemble_stat: str
     neighbourhood_km: float
     spread_radius_km: float | None
+    spread_downsample: int
     max_precip: float
     nowcast_minutes: int
     full_cadence_minutes: int
@@ -114,6 +115,10 @@ class Config:
         if spread_radius is not None and spread_radius < 0:
             raise SystemExit('SPREAD_RADIUS_KM cannot be negative (leave it blank to disable)')
 
+        downsample = int(os.environ.get('SPREAD_DOWNSAMPLE', '2'))
+        if downsample < 1:
+            raise SystemExit('SPREAD_DOWNSAMPLE must be 1 or more (1 publishes full resolution)')
+
         return cls(
             api_key=api_key,
             dataset=os.environ.get('KNMI_DATASET', 'seamless_precipitation_ensemble_forecast_members'),
@@ -142,6 +147,16 @@ class Config:
             ensemble_stat=stat,
             neighbourhood_km=neighbourhood,
             spread_radius_km=spread_radius,
+            # How much coarser the spread frames are than the rain frames. The
+            # band is a deliberately smoothed statistic - "how hard could it
+            # rain within SPREAD_RADIUS_KM of here" - so publishing it at the
+            # rain layer's 1 km is finer than the quantity means, and it was
+            # half the cost of a cycle. At 2 it is the cheapest half of what it
+            # was and about a third of the bytes. The radius is honoured
+            # whatever this is set to: the reach is recomputed against the
+            # coarser cells rather than divided down. 1 restores full
+            # resolution.
+            spread_downsample=downsample,
             max_precip=float(os.environ.get('MAX_PRECIP_MM_H', '100')),
             # Where the timeline stops calling the blend a nowcast. The product
             # itself is seamless; this is a presentation cue, not a data boundary.
