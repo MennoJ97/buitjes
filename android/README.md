@@ -192,9 +192,21 @@ nothing else would catch them drifting apart. Three fixtures: a coordinate, the
 same coordinate outside the radar domain, and a configured location, all
 captured from a running cycle.
 
-`:app` compiles and packages: `./gradlew :app:assembleDebug` produces a debug
-APK, with no warnings. What it has *not* had is a single second of runtime.
-Nothing below has been seen working on a device:
+`:app` compiles and packages, and has now run: installed on a Galaxy S24+
+(Android 16), where it takes a coarse fix, fetches `/api/point?lat&lon` and
+caches a document with 48 banded steps in it. The forecast-for-here path works
+end to end.
+
+That first run cost one bug, and it is worth reading as a warning about the
+rest of this list. `LocationSource` only accepted a last-known fix younger than
+five minutes and otherwise went asking for a fresh one — and on a phone in a
+pocket, where nothing else requests location, the newest fix is *always* older
+than five minutes and the fresh request never lands. It failed totally,
+reporting "could not get a location fix" while holding a six-minute-old fix
+that was perfectly good for a kilometre-wide grid. Every value in it was
+defensible; the combination could not work. See `FRESH_ENOUGH_SECONDS`.
+
+Still unseen on a device:
 
 - whether the widget lays out sensibly at real sizes, and whether the chart
   bitmap survives the RemoteViews Binder budget on a large tablet widget
@@ -204,7 +216,8 @@ Nothing below has been seen working on a device:
   fifteen minutes;
 - the API 26–29 branch of `LocationSource`, which needs an old device or an
   emulator image to exercise at all;
-- whether an alert ever fires, which needs weather.
+- whether an alert ever fires, which needs weather — and notification
+  permission, which is requested but was not granted on the first run.
 
 ### Toolchain
 
