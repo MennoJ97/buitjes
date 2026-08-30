@@ -61,7 +61,11 @@ as twitchy as convective rain is a number that will be wrong.
   the plainest: it fires when the map would paint rain on your location, which
   is both what most people mean and what they will see on the page the alert
   points at.
-- **A JSON API** shaped for a homepage dashboard widget.
+- **A JSON API** shaped for a homepage dashboard widget — and, for a client
+  that cannot be a configured location, the same document for any coordinate:
+  `/api/point?lat=52.37&lon=4.90` samples the published frames on demand, band
+  and all. It says `out_of_coverage` rather than a confident line of zeros once
+  you leave the radar's domain.
 - **Five basemaps**, dark through high-contrast, none needing an API key.
 
 ![The forecast detail page: the looping radar, and ensemble spread on every series](docs/images/forecast.png)
@@ -76,9 +80,10 @@ as twitchy as convective rain is a number that will be wrong.
 │    notification service           ─ /api/config   the manifest │
 │  ─ decodes NetCDF4 (h5py)         ─ /api/frames/<file>.webp    │
 │  ─ 20 members → one field (pmm)   ─ /api/point/<name>          │
-│  ─ resamples rows to Mercator     ─ /api/current/<name>        │
-│  ─ + a p10/p50/p90 spread frame   ─ /api/conditions            │
-│  ─ encodes 16-bit WebP frames     ─ /healthz  data freshness   │
+│  ─ resamples rows to Mercator     ─ /api/point?lat=&lon=       │
+│  ─ + a p10/p50/p90 spread frame   ─ /api/current/<name>        │
+│  ─ encodes 16-bit WebP frames     ─ /api/conditions            │
+│                                   ─ /healthz  data freshness   │
 │                                   ─ /livez    is it serving?   │
 │           │                                ▲                   │
 │           ▼                                │                   │

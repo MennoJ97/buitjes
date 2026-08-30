@@ -1,0 +1,21 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+# Kotlin 2.x scratch: compiler session ids and error dumps, per-machine.
+.kotlin/
+
+# Release signing. Nothing here yet — the app is a debug sideload — but a
+# keystore is the one file in an Android project that cannot be un-leaked, and
+# the moment it exists is the moment somebody runs `git add -A`.
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# Built artefacts. `assembleDebug` puts them under build/, which is already
+# ignored; this catches the copy somebody makes to hand the APK to a phone.
+*.apk
+*.aab

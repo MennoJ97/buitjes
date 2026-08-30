@@ -12,6 +12,13 @@ serde_json = "1.0"
 # rustls rather than the system OpenSSL so the runtime image stays slim.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tracing = "0.1"
+# Sampling a coordinate out of the published frames means decoding them here.
+# Only the WebP decoder is wanted; the rest of the format zoo would be dead
+# weight in the image, so default features are off.
+image = { version = "0.25", default-features = false, features = ["webp"] }
+# Open-Meteo timestamps in, local clock times out. Already in the tree via
+# tracing-subscriber, so this costs no extra compile.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # `env-filter` for RUST_LOG, `chrono` for local-time stamps. The obvious choice
 # for the latter — fmt::time::LocalTime — cannot read the local offset from a
 # multi-threaded process, which this is, so it renders nothing at all rather

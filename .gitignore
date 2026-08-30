@@ -31,7 +31,11 @@ mqtt-client-id
 
 # Nextcloud sync conflict copies ("app 2.js", "main 3.py"). Three of these were
 # committed once by a broad `git add`, and an unreadable one blocked a build.
+# The second pattern is for directories, which the first misses because it
+# requires an extension: Gradle's output produced a "build 2" the first time
+# the Android project was built inside the synced folder.
 * [0-9].*
+* [0-9]
 *conflicted copy*
 
 # Vendored library sourcemaps (the libraries themselves are committed)
@@ -41,15 +45,8 @@ frontend/vendor/**/*.map
 # specific server — its middleware names, directory layout and container names
 # describe that machine — and IMPLEMENTATION_PLAN.md is the working record
 # behind it. Neither is needed to run this; .env.example documents every option.
-# ANDROID_PLAN.md is the same kind of working record for the android-app branch.
+# ANDROID_PLAN.md is the same kind of thing for the Android client: the working
+# record, not the documentation. The app's own README describes what shipped.
 docs/DEPLOYMENT.md
 docs/IMPLEMENTATION_PLAN.md
 docs/ANDROID_PLAN.md
-
-# Android build output. The app source lives on the android-app branch,
-# which has its own android/.gitignore; on master only the residue is left.
-android/.gradle/
-android/.idea/
-android/.kotlin/
-android/local.properties
-android/**/build/

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Cleartext is permitted, which is not the default and is worth justifying.
+
+    Buitjes is self-hosted. A large share of the servers this app will ever
+    point at are reached as http://192.168.1.x:8080 over a LAN or a WireGuard
+    tunnel, where there is no certificate to have and nothing between the phone
+    and the box to intercept. With the platform default, those setups fail
+    inside OkHttp before a packet leaves the phone, and the app would report
+    them as "no network" — the one failure mode that looks exactly like being
+    offline and is therefore the hardest to diagnose from a widget.
+
+    The trade is that a typo'd http:// URL to a public host is no longer refused
+    for us. That is a real loss, and the mitigation is that the setup screen
+    shows the resolved URL back before anything is stored.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <!--
+                User-installed roots are trusted too: a self-hosted server
+                behind a private CA is the normal case for this software, and
+                telling someone their own certificate is untrusted on their own
+                phone is not security, it is an obstacle course.
+            -->
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

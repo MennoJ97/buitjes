@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The themed-icon layer, read only on API 33+. Flat black on purpose: the
+    launcher recolours it, and any colour here would be discarded. The three
+    drops of the full icon collapse into one, because at the size a themed icon
+    is actually shown, three tinted shapes with no colour to separate them read
+    as a smudge.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#000000">
+
+    <path
+        android:fillColor="#000000"
+        android:pathData="M40,58 A13,13 0 0 1 40.6,32.2 A17,17 0 0 1 72.5,35.5 A12,12 0 0 1 71,58 Z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M54,64 C54,64 62,75 62,80.5 A8,8 0 0 1 46,80.5 C46,75 54,64 54,64 Z" />
+</vector>

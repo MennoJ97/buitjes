@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A single shower, which is what "buitje" means. Everything sits inside the
+    middle 72dp of the 108dp canvas so that no launcher's mask clips it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Cloud. -->
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M40,58 A13,13 0 0 1 40.6,32.2 A17,17 0 0 1 72.5,35.5 A12,12 0 0 1 71,58 Z" />
+
+    <!-- Three drops, staggered so it reads as falling rather than as a comb. -->
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M45,64 C45,64 51,72 51,76.5 A6,6 0 0 1 39,76.5 C39,72 45,64 45,64 Z" />
+    <path
+        android:fillColor="#60A5FA"
+        android:pathData="M62,62 C62,62 67.5,69.5 67.5,73.5 A5.5,5.5 0 0 1 56.5,73.5 C56.5,69.5 62,62 62,62 Z" />
+    <path
+        android:fillColor="#93C5FD"
+        android:pathData="M53,78 C53,78 57.5,84.5 57.5,88 A4.5,4.5 0 0 1 48.5,88 C48.5,84.5 53,78 53,78 Z" />
+</vector>

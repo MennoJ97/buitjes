@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The launcher icon's background layer. The blue is the same #3b82f6 the
+         web chart draws its median line in, so the two surfaces are recognisably
+         the same product. -->
+    <color name="ic_launcher_background">#0F172A</color>
+</resources>

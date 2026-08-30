@@ -1,0 +1,211 @@
+{
+  "conditions_source": {
+    "attribution": "Open-Meteo (CC BY 4.0)",
+    "model": "icon_seamless",
+    "percentiles": [
+      10,
+      25,
+      50,
+      75,
+      90
+    ],
+    "step": "hourly"
+  },
+  "generated_at": 1787852120,
+  "location": {
+    "lat": 52.1009,
+    "lon": 5.1056,
+    "name": "home"
+  },
+  "precipitation": {
+    "field_product": "probability-matched mean",
+    "members": 20,
+    "nearby_radius_km": 3.0,
+    "neighbourhood_km": 10.0,
+    "percentiles": [
+      10,
+      25,
+      50,
+      75,
+      90
+    ],
+    "series": [
+      {
+        "field": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "nearby_median": 0.0,
+        "nearby_p10": 0.0,
+        "nearby_p90": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "probability": 0.0,
+        "probability_nearby": 0.0,
+        "t": 1787852100
+      },
+      {
+        "field": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "nearby_median": 0.0,
+        "nearby_p10": 0.0,
+        "nearby_p90": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "probability": 0.0,
+        "probability_nearby": 0.0,
+        "t": 1787852400
+      },
+      {
+        "field": 7.11,
+        "mean": 3.66,
+        "median": 3.28,
+        "nearby_median": 4.84,
+        "nearby_p10": 1.59,
+        "nearby_p90": 13.83,
+        "p10": 0.58,
+        "p25": 1.64,
+        "p75": 4.22,
+        "p90": 8.42,
+        "probability": 0.9,
+        "probability_nearby": 0.95,
+        "t": 1787870400
+      }
+    ],
+    "unit": "mm/h"
+  },
+  "precipitation_outlook": {
+    "series": [
+      {
+        "median": 0.3,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 1.4,
+        "p90": 3.4,
+        "t": 1787875200
+      },
+      {
+        "median": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.2,
+        "p90": 0.6,
+        "t": 1787878800
+      },
+      {
+        "median": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.0,
+        "p90": 0.4,
+        "t": 1787882400
+      }
+    ],
+    "unit": "mm/h"
+  },
+  "reference_time": 1787851800,
+  "solar": {
+    "series": [
+      {
+        "median": 534,
+        "p10": 480,
+        "p25": 512,
+        "p75": 564,
+        "p90": 585,
+        "t": 1787839200
+      },
+      {
+        "median": 446,
+        "p10": 403,
+        "p25": 426,
+        "p75": 466,
+        "p90": 481,
+        "t": 1787842800
+      },
+      {
+        "median": 297,
+        "p10": 265,
+        "p25": 272,
+        "p75": 322,
+        "p90": 341,
+        "t": 1787846400
+      }
+    ],
+    "unit": "W/m²"
+  },
+  "source": {
+    "attribution": "KNMI (CC BY 4.0)",
+    "dataset": "seamless_precipitation_ensemble_forecast_members",
+    "version": "1.0"
+  },
+  "summary": {
+    "peak_at": 1787870100,
+    "peak_mm_h": 5.24,
+    "raining_now": false,
+    "starts_at": 1787862300,
+    "stops_at": null,
+    "text": "Dry now — rain at 22:25, peaking 5.2 mm/h around 00:35, lasting past the end of the forecast."
+  },
+  "temperature": {
+    "series": [
+      {
+        "median": 27.8,
+        "p10": 27.1,
+        "p25": 27.4,
+        "p75": 28.3,
+        "p90": 28.5,
+        "t": 1787839200
+      },
+      {
+        "median": 28.2,
+        "p10": 27.5,
+        "p25": 27.8,
+        "p75": 28.8,
+        "p90": 29.0,
+        "t": 1787842800
+      },
+      {
+        "median": 28.0,
+        "p10": 27.0,
+        "p25": 27.6,
+        "p75": 28.5,
+        "p90": 29.0,
+        "t": 1787846400
+      }
+    ],
+    "unit": "°C"
+  },
+  "wind": {
+    "series": [
+      {
+        "median": 4.1,
+        "p10": 3.8,
+        "p25": 3.9,
+        "p75": 4.5,
+        "p90": 4.8,
+        "t": 1787839200
+      },
+      {
+        "median": 3.9,
+        "p10": 3.5,
+        "p25": 3.6,
+        "p75": 4.3,
+        "p90": 4.5,
+        "t": 1787842800
+      },
+      {
+        "median": 3.6,
+        "p10": 2.9,
+        "p25": 3.2,
+        "p75": 3.9,
+        "p90": 4.1,
+        "t": 1787846400
+      }
+    ],
+    "unit": "m/s"
+  }
+}

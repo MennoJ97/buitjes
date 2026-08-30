@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    What the widget picker shows before anything has been configured. Drawn
+    rather than screenshotted because a screenshot would have to be a PNG per
+    density, would go stale the first time the chart changed, and would bake in
+    one particular afternoon's weather as if it meant something.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="180dp"
+    android:height="110dp"
+    android:viewportWidth="180"
+    android:viewportHeight="110">
+
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M8,0 L172,0 A8,8 0 0 1 180,8 L180,102 A8,8 0 0 1 172,110 L8,110 A8,8 0 0 1 0,102 L0,8 A8,8 0 0 1 8,0 Z" />
+
+    <!-- Header line, standing in for the location name. -->
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M12,12 L58,12 L58,19 L12,19 Z" />
+
+    <!-- Baseline, then a shower building and easing off. -->
+    <path
+        android:fillColor="#1F2733"
+        android:pathData="M12,74 L168,74 L168,75 L12,75 Z" />
+    <path
+        android:fillColor="#60A5FA"
+        android:pathData="M20,70 L26,70 L26,74 L20,74 Z M32,64 L38,64 L38,74 L32,74 Z M44,52 L50,52 L50,74 L44,74 Z M56,38 L62,38 L62,74 L56,74 Z M68,45 L74,45 L74,74 L68,74 Z M80,58 L86,58 L86,74 L80,74 Z M92,66 L98,66 L98,74 L92,74 Z M104,71 L110,71 L110,74 L104,74 Z" />
+
+    <!-- The now marker. -->
+    <path
+        android:fillColor="#EF4444"
+        android:pathData="M49,30 L50,30 L50,74 L49,74 Z" />
+
+    <!-- Summary line. -->
+    <path
+        android:fillColor="#8B94A7"
+        android:pathData="M12,88 L140,88 L140,94 L12,94 Z" />
+</vector>

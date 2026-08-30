@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A platform parent rather than Theme.Material3.* — the Material Components
+    library is not a dependency here and does not need to be, because Compose
+    draws everything above the window. All this theme has to get right is the
+    window background, so that the split second before the first frame is not a
+    white flash on a dark phone; values-night/ carries the other half.
+-->
+<resources>
+    <style name="Theme.Buitjes" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFBFDFF</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

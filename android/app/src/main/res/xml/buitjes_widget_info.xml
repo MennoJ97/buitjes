@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    updatePeriodMillis is a safety net, not the refresh mechanism. The platform
+    clamps it to 30 minutes and gives no control over when within that window it
+    fires; RefreshWorker is what actually keeps the widget current, on the same
+    15-minute pass that evaluates the alert rules. This value exists so that a
+    phone whose WorkManager schedule has been lost still redraws eventually
+    rather than showing an hours-old graph forever — and because a redraw from
+    here costs a cache read, not a fetch.
+
+    The configure activity is required rather than optional: a widget with no
+    location is not a widget, and guessing "the first configured point" would
+    put someone else's town on the home screen.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:configure="nl.buitjes.android.widget.WidgetConfigActivity"
+    android:description="@string/widget_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minHeight="110dp"
+    android:minResizeHeight="80dp"
+    android:minResizeWidth="140dp"
+    android:minWidth="180dp"
+    android:previewImage="@drawable/widget_preview"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="4"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

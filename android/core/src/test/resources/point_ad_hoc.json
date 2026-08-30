@@ -1,0 +1,197 @@
+{
+  "conditions_source": {
+    "attribution": "Open-Meteo (CC BY 4.0)",
+    "model": "on-demand ensemble"
+  },
+  "generated_at": 1787852488,
+  "location": {
+    "ad_hoc": true,
+    "lat": 52.1009,
+    "lon": 5.1056,
+    "name": "this point"
+  },
+  "precipitation": {
+    "band_radius_km": 3.0,
+    "field_product": "probability-matched mean",
+    "frame_only": false,
+    "nearby_radius_km": 3.0,
+    "series": [
+      {
+        "kind": "observed",
+        "measured": 0.0,
+        "t": 1787851500
+      },
+      {
+        "kind": "observed",
+        "measured": 0.0,
+        "t": 1787851800
+      },
+      {
+        "field": 0.0,
+        "kind": "nowcast",
+        "nearby_median": 0.0,
+        "nearby_p10": 0.0,
+        "nearby_p90": 0.0,
+        "t": 1787852100
+      },
+      {
+        "field": 0.0,
+        "kind": "nowcast",
+        "nearby_median": 0.0,
+        "nearby_p10": 0.0,
+        "nearby_p90": 0.0,
+        "t": 1787852400
+      },
+      {
+        "field": 1.2,
+        "kind": "forecast",
+        "nearby_median": 0.96,
+        "nearby_p10": 0.0,
+        "nearby_p90": 4.89,
+        "t": 1787863200
+      },
+      {
+        "field": 10.02,
+        "kind": "forecast",
+        "nearby_median": 5.16,
+        "nearby_p10": 1.74,
+        "nearby_p90": 12.66,
+        "t": 1787870100
+      }
+    ],
+    "unit": "mm/h"
+  },
+  "precipitation_outlook": {
+    "series": [
+      {
+        "median": 0.3,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 1.4,
+        "p90": 3.4,
+        "t": 1787875200
+      },
+      {
+        "median": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.2,
+        "p90": 0.6,
+        "t": 1787878800
+      },
+      {
+        "median": 0.0,
+        "p10": 0.0,
+        "p25": 0.0,
+        "p75": 0.0,
+        "p90": 0.4,
+        "t": 1787882400
+      }
+    ],
+    "unit": "mm/h"
+  },
+  "reference_time": 1787851800,
+  "solar": {
+    "series": [
+      {
+        "median": 534.0,
+        "p10": 480.0,
+        "p25": 512.0,
+        "p75": 564.0,
+        "p90": 585.0,
+        "t": 1787839200
+      },
+      {
+        "median": 446.0,
+        "p10": 403.0,
+        "p25": 427.0,
+        "p75": 466.0,
+        "p90": 481.0,
+        "t": 1787842800
+      },
+      {
+        "median": 297.0,
+        "p10": 265.0,
+        "p25": 273.0,
+        "p75": 322.0,
+        "p90": 341.0,
+        "t": 1787846400
+      }
+    ],
+    "unit": "W/m²"
+  },
+  "source": {
+    "attribution": "KNMI (CC BY 4.0)",
+    "dataset": "seamless_precipitation_ensemble_forecast_members",
+    "observed": "nl_rdr_data_rtcor_5m",
+    "product": "probability-matched mean of 20 ensemble members",
+    "reducer": "probability-matched mean",
+    "version": "1.0"
+  },
+  "summary": {
+    "peak_at": 1787870100,
+    "peak_mm_h": 5.16,
+    "raining_now": false,
+    "starts_at": 1787862600,
+    "stops_at": null,
+    "text": "Dry now — rain at 20:30, peaking 5.2 mm/h around 22:35, lasting past the end of the forecast."
+  },
+  "temperature": {
+    "series": [
+      {
+        "median": 27.8,
+        "p10": 27.1,
+        "p25": 27.4,
+        "p75": 28.3,
+        "p90": 28.5,
+        "t": 1787839200
+      },
+      {
+        "median": 28.2,
+        "p10": 27.5,
+        "p25": 27.8,
+        "p75": 28.8,
+        "p90": 29.0,
+        "t": 1787842800
+      },
+      {
+        "median": 28.0,
+        "p10": 27.0,
+        "p25": 27.6,
+        "p75": 28.5,
+        "p90": 29.0,
+        "t": 1787846400
+      }
+    ],
+    "unit": "°C"
+  },
+  "wind": {
+    "series": [
+      {
+        "median": 4.1,
+        "p10": 3.8,
+        "p25": 3.9,
+        "p75": 4.5,
+        "p90": 4.8,
+        "t": 1787839200
+      },
+      {
+        "median": 3.9,
+        "p10": 3.5,
+        "p25": 3.6,
+        "p75": 4.3,
+        "p90": 4.5,
+        "t": 1787842800
+      },
+      {
+        "median": 3.6,
+        "p10": 2.9,
+        "p25": 3.2,
+        "p75": 3.9,
+        "p90": 4.1,
+        "t": 1787846400
+      }
+    ],
+    "unit": "m/s"
+  }
+}
