@@ -224,6 +224,19 @@ private fun Provenance(snapshot: Snapshot?) {
             )
         }
 
+        // Two short lines, and it used to be five long ones.
+        //
+        // The five were written when the chart could not be asked anything: the
+        // only way to say which statistic the bars were, and what the band was
+        // a band of, was to write it underneath. Touching the chart now names
+        // both, for the step under the finger, and says when the answer changes
+        // part way along the series — which the paragraph could only ever
+        // describe in general. So this is back to being a caption rather than
+        // the explanation, and the explanation lives where the question is
+        // actually asked.
+        //
+        // The credits stay. They are a licence obligation, not a caption, and
+        // nothing else in the app names either organisation.
         val provenance: List<String> = when {
             forecast == null -> emptyList()
             forecast.outOfCoverage -> listOf(
@@ -232,37 +245,34 @@ private fun Provenance(snapshot: Snapshot?) {
 
             else -> buildList {
                 val centre = forecast.rain
-                val band = centre.bands.firstOrNull()
+                val radius = forecast.precipitation?.nearbyRadiusKm
+                    ?: forecast.precipitation?.bandRadiusKm
+                val measured = if (CentreKey.Measured in centre.keys) {
+                    ", after an hour of measured radar"
+                } else {
+                    ""
+                }
+
                 add(
-                    if (band != null) {
-                        "Bars are the ${centre.label}; the shaded band covers ${band.label}."
-                    } else {
+                    when {
+                        centre.keys.firstOrNull() == CentreKey.NearbyMedian && radius != null ->
+                            "Median and 80% band, both within ${radius.roundToInt()} km$measured."
+
+                        centre.bands.isNotEmpty() ->
+                            "Median of the members, with 80% of them inside the band$measured."
+
                         // An older server serves a coordinate as one number
-                        // copied across the percentiles. Saying nothing here
-                        // would leave a confident-looking chart unqualified.
-                        "Bars are the ${centre.label}. This forecast carries no band, so " +
-                            "nothing on the chart says how much the members disagreed."
+                        // copied across the percentiles. Saying nothing would
+                        // leave a confident-looking chart unqualified.
+                        else -> "Median only — this forecast carries no band$measured."
                     }
                 )
-                if (CentreKey.Measured in centre.keys) {
-                    add(
-                        "The first steps are measured by radar, and carry no band — a " +
-                            "measurement has no ensemble behind it to disagree."
-                    )
-                }
-                if (forecast.location.adHoc) {
-                    add(
-                        "Read back off the published frames rather than from the members " +
-                            "themselves, so the band answers \"near here\" rather than " +
-                            "\"exactly here\", and there is no share-of-members behind it."
-                    )
-                }
-                // A licence obligation as much as a courtesy: this draws two
-                // organisations' data and neither is named anywhere else in the
-                // app.
-                listOfNotNull(forecast.source?.text, forecast.conditionsSource?.text)
+
+                listOfNotNull(forecast.source?.attribution, forecast.conditionsSource?.attribution)
                     .filter { it.isNotBlank() }
-                    .forEach { add(it) }
+                    .distinct()
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { add(it.joinToString(" · ")) }
             }
         }
         provenance.forEach { line ->
