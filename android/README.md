@@ -195,7 +195,8 @@ captured from a running cycle.
 `:app` compiles and packages, and has now run: installed on a Galaxy S24+
 (Android 16), where it takes a coarse fix, fetches `/api/point?lat&lon` and
 caches a document with 48 banded steps in it. The forecast-for-here path works
-end to end.
+end to end, the hourly cards draw, the charts can be scrubbed, and the widget
+has been sat on a home screen and looks right at the size it lands in.
 
 That first run cost one bug, and it is worth reading as a warning about the
 rest of this list. `LocationSource` only accepted a last-known fix younger than
@@ -208,10 +209,12 @@ defensible; the combination could not work. See `FRESH_ENOUGH_SECONDS`.
 
 Still unseen on a device:
 
-- whether the widget lays out sensibly at real sizes, and whether the chart
-  bitmap survives the RemoteViews Binder budget on a large tablet widget
-  (`ChartRenderer` caps itself at 220k pixels, which is a guess at a limit that
-  is device-dependent);
+- whether the chart bitmap survives the RemoteViews Binder budget on a *large*
+  widget — a phone-sized one is fine, but `ChartRenderer` caps itself at 220k
+  pixels, which is a guess at a limit that is device-dependent, and a tablet
+  home screen is where the guess would be tested. Over it the widget does not
+  draw a smaller chart: it silently fails to update and keeps whatever it last
+  showed, which from the home screen looks like the app having died;
 - whether the refresh worker actually runs on a phone in Doze at anything like
   fifteen minutes;
 - the API 26–29 branch of `LocationSource`, which needs an old device or an
