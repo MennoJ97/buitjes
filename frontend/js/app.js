@@ -39,10 +39,34 @@ function carryRadarOver(previous, next) {
     };
 }
 
-/** Run `fn` once the current style is loaded, whether or not it already is. */
+/**
+ * Whether the current stylesheet has been parsed and its layers created.
+ *
+ * Deliberately not `map.isStyleLoaded()`, which answers a different question:
+ * whether every tile, sprite and glyph the basemap wants has *settled*. That
+ * goes back to false whenever the map fetches anything, and nothing announces
+ * when it becomes true again — `styledata` fires for changes to the style
+ * itself, never for a tile arriving. So `once('styledata')` is a wait that can
+ * outlive the last event able to end it, and on a basemap whose tiles are slow
+ * or unreachable it never ends at all.
+ *
+ * Adding a layer, or repainting one, needs the stylesheet parsed and nothing
+ * more, which is exactly what 'style.load' says.
+ *
+ * Set once and never cleared, including across a basemap switch. Clearing it
+ * for the duration of a swap looks tidier and is a trap: the swap is usually a
+ * diff, which fires no 'style.load' to set it back, so the flag would be left
+ * off and the radar could never be hung again — the same dead end in a new
+ * costume. The narrow thing it gives up is a rebuild-from-scratch swap, where a
+ * refresh landing in the gap before the new stylesheet parses gets a throw and
+ * a banner; the 'style.load' that ends the rebuild puts the radar back anyway.
+ */
+let styleReady = false;
+
+/** Run `fn` once the current style is parsed, whether or not it already is. */
 function onStyleReady(fn) {
-    if (map.isStyleLoaded()) fn();
-    else map.once('styledata', fn);
+    if (styleReady) fn();
+    else map.once('style.load', fn);
 }
 
 /** Below this rate we call it dry, matching the bottom of the colour ramp. */
@@ -159,6 +183,15 @@ const map = new maplibregl.Map({
     // Added by hand below instead: on MapLibre 3 this option is only read as a
     // boolean, so the `{ compact: true }` it used to be given did nothing.
     attributionControl: false,
+});
+// The one place styleReady is set, and where the radar is hung. Not 'load':
+// that additionally waits for the first complete render, so a basemap whose
+// tiles never arrive would cost the radar as well as the scenery. This also
+// fires again if a basemap swap has to rebuild the style from scratch, which
+// leaves the radar to be put back.
+map.on('style.load', () => {
+    styleReady = true;
+    if (store.manifest) setupRadarLayer();
 });
 // Our own credits are the same whichever basemap is showing, so they belong on
 // the control rather than being pasted onto every provider's line — which also
@@ -317,12 +350,12 @@ function clearWarmupRetry() {
 }
 
 function setupRadarLayer() {
-    // 'styledata' rather than 'load', because a basemap switch replaces the
-    // style without the map ever loading a second time.
-    if (!map.isStyleLoaded()) {
-        map.once('styledata', setupRadarLayer);
-        return;
-    }
+    // A plain no-op before the style is parsed rather than a queued retry: the
+    // 'style.load' handler runs this again for whatever arrived first, and a
+    // basemap switch carries the radar over rather than needing it rebuilt.
+    // See styleReady for why the readiness of the style is not asked of
+    // MapLibre directly.
+    if (!styleReady) return;
     if (map.getSource('radar')) {
         map.getSource('radar').setCoordinates(store.coordinates);
         return;
@@ -1332,8 +1365,12 @@ async function applyBasemap(name) {
 
     showingStyleUrl = config.styleUrl ?? null;
     map.setStyle(styleFor(config), { transformStyle: carryRadarOver });
-    // Not onStyleReady: right after setStyle the *old* style can still report
-    // itself loaded, which would repaint layers that are about to be replaced.
+    // 'styledata' rather than either of the signals that read better. Not
+    // onStyleReady, because right after setStyle the *old* style can still
+    // report itself ready, and its layers are about to be replaced. Not
+    // 'style.load' either: MapLibre diffs a stylesheet it is able to diff —
+    // which is this one, every time — and a diff never fires it. A styledata is
+    // what both paths have in common.
     map.once('styledata', () => {
         applyStyleOverrides(map, config, pristine);
         // A new style brings a new credits line, opened by MapLibre again.
@@ -1392,12 +1429,10 @@ map.on('click', (event) => {
     inspect(event.lngLat);
     if (!el.trendPanel.hidden) openTrend(event.lngLat);
 });
-map.on('load', () => {
-    if (store.manifest) setupRadarLayer();
-});
-// Registered directly rather than from 'load': nothing here needs the style, and
-// 'load' can simply never arrive - it did not in a sandbox where the basemap
-// tiles were unreachable, which would have silently cost the readout entirely.
+// Registered directly rather than from a map event: nothing here needs the
+// style, and 'load' can simply never arrive - it did not in a sandbox where the
+// basemap tiles were unreachable, which would have silently cost the readout
+// entirely. The same reasoning moved the radar layer to 'style.load'.
 setupHoverReadout();
 
 document.addEventListener('click', (event) => {

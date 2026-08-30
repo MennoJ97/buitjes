@@ -34,8 +34,11 @@ class Config:
     ensemble_stat: str
     neighbourhood_km: float
     spread_radius_km: float | None
+    spread_downsample: int
     max_precip: float
     nowcast_minutes: int
+    full_cadence_minutes: int
+    tail_step_minutes: int
     keep_cycles: int
     observed_dataset: str
     observed_version: str
@@ -100,6 +103,10 @@ class Config:
         if neighbourhood < 0:
             raise SystemExit('NEIGHBOURHOOD_KM cannot be negative')
 
+        if int(os.environ.get('TAIL_STEP_MINUTES', '10')) < 0:
+            raise SystemExit(
+                'TAIL_STEP_MINUTES cannot be negative (0 publishes every step)')
+
         # Blank switches the spread layer off entirely rather than meaning zero,
         # because zero is a legitimate setting here: it asks for the percentiles
         # of this square kilometre alone. Same idea as OUTPUT_HEIGHT.
@@ -107,6 +114,10 @@ class Config:
         spread_radius = float(spread) if spread else None
         if spread_radius is not None and spread_radius < 0:
             raise SystemExit('SPREAD_RADIUS_KM cannot be negative (leave it blank to disable)')
+
+        downsample = int(os.environ.get('SPREAD_DOWNSAMPLE', '2'))
+        if downsample < 1:
+            raise SystemExit('SPREAD_DOWNSAMPLE must be 1 or more (1 publishes full resolution)')
 
         return cls(
             api_key=api_key,
@@ -136,10 +147,32 @@ class Config:
             ensemble_stat=stat,
             neighbourhood_km=neighbourhood,
             spread_radius_km=spread_radius,
+            # How much coarser the spread frames are than the rain frames. The
+            # band is a deliberately smoothed statistic - "how hard could it
+            # rain within SPREAD_RADIUS_KM of here" - so publishing it at the
+            # rain layer's 1 km is finer than the quantity means, and it was
+            # half the cost of a cycle. At 2 it is the cheapest half of what it
+            # was and about a third of the bytes. The radius is honoured
+            # whatever this is set to: the reach is recomputed against the
+            # coarser cells rather than divided down. 1 restores full
+            # resolution.
+            spread_downsample=downsample,
             max_precip=float(os.environ.get('MAX_PRECIP_MM_H', '100')),
             # Where the timeline stops calling the blend a nowcast. The product
             # itself is seamless; this is a presentation cue, not a data boundary.
             nowcast_minutes=int(os.environ.get('NOWCAST_MINUTES', '120')),
+            # How far out every published timestep gets a frame of its own, and
+            # how far apart they are after that. KNMI publishes 72 five-minute
+            # steps out to +6 h, and the last two hours of that were half the
+            # bytes and most of the CPU of a cycle - a five-minute cadence four
+            # hours out is a precision the blend does not have that far ahead,
+            # where it is essentially the hourly HARMONIE ensemble. The window
+            # defaults to the nowcast horizon because that is the same boundary
+            # under a different name; set TAIL_STEP_MINUTES to 0 to publish
+            # every step as before.
+            full_cadence_minutes=int(os.environ.get(
+                'FULL_CADENCE_MINUTES', os.environ.get('NOWCAST_MINUTES', '120'))),
+            tail_step_minutes=int(os.environ.get('TAIL_STEP_MINUTES', '10')),
             keep_cycles=int(os.environ.get('KEEP_CYCLES', '3')),
             # Observed history: KNMI's real-time gauge-corrected radar composite.
             observed_dataset=os.environ.get('KNMI_OBSERVED_DATASET', 'nl_rdr_data_rtcor_5m'),

@@ -83,16 +83,18 @@ class PointExtractor:
     """
 
     def __init__(self, locations, lat, lon, neighbourhood_km: float = NEIGHBOURHOOD_KM,
-                 crop_origin=(0, 0)):
+                 crop_origin=(0, 0), nearby_scale: int = 1):
         lat = np.asarray(lat, dtype=np.float64)
         lon = np.asarray(lon, dtype=np.float64)
         lat0, dlat = float(lat[0]), float(lat[1] - lat[0])
         lon0, dlon = float(lon[0]), float(lon[1] - lon[0])
 
         self.neighbourhood_km = float(neighbourhood_km)
+        self.nearby_scale = int(nearby_scale)
         self.locations = []
         self._cells = []
         self._field_cells = []   # the same cells, offset into the published crop
+        self._nearby_cells = []  # the same cells on the spread layer's own grid
         self._discs = []
         for location in locations:
             row = int(round((location.lat - lat0) / dlat))
@@ -105,6 +107,11 @@ class PointExtractor:
             self.locations.append(location)
             self._cells.append((row, column))
             self._field_cells.append((row - crop_origin[0], column - crop_origin[1]))
+            # The spread layer may be published on a coarser grid than the
+            # members, so its cell for a location is not the members' cell. Off
+            # by this and the band would be read from somewhere down the road.
+            self._nearby_cells.append(
+                (row // self.nearby_scale, column // self.nearby_scale))
             self._discs.append(
                 _disc(row, column, len(lat), len(lon), dlat, dlon,
                       location.lat, self.neighbourhood_km)
@@ -185,10 +192,15 @@ class PointExtractor:
             for row, column in self._field_cells
         ])
         # Uncropped, so these read at the location's own cell rather than the
-        # crop-relative one the field uses.
+        # crop-relative one the field uses - and on the spread layer's own grid,
+        # which is coarser than the members' when SPREAD_DOWNSAMPLE is above 1.
+        # Clamped because pooling drops a trailing row or column that does not
+        # fill a whole block, so the very last cell can round past the edge.
         self._nearby_bands.append(None if nearby is None else [
-            [float(percentile[row, column]) for percentile in nearby]
-            for row, column in self._cells
+            [float(percentile[min(row, percentile.shape[0] - 1),
+                              min(column, percentile.shape[1] - 1)])
+             for percentile in nearby]
+            for row, column in self._nearby_cells
         ])
 
     def series_for(self, index: int) -> list[dict]:

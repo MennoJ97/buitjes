@@ -39,6 +39,8 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
     const store = new FrameStore();
     let renderer = null;
     let map = null;
+    /** Set on 'style.load'; see addRadarLayer for why not isStyleLoaded(). */
+    let styleReady = false;
     let marker = null;
     let index = 0;
     let timer = null;
@@ -168,18 +170,51 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
         });
         mapEl.classList.toggle('theme-light', !!config.lightUi);
         map.on('error', (event) => fail('map error', event?.error));
-        map.once('load', async () => {
+        // 'style.load' rather than 'load': it fires when the stylesheet has been
+        // parsed and its layers exist, which is everything the radar layer
+        // needs. 'load' additionally waits for the first complete render, so a
+        // basemap whose tiles are slow or unreachable would hold the rain
+        // hostage to scenery.
+        map.once('style.load', () => {
+            styleReady = true;
+            // The rain goes on first, and without awaiting anything. The
+            // repaint below needs the basemap's own stylesheet over the
+            // network, and on a cold visit that fetch is long enough for the
+            // map to start loading tiles again — which is exactly the state
+            // addRadarLayer used to refuse to add a layer in.
             try {
-                applyStyleOverrides(map, config, await pristineStyle(config));
                 addRadarLayer();
             } catch (error) {
                 fail('could not add the radar layer', error);
             }
+            // Its own failure, and a survivable one: losing the recolouring
+            // costs legibility, not the radar. It used to share a catch with
+            // the line above and report itself as the radar being unavailable.
+            pristineStyle(config)
+                .then((pristine) => applyStyleOverrides(map, config, pristine))
+                .catch((error) => console.error('minimap: could not repaint the basemap', error));
         });
     }
 
+    /**
+     * Put the radar canvas on the map, once the map has a style to put it in.
+     *
+     * The wait is on our own flag rather than on `map.isStyleLoaded()`, which
+     * answers a different question: whether every tile, sprite and glyph the
+     * basemap wants has *settled*. That goes back to false whenever the map
+     * fetches anything, and no event says when it becomes true again —
+     * `styledata` fires for changes to the style itself, never for a tile
+     * arriving. So `once('styledata')` was a wait that could outlive the last
+     * event that would ever end it, and then the card sat there with a basemap
+     * and no rain on it for the rest of the visit. Opening the map page first
+     * hid it: the tiles were already cached, so the style was still settled by
+     * the time this ran.
+     *
+     * Adding a source and a layer needs the stylesheet parsed and nothing more,
+     * which is what 'style.load' says and all this flag records.
+     */
     function addRadarLayer() {
-        if (!map.isStyleLoaded()) return void map.once('styledata', addRadarLayer);
+        if (!styleReady) return;
         if (map.getSource('radar-mini')) {
             map.getSource('radar-mini').setCoordinates(store.coordinates);
             return;

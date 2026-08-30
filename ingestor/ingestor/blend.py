@@ -67,10 +67,31 @@ def probability_matched_mean(values):
     mean = values.mean(axis=0)
 
     ranks = np.argsort(mean, axis=None)[::-1]
-    pooled = np.sort(values, axis=None)[::-1]
-
     points = ranks.size
-    blocks = pooled[:points * members].reshape(points, members).mean(axis=1)
+
+    # Only the wet values are sorted, which is bit-identical to sorting the
+    # pool and about 20% quicker. The pool is every member value in descending
+    # order, and on this product nineteen in twenty of them are zero - sorting
+    # those is sorting a known constant. Dropped, the ranks past the wet ones
+    # are left holding blocks that are entirely zero, which is what `blocks`
+    # already holds. Rain rate is non-negative, so `> 0` really does split the
+    # pool at the point the zeros begin.
+    wet = np.sort(values[values > 0])[::-1]
+    blocks = np.zeros(points, dtype=np.float32)
+    whole = wet.size // members
+    if whole:
+        blocks[:whole] = wet[:whole * members].reshape(whole, members).mean(axis=1)
+    if wet.size > whole * members:
+        # The single rank whose block straddles the wet/dry boundary. The zeros
+        # are written back out for it, rather than divided in as a count: a
+        # float32 `sum() / members` accumulates in a different order from the
+        # `mean()` above and left this one rank a few times 1e-9 off, which is
+        # nothing on a rain rate but is the difference between "identical" and
+        # "identical apart from one pixel" in the test that guards this.
+        straddling = np.zeros(members, dtype=np.float32)
+        tail = wet[whole * members:]
+        straddling[:tail.size] = tail
+        blocks[whole] = straddling.mean()
 
     matched = np.empty(points, dtype=np.float32)
     matched[ranks] = blocks
@@ -323,6 +344,49 @@ def cell_reach(radius_km: float, dlat: float, dlon: float, latitude: float):
     return rows, int(math.ceil(radius_km / lon_km))
 
 
+def pooled_cell_reach(radius_km: float, dlat: float, dlon: float, latitude: float,
+                      factor: int):
+    """``(rows, columns)`` on a grid pooled by ``factor``, counting the block.
+
+    The trap this exists to avoid: pooling by maximum over an ``f x f`` block
+    *is already a dilation*. A pooled cell holds the maximum of ``f`` fine
+    cells, so it reaches half a block either side of its own centre before any
+    dilation runs. Ask :func:`cell_reach` for a reach on the pooled cell size
+    and that free half-block is spent twice - on KNMI's grid a 3 km radius came
+    out as 2 pooled cells, which is a 5.0 x 4.9 km footprint wearing a 3 km
+    label, and the band it produced was a fifth wider with its floor lifted off
+    dry. That is the very failure :func:`spread_fields` is written to avoid.
+
+    The footprint of pool(f) then dilate(r) is ``f * r + f / 2`` fine cells
+    either side, so the reach that lands nearest the radius is
+    ``round(fine / f - 0.5)``.
+
+    Nearest rather than :func:`cell_reach`'s ceiling, and that is a deliberate
+    break. Rounding up guarantees "never less than the radius", which costs at
+    most one fine cell on the full grid but a whole block here - and over-
+    covering is precisely what ruins the band, while under-covering by a few
+    hundred metres does not. On the real grid this lands at 3.01 x 2.95 km for
+    a 3 km radius, against the full-resolution reach's own 3.01 x 3.94 km.
+    """
+    if radius_km <= 0:
+        return 0, 0
+    if factor <= 1:
+        return cell_reach(radius_km, dlat, dlon, latitude)
+    rows = radius_km / (abs(dlat) * _KM_PER_DEGREE)
+    lon_km = abs(dlon) * _KM_PER_DEGREE * math.cos(math.radians(latitude))
+    columns = radius_km / lon_km
+    step = lambda fine: max(0, int(round(fine / factor - 0.5)))
+    return step(rows), step(columns)
+
+
+def pooled_reach_km(reach, dlat: float, dlon: float, latitude: float, factor: int):
+    """What :func:`pooled_cell_reach` actually covers, for the log line."""
+    half = lambda cells: factor * cells + factor / 2 if factor > 1 else cells
+    return (half(reach[0]) * abs(dlat) * _KM_PER_DEGREE,
+            half(reach[1]) * abs(dlon) * _KM_PER_DEGREE
+            * math.cos(math.radians(latitude)))
+
+
 def _shift_into(target, values, offset: int, axis: int):
     """Write ``values``, moved along ``axis``, into ``target``.
 
@@ -387,6 +451,66 @@ def _dilate(out, reach: int, axis: int, scratch):
         covered += step
         span *= 2
     return out
+
+
+def pool_members(members, factor: int):
+    """Coarsen the two spatial axes by ``factor``, taking each block's maximum.
+
+    A maximum, and only on the spatial axes, for a reason worth stating because
+    the layer this feeds is built from *percentiles*: the percentiles are taken
+    across members and are not touched here. What this coarsens is space, and
+    in space the quantity at this point in the pipeline is already a
+    neighbourhood maximum per member - :func:`spread_fields` dilates before it
+    reduces. Maximum is idempotent and associative, so pooling by maximum and
+    then dilating by a reach worked out for the coarser grid composes into
+    exactly the same kind of object: "the most this member puts anywhere near
+    here", over slightly larger cells.
+
+    The alternatives are both wrong rather than merely different. A mean would
+    dilute the peaks the band exists to describe. Plain decimation would drop
+    them outright, since a shower's core need not sit on an even index. And
+    pooling the *percentile fields* afterwards - taking the maximum of p10 -
+    is wrong in a third way: maximum and percentile do not commute, and doing
+    it that way lifts the band's floor off dry and widens it by around a
+    tenth, which is the failure :func:`spread_fields` is written to avoid.
+
+    Written as strided slices rather than a reshape. The obvious
+    ``reshape(m, h//f, f, w//f, f).max(axis=(2, 4))`` reads the member stack
+    along its fastest-moving axis in tiny hops and measured *slower* than not
+    pooling at all - 158 ms against 136 ms on the full grid, where the slices
+    below take 43 ms.
+
+    A trailing row or column that does not fill a whole block is dropped: the
+    grid it feeds is derived by :func:`pooled_axis`, which drops the same one.
+    """
+    if factor <= 1:
+        return members
+    values = np.asarray(members)
+    rows = values.shape[-2] // factor * factor
+    columns = values.shape[-1] // factor * factor
+    values = values[..., :rows, :columns]
+
+    pooled = values[..., 0::factor, 0::factor].copy()
+    for row_offset in range(factor):
+        for column_offset in range(factor):
+            if row_offset or column_offset:
+                np.maximum(pooled, values[..., row_offset::factor, column_offset::factor],
+                           out=pooled)
+    return pooled
+
+
+def pooled_axis(values, factor: int):
+    """The cell centres of the grid :func:`pool_members` produces.
+
+    Each pooled cell covers ``factor`` source cells, so its centre is their
+    mean - half a source cell off the first one, not on top of it. Getting this
+    wrong would shift the whole spread layer against the rain it annotates.
+    """
+    if factor <= 1:
+        return np.asarray(values, dtype=np.float64)
+    axis = np.asarray(values, dtype=np.float64)
+    whole = len(axis) // factor * factor
+    return axis[:whole].reshape(-1, factor).mean(axis=1)
 
 
 def spread_fields(members, reach_rows: int, reach_columns: int,

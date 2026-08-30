@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from ingestor.alerts import Rule, evaluate, parse_rules  # noqa: E402
 from ingestor.blend import (  # noqa: E402
     cell_reach, estimate_step, is_degenerate, neighbourhood_maximum,
+    pool_members, pooled_axis, pooled_cell_reach, pooled_reach_km,
     probability_matched_mean, reduce_members, repaired_steps, spread_fields,
 )
 from ingestor.encode import (  # noqa: E402
@@ -36,6 +37,7 @@ from ingestor.encode import (  # noqa: E402
 from ingestor.points import (  # noqa: E402
     Location, PointExtractor, current_conditions, summarise,
 )
+from ingestor.main import published_steps, spread_plan  # noqa: E402
 from ingestor.raster import MercatorResampler  # noqa: E402
 
 failures = []
@@ -108,6 +110,41 @@ check('nothing negative', pmm.min() >= 0.0)
 dry = np.zeros((4, 8, 8), np.float32)
 check('an all-dry ensemble reduces to all dry',
       float(probability_matched_mean(dry).max()) == 0.0)
+
+def pmm_reference(values):
+    """The straightforward reading: sort the whole pool, zeros and all.
+
+    What :func:`probability_matched_mean` used to do, kept here because what it
+    does now - sorting only the wet values and leaving the dry ranks at zero -
+    is an optimisation whose whole claim is that it changes nothing. Nineteen
+    values in twenty are zero on this product, so the claim is worth a test
+    rather than a comment.
+    """
+    values = np.asarray(values, dtype=np.float32)
+    members = values.shape[0]
+    mean = values.mean(axis=0)
+    ranks = np.argsort(mean, axis=None)[::-1]
+    pooled = np.sort(values, axis=None)[::-1]
+    points = ranks.size
+    blocks = pooled[:points * members].reshape(points, members).mean(axis=1)
+    matched = np.empty(points, dtype=np.float32)
+    matched[ranks] = blocks
+    return matched.reshape(mean.shape)
+
+
+check('bit-identical to sorting the whole pool',
+      np.array_equal(pmm, pmm_reference(ens)))
+# The block that straddles the wet/dry boundary is the one the shortcut has to
+# get right by arithmetic rather than by having the zeros there, and it only
+# exists when the wet count is not a whole multiple of the member count.
+for wet_cells in (0, 1, 19, 20, 21, 40, 41):
+    sparse = np.zeros((20, 8, 8), np.float32)
+    sparse.reshape(20, -1)[:, :1] = 0.0
+    flat = sparse.reshape(-1)
+    flat[:wet_cells] = np.linspace(0.5, 9.0, wet_cells) if wet_cells else 0.0
+    check(f'identical with {wet_cells} wet values in the pool',
+          np.array_equal(probability_matched_mean(sparse), pmm_reference(sparse)),
+          f'{wet_cells}')
 
 check('reachable through reduce_members',
       np.array_equal(reduce_members(ens, 'pmm'), pmm))
@@ -582,6 +619,230 @@ check('a spread frame is opaque, so a 2D canvas can read it back',
 check('exactly three fields, or it is refused',
       _caught(lambda: encode_spread_frame([rates, rates], 100.0)))
 
+
+print()
+print('pooling the spread layer')
+
+block = np.zeros((2, 8, 8), np.float32)
+block[0, 3, 5] = 7.0      # one wet cell, deliberately on an odd index
+block[1, 2, 2] = 1.5
+pooled = pool_members(block, 2)
+check('pooling halves both spatial axes and leaves members alone',
+      pooled.shape == (2, 4, 4), f'{pooled.shape}')
+check('a peak on an odd index survives, which decimation would drop',
+      float(pooled[0, 1, 2]) == 7.0, f'{pooled[0, 1, 2]}')
+check('the maximum is what carries, not the mean',
+      float(pooled.max()) == 7.0 and float(pooled.sum()) == 8.5)
+check('a factor of one is the identity', pool_members(block, 1) is block)
+odd = np.arange(2 * 7 * 7, dtype=np.float32).reshape(2, 7, 7)
+check('a trailing row and column that cannot fill a block are dropped',
+      pool_members(odd, 2).shape == (2, 3, 3))
+
+axis = np.array([50.0, 50.01, 50.02, 50.03])
+check('a pooled cell centre sits between the two it covers',
+      np.allclose(pooled_axis(axis, 2), [50.005, 50.025]), f'{pooled_axis(axis, 2)}')
+check('an odd trailing cell is dropped from the axis too, matching the members',
+      len(pooled_axis(np.arange(7.0), 2)) == 3)
+
+
+class Source:
+    """Just the two axes spread_plan reads, on KNMI's actual grid."""
+
+    lat = np.linspace(48.991, 56.011, 780)
+    lon = np.linspace(-0.0145, 11.2955, 780)
+
+
+class Settings:
+    def __init__(self, radius=3.0, downsample=2):
+        self.spread_radius_km = radius
+        self.spread_downsample = downsample
+
+
+source = Source()
+full_res = MercatorResampler(source.lat, source.lon)
+factor, reach, band = spread_plan(source, full_res, Settings())
+
+check('the layer is pooled', factor == 2)
+check('the band is published at half the rain layer\'s size',
+      (band.width, band.height) == (full_res.width // 2, full_res.height // 2),
+      f'{band.width}x{band.height} vs {full_res.width}x{full_res.height}')
+# The whole point of recomputing rather than dividing. On this grid the
+# full-resolution reach is (3, 4); halving it by integer division would give
+# (1, 2) - a 2 km radius north-south wearing a 3 km label, and anisotropic.
+DLAT = float(source.lat[1] - source.lat[0])
+DLON = float(source.lon[1] - source.lon[0])
+full_reach = cell_reach(3.0, DLAT, DLON, 52.5)
+check('the full-resolution reach is the one production reports',
+      full_reach == (3, 4), f'{full_reach}')
+check('the pooled reach counts the pooling block',
+      reach == (1, 1), f'{reach}')
+# Two wrong answers this is deliberately not. Halving the full-resolution reach
+# gives (1, 2); asking cell_reach for a reach on the doubled cell size gives
+# (2, 2), which spends the block's own half-cell twice and covers 5 km.
+check('it is neither the halved reach nor cell_reach on the coarser grid',
+      reach != (full_reach[0] // 2, full_reach[1] // 2)
+      and reach != cell_reach(3.0, DLAT * 2, DLON * 2, 52.5),
+      f'{reach}')
+covered = pooled_reach_km(reach, DLAT, DLON, 52.5, 2)
+fine_covered = pooled_reach_km(full_reach, DLAT, DLON, 52.5, 1)
+check('so it covers about the radius asked for',
+      all(abs(km - 3.0) < 1.0 for km in covered),
+      f'{covered[0]:.2f} x {covered[1]:.2f} km')
+check('as close as the full-resolution reach manages, or closer',
+      max(abs(km - 3.0) for km in covered) <= max(abs(km - 3.0) for km in fine_covered),
+      f'pooled {covered[0]:.2f}x{covered[1]:.2f} vs full '
+      f'{fine_covered[0]:.2f}x{fine_covered[1]:.2f}')
+check('a zero radius still reaches nowhere', pooled_cell_reach(0, DLAT, DLON, 52.5, 2) == (0, 0))
+
+# Both layers are stretched across one set of corner coordinates, so they have
+# to describe the same rectangle or the band sits offset from the rain.
+for edge in ('west', 'east', 'south', 'north'):
+    check(f'the pooled grid covers the same {edge} edge',
+          abs(getattr(band, edge) - getattr(full_res, edge)) < 1e-9,
+          f'{getattr(band, edge)} vs {getattr(full_res, edge)}')
+
+check('switching it off publishes the band on the rain layer\'s own grid',
+      spread_plan(source, full_res, Settings(downsample=1))[2] is full_res)
+check('and no spread radius means no band at all',
+      spread_plan(source, full_res, Settings(radius=None)) == (1, None, None))
+
+# What the pooling is actually for: the band it produces has to still be the
+# band. Compared against the full-resolution one sampled at the same cells.
+shower_members = ensemble(members=20, size=64)
+# A toy grid, so work the two reaches out the same way the planner does rather
+# than writing them down: the point is that the footprints match, not the digits.
+TOY_DLAT, TOY_DLON = 0.009, 0.0145
+toy_fine = cell_reach(3.0, TOY_DLAT, TOY_DLON, 52.5)
+toy_pooled = pooled_cell_reach(3.0, TOY_DLAT, TOY_DLON, 52.5, 2)
+fine = spread_fields(shower_members, *toy_fine)[:, ::2, ::2]
+coarse = spread_fields(pool_members(shower_members, 2), *toy_pooled)
+check('the pooled band is ordered low <= mid <= high',
+      bool((coarse[0] <= coarse[1] + 1e-6).all() and (coarse[1] <= coarse[2] + 1e-6).all()))
+wet = fine[0] > 0.1
+lifted = float((coarse[0] <= 0.1).mean()) - float((fine[0] <= 0.1).mean())
+check('its floor does not lift off dry, which is the failure to avoid',
+      lifted > -0.02, f'dry share moved by {lifted * 100:+.1f} points')
+# And the shipped-first-time version, kept as the thing that must stay broken:
+# cell_reach on the doubled spacing double-counts the block.
+naive = spread_fields(pool_members(shower_members, 2),
+                      *cell_reach(3.0, TOY_DLAT * 2, TOY_DLON * 2, 52.5))
+naive_lift = float((naive[0] <= 0.1).mean()) - float((fine[0] <= 0.1).mean())
+check('and the block-blind reach really would have lifted it',
+      naive_lift < lifted - 0.01,
+      f'block-blind moved it {naive_lift * 100:+.1f} points, '
+      f'block-aware {lifted * 100:+.1f}')
+# Against a full-resolution band over the *same footprint*, which is the only
+# comparison that isolates what pooling does. The fine reach the planner picks
+# is not it: cell_reach rounds up, so (3, 4) covers 3.0 x 3.9 km where the
+# pooled reach covers 3.0 x 2.95, and a band over a third less area is
+# rightly narrower. pool(f) then dilate(r) spans f*r + f/2 either side, so the
+# fine reach matching a pooled r is 2r + 1.
+matched = tuple(2 * r + 1 for r in toy_pooled)
+same_footprint = spread_fields(shower_members, *matched)[:, ::2, ::2]
+width_change = float((coarse[2] - coarse[0]).mean()
+                     / max((same_footprint[2] - same_footprint[0]).mean(), 1e-9))
+# Within a tenth, and the tenth is the block quantisation rather than slack in
+# the test. Half-widths match exactly - 3 fine cells either side both ways -
+# but the spans cannot: a fine reach of 3 covers 2*3+1 = 7 fine cells,
+# symmetric about the cell it describes, while two pooled cells cover
+# 2*(2*1+1) = 6 and no even block can straddle a centre cell evenly. One fine
+# cell of footprint out of seven is the whole difference, and it is a floor at
+# this factor, not a defect.
+check('over the same footprint the band comes out within a tenth',
+      0.85 < width_change < 1.15, f'width x{width_change:.2f}')
+matched_lift = (float((coarse[0] <= 0.1).mean())
+                - float((same_footprint[0] <= 0.1).mean()))
+check('and its floor sits where the full-resolution one does',
+      abs(matched_lift) < 0.02, f'dry share differs by {matched_lift * 100:+.1f} points')
+# Worth stating plainly, because it changes what gets published: the band is
+# narrower than the one shipping today, and that is the east-west over-reach
+# in the full-resolution rounding going away rather than pooling losing
+# anything.
+against_today = float((coarse[2] - coarse[0]).mean() / max((fine[2] - fine[0]).mean(), 1e-9))
+check('narrower than today\'s published band, as the footprints predict',
+      0.7 < against_today < 0.95, f'width x{against_today:.2f} vs today')
+
+# The band is read at a location's own cell, which is not the members' cell
+# once the layer is pooled.
+here = Location(name='here', lat=float(source.lat[400]), lon=float(source.lon[300]))
+scaled = PointExtractor([here], source.lat, source.lon, 10.0, nearby_scale=2)
+check('a location maps onto the pooled grid, not the full one',
+      scaled._nearby_cells[0] == (scaled._cells[0][0] // 2, scaled._cells[0][1] // 2),
+      f'{scaled._nearby_cells[0]} from {scaled._cells[0]}')
+
+print()
+print('the published cadence')
+
+
+class Cadence:
+    """Just the two settings :func:`published_steps` reads."""
+
+    def __init__(self, full_cadence_minutes=120, tail_step_minutes=10):
+        self.full_cadence_minutes = full_cadence_minutes
+        self.tail_step_minutes = tail_step_minutes
+
+
+REFERENCE = 1_700_000_000
+# What KNMI publishes: 72 steps, +5 min to +6 h.
+CYCLE = [REFERENCE + minute * 60 for minute in range(5, 361, 5)]
+
+
+def leads(stamps):
+    return sorted((t - REFERENCE) // 60 for t in stamps)
+
+
+def _walk(stamps, selected):
+    """Each stamp paired with the last selected stamp before it."""
+    last = None
+    for stamp in stamps:
+        yield stamp, last
+        if stamp in selected:
+            last = stamp
+
+
+kept = leads(published_steps(CYCLE, REFERENCE, Cadence()))
+check('every five-minute step survives inside the window',
+      kept[:24] == list(range(5, 125, 5)), f'{kept[:24]}')
+check('and ten-minute steps after it',
+      kept[24:] == list(range(130, 361, 10)), f'{kept[24:]}')
+check('48 of 72 steps published', len(kept) == 48, f'{len(kept)}')
+check('no gap wider than one tail step',
+      max(b - a for a, b in zip(kept, kept[1:])) == 10)
+check('the boundary itself is kept, and not twice', kept.count(120) == 1)
+check('the horizon is not cut short', kept[-1] == 360)
+
+check('a zero tail step publishes every step',
+      published_steps(CYCLE, REFERENCE, Cadence(tail_step_minutes=0)) == set(CYCLE))
+check('a tail step at the source cadence also publishes every step',
+      published_steps(CYCLE, REFERENCE, Cadence(tail_step_minutes=5)) == set(CYCLE))
+check('a window past the horizon publishes every step',
+      published_steps(CYCLE, REFERENCE, Cadence(full_cadence_minutes=999)) == set(CYCLE))
+
+# A cycle that already has a hole in it - a step nothing could stand in for -
+# must not let the tail drift onto a coarser spacing than it was asked for.
+gapped = [t for t in CYCLE if (t - REFERENCE) // 60 not in (200, 205, 210)]
+gap_selected = published_steps(gapped, REFERENCE, Cadence())
+gap_kept = leads(gap_selected)
+# The walk cannot fill a hole the source left, so the promise is not a spacing
+# it always achieves - it is that it never passes over a step that would have
+# made the spacing better. Anything it skips is inside one tail step of the
+# step it last kept, and so could only have made the timeline denser than asked.
+premature = [
+    (t - REFERENCE) // 60 for t, last in _walk(gapped, gap_selected)
+    if t not in gap_selected and last is not None and t - last >= 600
+]
+check('nothing is skipped that would have improved the spacing',
+      not premature, f'{premature}')
+check('and every kept stamp is one the source actually published',
+      set(gap_kept) <= set(leads(gapped)))
+check('the hole is reported at its real width, not papered over',
+      max(b - a for a, b in zip(gap_kept, gap_kept[1:])) == 25)
+
+# An hourly source, to show the walk is against the stamps and not a modulus
+# that happens to suit five-minute steps.
+hourly = [REFERENCE + hour * 3600 for hour in range(1, 13)]
+check('a coarser source than the tail step is left alone',
+      published_steps(hourly, REFERENCE, Cadence()) == set(hourly))
 
 print()
 if failures:
