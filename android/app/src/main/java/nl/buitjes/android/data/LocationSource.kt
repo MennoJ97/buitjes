@@ -47,20 +47,35 @@ object LocationSource {
      * nobody is watching a spinner. A network fix on a phone that has just woken
      * from Doze can take a while, and coming back empty costs a whole 15-minute
      * cycle of alerting.
+     *
+     * Longer than the platform's own thirty seconds, deliberately. At twenty it
+     * was shorter, so every request was cancelled ten seconds before the phone
+     * would have answered it — three providers hung up on in turn, and a minute
+     * spent guaranteeing failure. If `getCurrentLocation` is going to give up,
+     * let it be the one to say so.
      */
-    private const val TIMEOUT_MS = 20_000L
+    private const val TIMEOUT_MS = 35_000L
 
     /**
      * A last-known fix younger than this is used as-is.
      *
-     * Five minutes is a compromise between two real numbers. The forecast grid
-     * is about a kilometre wide and the server rounds coordinates to roughly
-     * that, so movement below a kilometre is invisible to the answer — and five
-     * minutes is walking pace's worth of kilometre. Cycling would beat it, but
-     * asking for a fresh fix every quarter of an hour to correct for a case that
-     * resolves itself on the next pass is not a trade worth the radio.
+     * Half an hour, and the number is the forecast's rather than the fix's. The
+     * grid is about a kilometre wide and the server rounds coordinates to
+     * roughly that, so movement below a kilometre is invisible to the answer;
+     * thirty minutes is also exactly when `Snapshot.isStale` stops trusting a
+     * document, so a fix older than this belongs to a forecast the app would
+     * already be labelling stale. Matching the two means the age shown on
+     * screen is never contradicted by a position quietly older than it.
+     *
+     * It was five minutes, which is walking pace's worth of a kilometre and
+     * sounds careful. On a phone in a pocket it is not: nothing else asks for
+     * location, the newest fix ages past five minutes within five minutes, and
+     * then every refresh threw away a usable fix to go and ask for a better one
+     * that never came. The failure was total — "could not get a location fix",
+     * with a six-minute-old fix in hand — and it is the more likely state, not
+     * the edge case.
      */
-    private const val FRESH_ENOUGH_SECONDS = 300L
+    private const val FRESH_ENOUGH_SECONDS = 30 * 60L
 
     /**
      * Providers in the order they are worth asking, coarsest first.
@@ -107,7 +122,12 @@ object LocationSource {
         // has to survive.
         bestLastKnown(manager, available)?.let { return it }
 
-        for (provider in available) {
+        // Passive is not asked for a fix of its own, because it cannot produce
+        // one: it reports what other apps' requests happen to yield, so asking
+        // it directly is twenty seconds spent waiting for somebody else to open
+        // a maps app. It stays in the list above, where it is one of the better
+        // sources of a *last known* fix for exactly the same reason.
+        for (provider in available.filter { it != LocationManager.PASSIVE_PROVIDER }) {
             val fresh = runCatching { requestFix(manager, provider) }.getOrNull()
             if (fresh != null) return fresh.asFix()
         }

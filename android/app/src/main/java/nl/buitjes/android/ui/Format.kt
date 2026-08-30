@@ -53,3 +53,10 @@ fun formatRate(mmh: Double): String {
     }
     return text.trimEnd('0').trimEnd('.').ifEmpty { "0" }
 }
+
+/**
+ * A short weekday, for a chart whose window is long enough that a bare clock
+ * time would be ambiguous about which day it belongs to.
+ */
+fun formatWeekday(epochSeconds: Long): String =
+    SimpleDateFormat("EEE", Locale.getDefault()).format(Date(epochSeconds * 1000))
