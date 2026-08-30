@@ -110,6 +110,28 @@ impl Grid {
     /// linear latitude would misplace rain by kilometres near the edges — the
     /// same reason the ingestor resamples rows in the first place.
     pub fn pixel(&self, lat: f64, lon: f64) -> Option<(usize, usize)> {
+        self.pixel_in(lat, lon, self.width, self.height)
+    }
+
+    /// The same lookup against a raster of a different size over the same
+    /// corners.
+    ///
+    /// The spread layer is published pooled — half the rain layer's resolution
+    /// at the time of writing — because "how hard could it rain within 3 km of
+    /// here" does not carry kilometre-scale detail. Both layers span the same
+    /// bounding box, so only the divisor changes; using the rain layer's size
+    /// on the band would read a pixel twice as far north-west as asked for, and
+    /// return nothing at all for the half of the domain past its edge.
+    pub fn pixel_in(
+        &self,
+        lat: f64,
+        lon: f64,
+        width: usize,
+        height: usize,
+    ) -> Option<(usize, usize)> {
+        if width == 0 || height == 0 {
+            return None;
+        }
         let x_fraction = (lon - self.west) / (self.east - self.west);
         let merc_north = mercator_y(self.north);
         let merc_south = mercator_y(self.south);
@@ -118,8 +140,8 @@ impl Grid {
             return None;
         }
         Some((
-            ((x_fraction * self.width as f64) as usize).min(self.width - 1),
-            ((y_fraction * self.height as f64) as usize).min(self.height - 1),
+            ((x_fraction * width as f64) as usize).min(width - 1),
+            ((y_fraction * height as f64) as usize).min(height - 1),
         ))
     }
 
@@ -336,9 +358,15 @@ pub fn sample_series(
     grid: &Grid,
     spread: Option<&Spread>,
     frames: &[Value],
-    pixel: (usize, usize),
+    latitude: f64,
+    longitude: f64,
 ) -> Vec<Value> {
-    let (px, py) = pixel;
+    // The coordinate rather than a pixel, because there is no longer one
+    // pixel: the band is published at its own resolution, so it has its own
+    // lookup against the same corners.
+    let Some((px, py)) = grid.pixel(latitude, longitude) else {
+        return Vec::new(); // Outside the domain; assemble() says so.
+    };
     let mut series = Vec::with_capacity(frames.len());
     let mut failures = 0usize;
 
@@ -392,7 +420,7 @@ pub fn sample_series(
             if let Some(levels) = frame
                 .get("spread")
                 .and_then(Value::as_str)
-                .and_then(|file| sample_spread(frame_dir, file, pixel))
+                .and_then(|file| sample_spread(frame_dir, file, grid, latitude, longitude))
             {
                 for (percentile, level) in spread.percentiles.iter().zip(levels) {
                     entry.insert(
@@ -412,14 +440,28 @@ pub fn sample_series(
     series
 }
 
-/// One spread frame at one pixel, or `None` if it will not load.
+/// One spread frame at one coordinate, or `None` if it will not load.
+///
+/// The pixel is worked out against the decoded image's own dimensions rather
+/// than the manifest's, which is what the frontend settled on and for the
+/// reason it gives: the image is the one thing that cannot disagree with the
+/// pixels being read, and it stays right for a frame written before the layer
+/// was pooled and still sitting on the volume.
 ///
 /// A missing band costs that step its band and nothing else: the entry still
 /// carries its value, and `centre_keys` falls through to it. Losing the whole
 /// step because the second of two files was mid-write would be a worse trade.
-fn sample_spread(frame_dir: &Path, file: &str, pixel: (usize, usize)) -> Option<[u8; 3]> {
+fn sample_spread(
+    frame_dir: &Path,
+    file: &str,
+    grid: &Grid,
+    latitude: f64,
+    longitude: f64,
+) -> Option<[u8; 3]> {
     let bytes = std::fs::read(frame_dir.join(file)).ok()?;
-    decode_spread(&bytes).ok()?.at(pixel.0, pixel.1)
+    let decoded = decode_spread(&bytes).ok()?;
+    let (px, py) = grid.pixel_in(latitude, longitude, decoded.width, decoded.height)?;
+    decoded.at(px, py)
 }
 
 /// Assembled documents, keyed by rounded coordinate.
@@ -922,6 +964,33 @@ mod tests {
         assert_eq!(grid.pixel(54.999, 1.001), Some((0, 0)));
         let (px, py) = grid.pixel(49.501, 9.499).expect("inside");
         assert_eq!((px, py), (849, 699));
+    }
+
+    /// The band is published pooled, so it has to be read at its own size.
+    ///
+    /// This is the whole failure this test exists for: reading a half-size
+    /// raster at the full raster's coordinates lands twice as far north-west as
+    /// asked, and for anything in the south-east quadrant — which is most of
+    /// the country — falls off the image entirely and silently returns no band.
+    #[test]
+    fn samples_a_pooled_raster_at_its_own_size() {
+        let grid = grid();
+        let (px, py) = grid.pixel(50.5, 8.0).expect("inside the domain");
+        assert!(
+            px >= grid.width / 2 && py >= grid.height / 2,
+            "a point that a half-size read at full-size coordinates would miss",
+        );
+
+        let pooled = grid
+            .pixel_in(50.5, 8.0, grid.width / 2, grid.height / 2)
+            .expect("still inside the domain, at half the resolution");
+        assert_eq!(pooled, (px / 2, py / 2), "the pooled cell covering the same place");
+    }
+
+    #[test]
+    fn refuses_a_raster_with_no_pixels() {
+        let grid = grid();
+        assert!(grid.pixel_in(52.0, 5.0, 0, 0).is_none());
     }
 
     #[test]

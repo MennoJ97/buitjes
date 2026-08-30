@@ -226,18 +226,32 @@ object ChartRenderer {
             }
         }
 
-        // Bars for the median.
-        val slot = plotWidth / max(1, series.size - 1)
-        val barWidth = max(1f, slot * 0.82f)
+        // Bars for the line.
+        //
+        // Width comes from each step's own gap to the next, not from the count.
+        // The cycle is not evenly spaced any more — five-minute steps to +2h,
+        // ten-minute after that — so one width for all of them draws the near
+        // half overlapping and the far half in stripes. Sized by its own gap, a
+        // bar covers the time it is a statement about, which also makes the ink
+        // under a spell proportional to how much rain it is.
+        fun slotAt(index: Int): Float {
+            val gap = when {
+                index + 1 < series.size -> series[index + 1].t - series[index].t
+                index > 0 -> series[index].t - series[index - 1].t
+                else -> span
+            }
+            return plotWidth * gap.toFloat() / span.toFloat()
+        }
         paint.style = Paint.Style.FILL
         paint.color = palette.bar
         val baseline = y(0.0)
-        for (entry in series) {
+        series.forEachIndexed { index, entry ->
             // A step carrying nothing draws nothing. Not a bar of zero height,
             // which is what this chart draws for a dry step and would be a
             // claim it cannot make about a hole in the radar composite.
-            val rate = centre.valueOf(entry) ?: continue
-            if (rate <= 0.0) continue
+            val rate = centre.valueOf(entry)
+            if (rate == null || rate <= 0.0) return@forEachIndexed
+            val barWidth = max(1f, slotAt(index) * 0.82f)
             val middle = x(entry.t)
             var barTop = y(rate)
             // A wet step must be visible. At six hours across a widget each bar

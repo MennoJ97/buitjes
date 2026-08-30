@@ -912,9 +912,6 @@ async fn serve_point_at(
                 warn!("manifest carries no usable grid");
                 return Vec::new();
             };
-            let Some(pixel) = grid.pixel(latitude, longitude) else {
-                return Vec::new(); // Outside the domain; assemble() says so.
-            };
             let frames = manifest
                 .get("frames")
                 .and_then(serde_json::Value::as_array)
@@ -924,7 +921,7 @@ async fn serve_point_at(
             // the band and nothing else: the series is still sampled and the
             // document still says what it is drawn from.
             let spread = point::Spread::from_manifest(&manifest);
-            point::sample_series(&frame_dir, &grid, spread.as_ref(), &frames, pixel)
+            point::sample_series(&frame_dir, &grid, spread.as_ref(), &frames, latitude, longitude)
         })
     };
 
