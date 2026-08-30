@@ -175,13 +175,15 @@ private fun Body(snapshot: Snapshot) {
     // exists — Glance has no measure pass to ask.
     val chartHeightDp = (size.height.value - CHROME_HEIGHT_DP).coerceAtLeast(40f)
 
+    // Only the picture: a home-screen widget has nothing to scrub with, and
+    // RemoteViews could not host a crosshair over it if it did.
     val bitmap = ChartRenderer.render(
         forecast = snapshot.forecast,
         widthPx = ((size.width.value - 16f) * density).toInt(),
         heightPx = (chartHeightDp * density).toInt(),
         density = density,
         palette = palette,
-    )
+    ).bitmap
 
     Column(
         modifier = GlanceModifier

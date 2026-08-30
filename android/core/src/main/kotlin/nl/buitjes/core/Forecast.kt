@@ -101,8 +101,13 @@ data class Centre(
     val keys: List<CentreKey>,
     /** What to call each key to a reader, parallel to [keys]. */
     val labels: List<String>,
-    /** The pair of keys to shade between, or `null` when there is no band. */
-    val band: BandKeys? = null,
+    /**
+     * The pairs of keys to shade between, widest first, or empty when there is
+     * no band. More than one because a band of bands reads as confidence
+     * without needing a legend: the outer covering 80% of the members and the
+     * inner 50% says "likely" and "very likely" in one picture.
+     */
+    val bands: List<BandKeys> = emptyList(),
 ) {
     /** The value this step is drawn as, or `null` if it carries none of them. */
     fun valueOf(step: Step): Double? = keys.firstNotNullOfOrNull { step.value(it) }
@@ -127,8 +132,7 @@ data class Centre(
      * Empty when there is no band at all, so a caller can iterate without
      * asking first.
      */
-    fun bandRuns(steps: List<Step>): List<List<Step>> {
-        val band = band ?: return emptyList()
+    fun bandRuns(steps: List<Step>, band: BandKeys): List<List<Step>> {
         val runs = mutableListOf<List<Step>>()
         var current = mutableListOf<Step>()
         for (step in steps) {
@@ -149,7 +153,7 @@ data class Centre(
             fun carries(key: CentreKey) = steps.any { it.value(key) != null }
 
             val chain = mutableListOf<Pair<CentreKey, String>>()
-            var band: BandKeys? = null
+            val bands = mutableListOf<BandKeys>()
 
             // The ad-hoc endpoint publishes the radius under both names, a
             // configured location under only the first. Either will do to say
@@ -162,7 +166,7 @@ data class Centre(
                 // per-cell percentiles are a different kind of number from the
                 // neighbourhood median, and drawing them around it is the
                 // mismatch this whole chain exists to avoid.
-                band = BandKeys(
+                bands += BandKeys(
                     CentreKey.NearbyP10,
                     CentreKey.NearbyP90,
                     "80% of members within $km km",
@@ -183,13 +187,18 @@ data class Centre(
             // could read it. Servers that predate the spread layer still send
             // that for a coordinate, and shading between copies of one number
             // would draw impossible confidence.
-            if (band == null && block?.medianOnly != true &&
-                carries(CentreKey.P10) && carries(CentreKey.P90)
-            ) {
-                band = BandKeys(CentreKey.P10, CentreKey.P90, "80% of the members")
+            if (bands.isEmpty() && block?.medianOnly != true) {
+                if (carries(CentreKey.P10) && carries(CentreKey.P90)) {
+                    bands += BandKeys(CentreKey.P10, CentreKey.P90, "80% of the members")
+                }
+                // Inner band second, so a caller drawing them in order paints
+                // the narrower one on top of the wider.
+                if (carries(CentreKey.P25) && carries(CentreKey.P75)) {
+                    bands += BandKeys(CentreKey.P25, CentreKey.P75, "50% of the members")
+                }
             }
 
-            return Centre(chain.map { it.first }, chain.map { it.second }, band)
+            return Centre(chain.map { it.first }, chain.map { it.second }, bands)
         }
     }
 }
@@ -218,6 +227,8 @@ enum class CentreKey {
     NearbyMedian,
     NearbyP90,
     P10,
+    P25,
+    P75,
     P90,
 }
 
@@ -316,6 +327,8 @@ data class Step(
         CentreKey.NearbyMedian -> nearbyMedian
         CentreKey.NearbyP90 -> nearbyP90
         CentreKey.P10 -> p10
+        CentreKey.P25 -> p25
+        CentreKey.P75 -> p75
         CentreKey.P90 -> p90
     }
 }

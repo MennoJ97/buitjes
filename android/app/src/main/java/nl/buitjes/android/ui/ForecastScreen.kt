@@ -32,8 +32,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
+import nl.buitjes.core.Centre
 import nl.buitjes.core.CentreKey
+import nl.buitjes.core.Forecast
+import nl.buitjes.core.Series
 import nl.buitjes.android.data.ForecastRepository
 import nl.buitjes.android.data.NamedPoint
 import nl.buitjes.android.data.Snapshot
@@ -114,6 +118,8 @@ fun ForecastScreen(initialTarget: WidgetTarget?, modifier: Modifier = Modifier) 
             }
         }
 
+        ConditionCards(current)
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End,
@@ -151,7 +157,7 @@ private fun Chart(snapshot: Snapshot?) {
         val heightPx = with(LocalDensity.current) { maxHeight.roundToPx() }
         val palette = ChartPalette.of(night).let { if (stale) it.muted() else it }
 
-        val bitmap = remember(snapshot, widthPx, heightPx, night, stale) {
+        val rendered = remember(snapshot, widthPx, heightPx, night, stale) {
             ChartRenderer.render(
                 forecast = snapshot?.forecast,
                 widthPx = widthPx,
@@ -161,11 +167,14 @@ private fun Chart(snapshot: Snapshot?) {
             )
         }
 
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = snapshot?.forecast?.summary?.text,
-            contentScale = ContentScale.FillBounds,
-            modifier = Modifier.fillMaxWidth().height(maxHeight),
+        val forecast = snapshot?.forecast
+        ScrubbableChart(
+            rendered = rendered,
+            series = forecast?.rainSteps.orEmpty(),
+            centre = forecast?.rain ?: Centre(emptyList(), emptyList()),
+            unit = forecast?.precipitation?.unit ?: "mm/h",
+            height = maxHeight,
+            contentDescription = forecast?.summary?.text,
         )
     }
 }
@@ -223,7 +232,7 @@ private fun Provenance(snapshot: Snapshot?) {
 
             else -> buildList {
                 val centre = forecast.rain
-                val band = centre.band
+                val band = centre.bands.firstOrNull()
                 add(
                     if (band != null) {
                         "Bars are the ${centre.label}; the shaded band covers ${band.label}."
@@ -262,6 +271,136 @@ private fun Provenance(snapshot: Snapshot?) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * The hourly blocks, one card each.
+ *
+ * These are the web forecast page's other charts, and they are here for the
+ * reason that page has them: the rain chart answers "will I get wet in the next
+ * six hours" and nothing else, while a phone is also asked "is it worth a coat"
+ * and "will it still be raining tomorrow". They come free — every point
+ * document already carries them, and the app was parsing and discarding them.
+ *
+ * They are drawn as lines inside their bands rather than as bars, because they
+ * are levels rather than amounts, and they are visibly a different kind of
+ * chart from the one above so that nobody reads the two as the same
+ * measurement at different resolutions. Different model, hourly, and out to two
+ * days.
+ */
+private enum class Conditions(
+    val label: String,
+    /** Whether the axis must start at zero. Wrong for temperature. */
+    val zeroFloor: Boolean,
+    /** The smallest range worth drawing, in the series' own units. */
+    val minSpan: Double,
+    val light: Int,
+    val dark: Int,
+) {
+    Temperature("Temperature", zeroFloor = false, minSpan = 4.0, light = 0xFFEA580C.toInt(), dark = 0xFFF97316.toInt()),
+    Wind("Wind", zeroFloor = true, minSpan = 4.0, light = 0xFF16A34A.toInt(), dark = 0xFF22C55E.toInt()),
+    Solar("Sunlight", zeroFloor = true, minSpan = 100.0, light = 0xFFCA8A04.toInt(), dark = 0xFFEAB308.toInt()),
+    RainOutlook("Rain outlook", zeroFloor = true, minSpan = 1.0, light = 0xFF6366F1.toInt(), dark = 0xFF818CF8.toInt());
+
+    fun blockOf(forecast: Forecast): Series? = when (this) {
+        Temperature -> forecast.temperature
+        Wind -> forecast.wind
+        Solar -> forecast.solar
+        RainOutlook -> forecast.precipitationOutlook
+    }?.takeIf { it.series.size >= 2 }
+
+    fun accent(night: Boolean): Int = if (night) dark else light
+
+    /**
+     * Axis labels. Deliberately coarser than the values behind them: a
+     * temperature axis reading 15.0, 17.5, 20.0 spends its width on decimals
+     * nobody reads off a gridline.
+     */
+    fun format(value: Double): String = when (this) {
+        RainOutlook -> formatRate(value)
+        else -> value.roundToInt().toString()
+    }
+
+    /** What this block is, in the one line there is room for under it. */
+    fun caption(forecast: Forecast): String = when (this) {
+        RainOutlook -> {
+            val ends = forecast.rainEndsAt
+            if (ends != null) {
+                "A different model from the chart above, hourly, picking up at " +
+                    "${formatClock(ends)} where the radar forecast stops."
+            } else {
+                "Hourly, and the only rain forecast there is for this point — " +
+                    "the radar does not reach here."
+            }
+        }
+
+        else -> "Hourly, from the same ensemble as the outlook below."
+    }
+}
+
+@Composable
+private fun ConditionCards(snapshot: Snapshot?) {
+    val forecast = snapshot?.forecast ?: return
+    val night = isSystemInDarkTheme()
+    val density = LocalDensity.current.density
+    val now = System.currentTimeMillis() / 1000
+    val stale = snapshot.isStale(now)
+
+    Conditions.values().forEach { kind ->
+        val block = kind.blockOf(forecast) ?: return@forEach
+        val centre = Centre.of(block)
+        // Nothing to draw a line from. Not expected — these blocks are medians
+        // of real members — but a card with an empty chart in it is worse than
+        // no card, and the server is allowed to change its mind.
+        if (centre.keys.none { key -> block.series.any { it.value(key) != null } }) return@forEach
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(kind.label, style = MaterialTheme.typography.titleMedium)
+
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(150.dp)) {
+                    val widthPx = with(LocalDensity.current) { maxWidth.roundToPx() }
+                    val heightPx = with(LocalDensity.current) { maxHeight.roundToPx() }
+                    val palette = ChartPalette.of(night)
+                        .accented(kind.accent(night))
+                        .let { if (stale) it.muted() else it }
+
+                    val rendered = remember(block, widthPx, heightPx, night, stale) {
+                        ChartRenderer.renderBand(
+                            block = block,
+                            centre = centre,
+                            referenceTime = forecast.referenceTime,
+                            widthPx = widthPx,
+                            heightPx = heightPx,
+                            density = density,
+                            palette = palette,
+                            zeroFloor = kind.zeroFloor,
+                            minSpan = kind.minSpan,
+                            format = kind::format,
+                        )
+                    }
+
+                    ScrubbableChart(
+                        rendered = rendered,
+                        series = block.series,
+                        centre = centre,
+                        unit = block.unit,
+                        height = maxHeight,
+                        contentDescription = "${kind.label} forecast",
+                    )
+                }
+
+                Text(
+                    kind.caption(forecast),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

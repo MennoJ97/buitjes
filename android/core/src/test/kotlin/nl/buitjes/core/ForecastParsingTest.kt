@@ -62,10 +62,12 @@ class ForecastParsingTest {
         assertFalse(block.frameOnly, "there is a spread layer behind this one")
         assertEquals("probability-matched mean", block.fieldProduct)
 
-        val band = assertNotNull(forecast.rain.band)
+        val band = forecast.rain.bands.single()
         assertEquals(CentreKey.NearbyP10, band.low)
         assertEquals(CentreKey.NearbyP90, band.high)
         assertEquals("80% of members within 3 km", band.label)
+        // One band, not two: the frames publish three percentiles, so there is
+        // no inner quartile pair to draw inside it.
 
         // And it has width where the weather does: the members disagree by
         // about 11 mm/h at the peak of this cycle.
@@ -117,7 +119,7 @@ class ForecastParsingTest {
         // It still leads with the neighbourhood median, exactly as the web app
         // does, so the two surfaces draw the same line from the same document.
         assertEquals(CentreKey.NearbyMedian, forecast.rain.keys.first())
-        assertEquals(CentreKey.NearbyP10, forecast.rain.band?.low)
+        assertEquals(CentreKey.NearbyP10, forecast.rain.bands.first().low)
     }
 
     /**
@@ -141,9 +143,14 @@ class ForecastParsingTest {
 
         assertEquals(listOf(CentreKey.Median), forecast.rain.keys)
         assertEquals(1.1, forecast.centre(forecast.rainSteps.single()))
-        val band = assertNotNull(forecast.rain.band)
+        val band = forecast.rain.bands.first()
         assertEquals(CentreKey.P10, band.low)
         assertEquals(CentreKey.P90, band.high)
+        // And the quartiles inside it, which this document does carry.
+        assertEquals(
+            listOf(CentreKey.P25 to CentreKey.P75),
+            forecast.rain.bands.drop(1).map { it.low to it.high },
+        )
     }
 
     /**
@@ -167,7 +174,7 @@ class ForecastParsingTest {
 
         assertEquals(listOf(CentreKey.Median), forecast.rain.keys)
         assertEquals(1.1, forecast.centre(forecast.rainSteps.single()))
-        assertNull(forecast.rain.band, "the percentiles are copies, not a spread")
+        assertTrue(forecast.rain.bands.isEmpty(), "the percentiles are copies, not a spread")
     }
 
     /**
@@ -178,7 +185,7 @@ class ForecastParsingTest {
     @Test
     fun `bands only the steps that have both edges`() {
         val forecast = ForecastJson.parse(fixture("point_ad_hoc.json"))
-        val runs = forecast.rain.bandRuns(forecast.rainSteps)
+        val runs = forecast.rain.bandRuns(forecast.rainSteps, forecast.rain.bands.single())
 
         assertEquals(1, runs.size, "one unbroken stretch")
         val run = runs.single()
@@ -201,15 +208,41 @@ class ForecastParsingTest {
             """.trimIndent(),
         )
 
-        assertEquals(listOf(1, 1), forecast.rain.bandRuns(forecast.rainSteps).map { it.size })
+        assertEquals(
+            listOf(1, 1),
+            forecast.rain
+                .bandRuns(forecast.rainSteps, forecast.rain.bands.single())
+                .map { it.size },
+        )
     }
 
     @Test
-    fun `has no runs to draw when there is no band`() {
+    fun `has nothing to draw when there is no band`() {
         val forecast = ForecastJson.parse(
             """{"precipitation": {"unit": "mm/h", "series": [{"t": 0, "median": 1.0}]}}""",
         )
-        assertTrue(forecast.rain.bandRuns(forecast.rainSteps).isEmpty())
+        assertTrue(forecast.rain.bands.isEmpty())
+    }
+
+    /**
+     * The hourly blocks are read through the same chain as the rain, and this
+     * is the case that makes it worth having: they carry a genuine median of
+     * their members, with quartiles inside the deciles.
+     */
+    @Test
+    fun `reads the hourly conditions through the same chain`() {
+        val forecast = ForecastJson.parse(fixture("point_ad_hoc.json"))
+
+        for (block in listOfNotNull(forecast.temperature, forecast.wind, forecast.solar)) {
+            val centre = Centre.of(block)
+            assertEquals(listOf(CentreKey.Median), centre.keys)
+            assertEquals(
+                listOf(CentreKey.P10 to CentreKey.P90, CentreKey.P25 to CentreKey.P75),
+                centre.bands.map { it.low to it.high },
+                "the outer band first, so the inner is painted on top of it",
+            )
+            assertEquals(block.series.size, centre.bandRuns(block.series, centre.bands[0]).single().size)
+        }
     }
 
     @Test
