@@ -1,7 +1,8 @@
 import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
 import { renderBandChart } from './chart.js';
-import { centreOf, pointForName, pointForCoordinates, summariseFrames } from './point.js';
+import { centreOf, displayName, pointForName, pointForCoordinates,
+         summariseFrames } from './point.js';
 import { apiFetch } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
@@ -966,7 +967,7 @@ function trendLinkHtml() {
     const point = nearestPublishedLocation(null);
     if (!point) return '';
     return `<a class="popup-link" href="forecast.html?location=${encodeURIComponent(point.name)}">` +
-           `Full forecast for ${point.name} &rarr;</a>`;
+           `Full forecast for ${displayName(point.name)} &rarr;</a>`;
 }
 
 function drawSparkline(canvas, series) {

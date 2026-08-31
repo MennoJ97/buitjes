@@ -23,6 +23,20 @@ import { formatClock } from './time.js';
 
 const WET_THRESHOLD_MM_H = 0.1;
 
+/**
+ * A location name as a reader should see it, rather than as the server keys it.
+ *
+ * The ingestor lowercases every name in WIDGET_LOCATIONS (points.py
+ * parse_locations) because the name is an identifier: it keys `?location=`, the
+ * alert rules and the published files. That is right for a key and wrong to
+ * read, and capitalising it at the source would break all three. So the case
+ * lives here, at the last moment before the name reaches a screen — never on
+ * the value of an option or in a URL.
+ */
+export function displayName(name) {
+    return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 export async function pointForName(name) {
     const response = await apiFetch(`/api/point/${encodeURIComponent(name)}`, { cache: 'no-store' });
     if (response.status === 401) throw new Error('this server requires an API key for point forecasts');

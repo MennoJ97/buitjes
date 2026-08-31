@@ -8,7 +8,7 @@
  */
 
 import { renderBandChart, centreValue } from './chart.js';
-import { centreOf, pointForName, pointForCoordinates } from './point.js';
+import { centreOf, displayName, pointForName, pointForCoordinates } from './point.js';
 import { apiFetch, hasApiKey } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
@@ -378,13 +378,13 @@ async function boot() {
     if (request.coords && !byNameEarly(points, request.name)) {
         const option = document.createElement('option');
         option.value = '';
-        option.textContent = 'clicked point';
+        option.textContent = 'Clicked point';
         select.appendChild(option);
     }
     for (const point of points) {
         const option = document.createElement('option');
         option.value = point.name;
-        option.textContent = point.name;
+        option.textContent = displayName(point.name);
         select.appendChild(option);
     }
 
