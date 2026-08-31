@@ -21,6 +21,7 @@ import nl.buitjes.android.data.WidgetTarget
 import nl.buitjes.android.ui.AlertsScreen
 import nl.buitjes.android.ui.BuitjesTheme
 import nl.buitjes.android.ui.ForecastScreen
+import nl.buitjes.android.ui.RadarScreen
 import nl.buitjes.android.ui.SetupScreen
 import nl.buitjes.android.work.RefreshWorker
 
@@ -69,6 +70,10 @@ class MainActivity : ComponentActivity() {
 
 private enum class Destination(val label: String) {
     Forecast("Forecast"),
+    // Between the forecast and the alerts, because it answers the question you
+    // ask straight after reading the chart: where is it now, and is it coming
+    // this way.
+    Radar("Radar"),
     Alerts("Alerts"),
     Setup("Server"),
 }
@@ -97,6 +102,7 @@ private fun App(initialTarget: WidgetTarget?) {
         val modifier = Modifier.fillMaxSize().padding(padding)
         when (destination) {
             Destination.Forecast -> ForecastScreen(initialTarget, modifier)
+            Destination.Radar -> RadarScreen(modifier)
             Destination.Alerts -> AlertsScreen(modifier)
             Destination.Setup -> SetupScreen(modifier)
         }

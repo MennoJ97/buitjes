@@ -1,9 +1,14 @@
 # Buitjes for Android
 
 Notifications for rain at wherever the phone actually is, and a home-screen
-widget with the six-hour rainfall graph. Everything else — the map, the
-scrubbing timeline, the ensemble charts — the web app already does well, and
-this links out to it rather than rebuilding it.
+widget with the six-hour rainfall graph.
+
+This began as those two things, with everything else — the map, the scrubbing
+timeline, the ensemble charts — left to the web app on the grounds that it
+already does them well. That held until each one was wanted on a phone with no
+signal to load a web page with. The charts came first, then the radar, and the
+argument that lost was never about quality: it was that a native app which
+sends you to a browser for the picture you actually wanted is two apps.
 
 ## Layout
 
@@ -31,6 +36,8 @@ own.
 | It needs | It calls |
 |---|---|
 | the list of configured locations | `GET /api/config` → `points` |
+| the radar's grid and frame list | `GET /api/config` → `bounds`, `frames` |
+| a radar frame | `GET /api/frames/<file>.webp` |
 | a forecast for one of them | `GET /api/point/<name>` — the members at that cell |
 | a forecast for wherever the phone is | `GET /api/point?lat=&lon=` |
 
@@ -63,6 +70,22 @@ rain" means the same thing whichever surface raised it. It runs every ~15
 minutes against a freshly fetched forecast; the server's five-minute cadence
 matters for webhook alerting on the edge, but the phone's question is "will it
 rain within the hour", which survives coarser sampling.
+
+The radar draws those frames on a MapLibre map, which is the same renderer the
+web app uses — a frame is an image stretched across four corners the manifest
+names, and an image source is exactly that. The basemap is OpenFreeMap's, again
+the same, and it wants no key and no quota: the app still runs on a fresh
+install with nothing but a server address. Frames are decoded and painted
+through the ramp on the phone, at half the published resolution, because a
+kilometre per pixel is finer than a phone showing the whole country can resolve
+and four times the memory.
+
+One thing that decoder will not do is let `BitmapFactory` downsample. A frame
+packs a 16-bit rain rate across red and green, and averaging neighbouring
+pixels averages the two halves of a number: a green channel that wraps as the
+rate crosses a boundary would average to mid-grey and paint a dry cell beside a
+wet one as moderate rain. It decodes at full size and thins the *colours*
+afterwards.
 
 Location is **coarse only**, deliberately. The server rounds coordinates to
 about a kilometre, which is the resolution of the model being sampled, so fine

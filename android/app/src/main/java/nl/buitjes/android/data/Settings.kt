@@ -110,6 +110,9 @@ fun AlertRule.where(): String = when (targetKind) {
     AlertTargetKind.NAMED -> locationName.orEmpty()
 }
 
+/** A client for the server these settings point at. */
+fun Prefs.buitjesClient(): BuitjesClient = BuitjesClient(baseUrl, apiKey)
+
 object Settings {
 
     private val BASE_URL = stringPreferencesKey("settings:base-url")

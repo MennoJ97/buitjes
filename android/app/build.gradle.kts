@@ -93,6 +93,12 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.datastore.preferences)
 
+    // The radar map. Vector tiles come from OpenFreeMap, the same source the
+    // web app moved to when CARTO started requiring a key — no key here either,
+    // which is what lets the radar work on a fresh install with nothing but a
+    // server address.
+    implementation(libs.maplibre.android)
+
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)

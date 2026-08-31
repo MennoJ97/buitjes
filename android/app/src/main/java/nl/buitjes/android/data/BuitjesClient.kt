@@ -75,6 +75,35 @@ data class Manifest(
     @SerialName("generated_at") val generatedAt: Long = 0,
     @SerialName("reference_time") val referenceTime: Long = 0,
     val points: List<NamedPoint> = emptyList(),
+    /**
+     * The corners the frames are stretched across, in MapLibre's order — NW,
+     * NE, SE, SW. Read as four corners rather than as a bounding box because
+     * that is the shape the map wants back.
+     */
+    val bounds: List<List<Double>> = emptyList(),
+    val width: Int = 0,
+    val height: Int = 0,
+    /** Full scale for the 16-bit packing. Every frame in the cycle shares it. */
+    @SerialName("max_precip_mm_h") val maxPrecipMmH: Double = 0.0,
+    val frames: List<FrameRef> = emptyList(),
+) {
+    /** Whether this manifest describes a cycle a map could draw. */
+    val drawable: Boolean
+        get() = bounds.size == 4 && width > 0 && height > 0 &&
+            maxPrecipMmH > 0.0 && frames.isNotEmpty()
+}
+
+/** One published frame: when it is for, what kind it is, and its file. */
+@Serializable
+data class FrameRef(
+    val t: Long,
+    val kind: String = "",
+    val file: String = "",
+    /**
+     * This step stood in for one KNMI published empty. Carried so the timeline
+     * can say so rather than presenting a repaired step as a measured one.
+     */
+    val estimated: Boolean = false,
 )
 
 class BuitjesClient(
@@ -84,6 +113,38 @@ class BuitjesClient(
 
     suspend fun manifest(): FetchResult<Manifest> =
         fetch(url("api", "config")) { body -> json.decodeFromString<Manifest>(body) }
+
+    /**
+     * One radar frame, as the bytes the ingestor wrote.
+     *
+     * Not JSON, so it does not go through [fetch]: the whole point of a frame is
+     * that it is a lossless WebP of packed 16-bit values, and decoding it is the
+     * caller's business.
+     *
+     * The frames are public — the server gates `/api/point` and `/api/current`,
+     * not these, because a rain map that needs a login is not a rain map. The
+     * key goes along anyway, since a server whose owner *has* protected them
+     * should not find this client mysteriously unable to draw.
+     */
+    suspend fun frame(file: String): ByteArray? {
+        val url = url("api", "frames", file) ?: return null
+        val request = Request.Builder()
+            .url(url)
+            .apply { if (apiKey.isNotBlank()) header("X-API-Key", apiKey) }
+            .build()
+
+        return withContext(Dispatchers.IO) {
+            val call = shared.newCall(request)
+            coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+            try {
+                call.execute().use { response ->
+                    if (response.isSuccessful) response.body?.bytes() else null
+                }
+            } catch (error: IOException) {
+                null
+            }
+        }
+    }
 
     suspend fun pointForName(name: String): FetchResult<Forecast> =
         fetch(url("api", "point", name)) { body -> ForecastJson.parse(body) }

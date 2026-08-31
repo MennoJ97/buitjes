@@ -38,7 +38,12 @@ import nl.buitjes.core.Centre
 import nl.buitjes.core.CentreKey
 import nl.buitjes.core.Forecast
 import nl.buitjes.core.Series
+import androidx.compose.runtime.mutableIntStateOf
+import kotlinx.coroutines.delay
 import nl.buitjes.android.data.ForecastRepository
+import nl.buitjes.android.data.RadarCycle
+import nl.buitjes.android.data.Settings
+import org.maplibre.android.geometry.LatLng
 import nl.buitjes.android.data.NamedPoint
 import nl.buitjes.android.data.Snapshot
 import nl.buitjes.android.data.WidgetTarget
@@ -118,7 +123,7 @@ fun ForecastScreen(initialTarget: WidgetTarget?, modifier: Modifier = Modifier) 
             }
         }
 
-        ConditionCards(current)
+        RainOutlookAndRadar(current)
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -309,10 +314,14 @@ private enum class Conditions(
     val light: Int,
     val dark: Int,
 ) {
+    // The outlook first, directly under the rain chart it continues. It is the
+    // same quantity as the card above it and picks up where that one stops, so
+    // putting the temperature between them made a reader cross two unrelated
+    // charts to follow one story about rain.
+    RainOutlook("Rain outlook", zeroFloor = true, minSpan = 1.0, light = 0xFF6366F1.toInt(), dark = 0xFF818CF8.toInt()),
     Temperature("Temperature", zeroFloor = false, minSpan = 4.0, light = 0xFFEA580C.toInt(), dark = 0xFFF97316.toInt()),
     Wind("Wind", zeroFloor = true, minSpan = 4.0, light = 0xFF16A34A.toInt(), dark = 0xFF22C55E.toInt()),
-    Solar("Sunlight", zeroFloor = true, minSpan = 100.0, light = 0xFFCA8A04.toInt(), dark = 0xFFEAB308.toInt()),
-    RainOutlook("Rain outlook", zeroFloor = true, minSpan = 1.0, light = 0xFF6366F1.toInt(), dark = 0xFF818CF8.toInt());
+    Solar("Sunlight", zeroFloor = true, minSpan = 100.0, light = 0xFFCA8A04.toInt(), dark = 0xFFEAB308.toInt());
 
     fun blockOf(forecast: Forecast): Series? = when (this) {
         Temperature -> forecast.temperature
@@ -346,19 +355,37 @@ private enum class Conditions(
             }
         }
 
-        else -> "Hourly, from the same ensemble as the outlook below."
+        // "the outlook" rather than "the outlook below": it is above these
+        // three now, and a caption that points the wrong way is worse than one
+        // that does not point at all.
+        else -> "Hourly, from the same ensemble as the rain outlook."
     }
 }
 
+/**
+ * The rain outlook, then the radar, then the conditions.
+ *
+ * The order is the order the questions get asked. The outlook continues the
+ * chart above it and belongs next to it; the radar answers the one thing no
+ * chart can — where the rain is now and which way it is moving — and the
+ * hourly conditions are what you read afterwards, if at all.
+ */
 @Composable
-private fun ConditionCards(snapshot: Snapshot?) {
+private fun RainOutlookAndRadar(snapshot: Snapshot?) {
+    ConditionCards(snapshot, Conditions.RainOutlook)
+    MiniRadarCard(snapshot)
+    ConditionCards(snapshot, Conditions.Temperature, Conditions.Wind, Conditions.Solar)
+}
+
+@Composable
+private fun ConditionCards(snapshot: Snapshot?, vararg kinds: Conditions) {
     val forecast = snapshot?.forecast ?: return
     val night = isSystemInDarkTheme()
     val density = LocalDensity.current.density
     val now = System.currentTimeMillis() / 1000
     val stale = snapshot.isStale(now)
 
-    Conditions.values().forEach { kind ->
+    kinds.forEach { kind ->
         val block = kind.blockOf(forecast) ?: return@forEach
         val centre = Centre.of(block)
         // Nothing to draw a line from. Not expected — these blocks are medians
@@ -411,6 +438,89 @@ private fun ConditionCards(snapshot: Snapshot?) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+/**
+ * The radar, small, over the place this screen is about.
+ *
+ * The chart above says whether it will rain and when. This says where it is
+ * coming from, which is the question anybody looks out of a window to answer
+ * and the one a time series cannot: a shower ten kilometres west moving east is
+ * a different decision from the same shower moving away.
+ *
+ * A short window rather than the whole cycle — roughly the last half hour and
+ * the next — because a card is glanced at, and because every frame in it is a
+ * download. The full six hours, with a scrubber, is the Radar tab's job.
+ */
+@Composable
+private fun MiniRadarCard(snapshot: Snapshot?) {
+    val forecast = snapshot?.forecast ?: return
+    val context = LocalContext.current
+    val night = isSystemInDarkTheme()
+
+    var cycle by remember { mutableStateOf<RadarCycle?>(null) }
+    var index by remember { mutableIntStateOf(0) }
+    var generation by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        val prefs = Settings.current(context)
+        if (!prefs.configured) return@LaunchedEffect
+        val loaded = RadarCycle.forServer(prefs)
+        if (loaded.refresh() && loaded.ready) cycle = loaded
+    }
+
+    val live = cycle ?: return
+    val frames = remember(live, generation == 0) { live.window(beforeSeconds = 1800, afterSeconds = 3600) }
+    if (frames.isEmpty()) return
+
+    LaunchedEffect(live, index) {
+        frames.getOrNull(index)?.let { live.bitmapFor(it) }
+        frames.getOrNull(index + 1)?.let { live.bitmapFor(it) }
+        generation++
+    }
+
+    LaunchedEffect(live, frames) {
+        while (true) {
+            delay(380)
+            index = if (index >= frames.lastIndex) 0 else index + 1
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Radar", style = MaterialTheme.typography.titleMedium)
+
+            val frame = frames.getOrNull(index)
+            val bitmap = remember(live, index, generation) { frame?.let { live.cached(it) } }
+            RadarMap(
+                manifest = live.manifest,
+                frame = bitmap,
+                centre = LatLng(forecast.location.lat, forecast.location.lon),
+                zoom = 7.6,
+                night = night,
+                // A picture, not a map: a card inside a scrolling screen that
+                // ate vertical drags would make the page feel broken.
+                interactive = false,
+                modifier = Modifier.fillMaxWidth().height(190.dp),
+            )
+
+            Text(
+                frame?.let { step ->
+                    val kind = when (step.kind) {
+                        "observed" -> "measured"
+                        "nowcast" -> "nowcast"
+                        else -> "forecast"
+                    }
+                    "${formatClock(step.t)} · $kind — the last half hour and the next, on a loop."
+                } ?: "Loading the radar…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
