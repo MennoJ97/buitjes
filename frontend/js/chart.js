@@ -94,7 +94,11 @@ export function renderBandChart(container, series, options = {}) {
         // a neighbourhood median rises when rain arrives near you, a per-cell
         // p10–p90 rises when it arrives *on* you, and plotting one inside the
         // other put the peak of each an hour from the other.
-        bands = [['p10', 'p90', 0.16], ['p25', 'p75', 0.26]],
+        // Labelled here rather than at the tooltip: a shared fallback label
+        // named both of these bands "80% of members", so the inner one
+        // claimed to be the outer one with narrower numbers.
+        bands = [['p10', 'p90', 0.16, '80% of the members'],
+                 ['p25', 'p75', 0.26, '50% of the members']],
     } = options;
     const centre = (entry) => centreValue(entry, centreKeys);
     const centreLabel = (entry) => {
@@ -417,7 +421,7 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
             (value !== null && centreName
                 ? `<span class="tip-centre">${centreName}</span>` : '') +
             bands.map(([low, high, , label]) =>
-                bandRow(label ?? '80% of members', entry[low], entry[high])).join('') +
+                bandRow(label ?? '', entry[low], entry[high])).join('') +
             (entry.probability !== undefined
                 ? `<span class="tip-band"><i>chance of rain</i>${Math.round(entry.probability * 100)}%</span>`
                 : '');
