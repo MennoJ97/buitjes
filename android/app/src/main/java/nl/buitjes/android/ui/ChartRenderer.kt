@@ -85,13 +85,6 @@ data class Rendered(val bitmap: Bitmap, val geometry: ChartGeometry?)
 object ChartRenderer {
 
     /**
-     * The rate at which a step counts as wet, matching the server's
-     * `WET_THRESHOLD_MM_H` and the bottom of the map's colour ramp. Used only to
-     * decide whether a bar is worth forcing to a visible height.
-     */
-    private const val WET_THRESHOLD_MM_H = 0.1
-
-    /**
      * A ceiling on the bitmap, and the least obvious constraint in this file.
      *
      * A widget's bitmap does not stay in this process: it crosses a Binder
@@ -136,8 +129,8 @@ object ChartRenderer {
             forecast.outOfCoverage -> "Outside radar coverage"
             !forecast.hasRainSeries || series.size < 2 -> "No rain data for this point"
             // Every step in the series carrying nothing. Rare — it takes a
-            // cycle of unreadable frames — but an axis with no bars under it is
-            // indistinguishable from six dry hours.
+            // cycle of unreadable frames — but a bare axis with no line on it
+            // is indistinguishable from six dry hours.
             series.none { centre?.valueOf(it) != null } -> "No rain data for this point"
             else -> null
         }
@@ -154,12 +147,10 @@ object ChartRenderer {
      * One hourly block — temperature, wind, sunlight, the rain outlook — as a
      * line inside its bands.
      *
-     * A line rather than bars because these are levels rather than amounts: a
-     * temperature does not accumulate over its hour, and drawing it as a column
-     * from zero would say that it does. It is also why the axis here does not
-     * start at zero unless the caller asks. Sixteen degrees drawn as a bar from
-     * nothing is a chart about the distance to absolute zero, not about the
-     * afternoon.
+     * The axis here does not start at zero unless the caller asks, which is the
+     * one thing that separates this from the rain chart above. These are levels
+     * rather than amounts: sixteen degrees measured from nothing is a chart
+     * about the distance to absolute zero, not about the afternoon.
      *
      * `zeroFloor` and `minSpan` come from the caller for the same reason they
      * do in the web app's card configuration: what counts as a sensible axis is
@@ -236,18 +227,7 @@ object ChartRenderer {
         drawTimeAxis(canvas, ::dp, palette, axisTextSize, series, ::x, plotTop, plotBottom, plotLeft, plotRight)
         drawBands(canvas, palette, centre, series, ::x, ::y, paint)
 
-        // The line.
-        val path = Path()
-        series.forEachIndexed { index, entry ->
-            val px = x(entry.t)
-            val py = y(centre.valueOf(entry) ?: 0.0)
-            if (index == 0) path.moveTo(px, py) else path.lineTo(px, py)
-        }
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = kotlin.math.max(1f, dp(1.4f))
-        paint.strokeJoin = Paint.Join.ROUND
-        paint.color = palette.bar
-        canvas.drawPath(path, paint)
+        drawLine(canvas, palette.line, kotlin.math.max(1f, dp(1.4f)), centre, series, ::x, ::y, paint)
 
         // Where now falls, so past and future are told apart at a glance. These
         // blocks carry the last few hours as well as the next two days, and
@@ -339,9 +319,8 @@ object ChartRenderer {
         fun x(t: Long) = plotLeft + ((t - firstT).toFloat() / span.toFloat()) * plotWidth
 
         // The axis top. `max(..., 1.0)` keeps a dry afternoon from being drawn
-        // as a full-height wall of 0.04 mm/h bars: without a floor the axis
-        // rescales to whatever noise is in the frame and every chart looks like
-        // weather.
+        // as a full-height wall of 0.04 mm/h: without a floor the axis rescales
+        // to whatever noise is in the frame and every chart looks like weather.
         val observedMax = series.maxOf { step ->
             val line = centre.valueOf(step) ?: 0.0
             if (band != null) max(line, step.value(band.high) ?: 0.0) else line
@@ -377,43 +356,20 @@ object ChartRenderer {
         // measured.
         drawBands(canvas, palette, centre, series, ::x, ::y, paint)
 
-        // Bars for the line.
+        // The line.
         //
-        // Width comes from each step's own gap to the next, not from the count.
-        // The cycle is not evenly spaced any more — five-minute steps to +2h,
-        // ten-minute after that — so one width for all of them draws the near
-        // half overlapping and the far half in stripes. Sized by its own gap, a
-        // bar covers the time it is a statement about, which also makes the ink
-        // under a spell proportional to how much rain it is.
-        fun slotAt(index: Int): Float {
-            val gap = when {
-                index + 1 < series.size -> series[index + 1].t - series[index].t
-                index > 0 -> series[index].t - series[index - 1].t
-                else -> span
-            }
-            return plotWidth * gap.toFloat() / span.toFloat()
-        }
-        paint.style = Paint.Style.FILL
-        paint.color = palette.bar
-        val baseline = y(0.0)
-        series.forEachIndexed { index, entry ->
-            // A step carrying nothing draws nothing. Not a bar of zero height,
-            // which is what this chart draws for a dry step and would be a
-            // claim it cannot make about a hole in the radar composite.
-            val rate = centre.valueOf(entry)
-            if (rate == null || rate <= 0.0) return@forEachIndexed
-            val barWidth = max(1f, slotAt(index) * 0.82f)
-            val middle = x(entry.t)
-            var barTop = y(rate)
-            // A wet step must be visible. At six hours across a widget each bar
-            // is a couple of pixels wide, and 0.2 mm/h rounds to a bar of zero
-            // height — which reads as dry, which is the one thing this chart
-            // must never say when it is not true.
-            if (rate >= WET_THRESHOLD_MM_H && baseline - barTop < 1f) {
-                barTop = baseline - 1f
-            }
-            canvas.drawRect(middle - barWidth / 2f, barTop, middle + barWidth / 2f, baseline, paint)
-        }
+        // A line rather than the columns this chart used to draw. A column is
+        // opaque and runs from zero to the value, so it covered the half of the
+        // band that lies *below* the line — and the lower edge is the number a
+        // reader wants when they ask how bad it might not be. Only the upper
+        // half was ever visible, which reads as a forecast that can turn out
+        // worse than expected and never better.
+        //
+        // Drawing the band on top instead would have traded that for a tint
+        // over every column. A line costs nothing and is what the web app draws
+        // from the same key, so a phone and a browser open side by side now
+        // show the same picture rather than two dialects of it.
+        drawLine(canvas, palette.line, max(1f, dp(1.4f)), centre, series, ::x, ::y, paint)
 
         // Where the measured part stops and the extrapolated part begins.
         val boundaryT = series
@@ -559,6 +515,59 @@ object ChartRenderer {
                 canvas.drawPath(ribbon, paint)
             }
         }
+    }
+
+    /**
+     * The line, in one path per unbroken run of steps that carry a value.
+     *
+     * A step with nothing is a hole in the line, not a point at zero. The rain
+     * series can have one — a pixel no radar measured, which the server
+     * publishes as a gap rather than as dry — and joining across it would draw
+     * a five-minute dry spell in the middle of a shower. Zero is not a hole: a
+     * dry step is a measurement, and the line sits on the axis through it.
+     *
+     * The same rule the bands follow, and the same one the web app's polyline
+     * runs on, down to dropping a run of a single point: there is no line
+     * through one step, and a lone value between two holes takes a cycle of
+     * unreadable frames on both sides to produce.
+     */
+    private fun drawLine(
+        canvas: Canvas,
+        colour: Int,
+        strokeWidth: Float,
+        centre: Centre,
+        series: List<Step>,
+        x: (Long) -> Float,
+        y: (Double) -> Float,
+        paint: Paint,
+    ) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = strokeWidth
+        paint.strokeJoin = Paint.Join.ROUND
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.color = colour
+        paint.pathEffect = null
+
+        val path = Path()
+        var points = 0
+        fun flush() {
+            if (points > 1) canvas.drawPath(path, paint)
+            path.reset()
+            points = 0
+        }
+        for (entry in series) {
+            val value = centre.valueOf(entry)
+            if (value == null) {
+                flush()
+                continue
+            }
+            val px = x(entry.t)
+            val py = y(value)
+            if (points == 0) path.moveTo(px, py) else path.lineTo(px, py)
+            points++
+        }
+        flush()
+        paint.strokeCap = Paint.Cap.BUTT
     }
 
     /** The same colour, carrying more alpha. Clamped, so it cannot go opaque. */
@@ -712,7 +721,8 @@ data class ChartPalette(
     val surface: Int,
     val grid: Int,
     val axis: Int,
-    val bar: Int,
+    /** The series itself. Named for what it draws now that nothing is a bar. */
+    val line: Int,
     val band: Int,
     val now: Int,
     val boundary: Int,
@@ -727,7 +737,7 @@ data class ChartPalette(
      * open side by side agree about which card is the temperature.
      */
     fun accented(colour: Int): ChartPalette = copy(
-        bar = colour,
+        line = colour,
         // Sixteen percent, matching `chart.js`'s outer band. The inner one is
         // derived from this at draw time rather than stored, so a palette that
         // has been muted for stale data mutes both together.
@@ -751,7 +761,7 @@ data class ChartPalette(
     fun muted(): ChartPalette = copy(
         grid = blend(grid, surface, 0.45f),
         axis = blend(axis, surface, 0.5f),
-        bar = blend(bar, surface, 0.62f),
+        line = blend(line, surface, 0.62f),
         band = blend(band, surface, 0.62f),
         now = blend(now, surface, 0.6f),
         boundary = blend(boundary, surface, 0.6f),
@@ -763,7 +773,7 @@ data class ChartPalette(
             surface = 0xFFFFFFFF.toInt(),
             grid = 0xFFE5E7EB.toInt(),
             axis = 0xFF6B7280.toInt(),
-            bar = 0xFF3B82F6.toInt(),
+            line = 0xFF3B82F6.toInt(),
             band = 0x4093C5FD,
             now = 0xFFEF4444.toInt(),
             boundary = 0xFF9CA3AF.toInt(),
@@ -774,7 +784,7 @@ data class ChartPalette(
             surface = 0xFF0A0C11.toInt(),
             grid = 0xFF1F2733.toInt(),
             axis = 0xFF8B94A7.toInt(),
-            bar = 0xFF60A5FA.toInt(),
+            line = 0xFF60A5FA.toInt(),
             band = 0x4D3B82F6,
             now = 0xFFF87171.toInt(),
             boundary = 0xFF4B5563.toInt(),

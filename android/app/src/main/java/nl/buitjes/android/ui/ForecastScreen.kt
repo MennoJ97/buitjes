@@ -232,7 +232,7 @@ private fun Provenance(snapshot: Snapshot?) {
         // Two short lines, and it used to be five long ones.
         //
         // The five were written when the chart could not be asked anything: the
-        // only way to say which statistic the bars were, and what the band was
+        // only way to say which statistic the line was, and what the band was
         // a band of, was to write it underneath. Touching the chart now names
         // both, for the step under the finger, and says when the answer changes
         // part way along the series — which the paragraph could only ever
@@ -299,11 +299,11 @@ private fun Provenance(snapshot: Snapshot?) {
  * and "will it still be raining tomorrow". They come free — every point
  * document already carries them, and the app was parsing and discarding them.
  *
- * They are drawn as lines inside their bands rather than as bars, because they
- * are levels rather than amounts, and they are visibly a different kind of
- * chart from the one above so that nobody reads the two as the same
- * measurement at different resolutions. Different model, hourly, and out to two
- * days.
+ * Each gets its own colour, which is the only thing separating them at a
+ * glance now that the rain chart above is a line too: four charts in the same
+ * blue would invite reading them as four views of one quantity. The axes do the
+ * rest — these are levels rather than amounts, so they need not start at zero,
+ * and they run hourly out to two days off a different model.
  */
 private enum class Conditions(
     val label: String,

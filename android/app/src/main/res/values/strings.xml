@@ -11,7 +11,7 @@
     <string name="app_name">Buitjes</string>
 
     <string name="widget_label">Buitjes rain</string>
-    <string name="widget_description">Six hours of rain for one place, on the home screen.</string>
+    <string name="widget_description">The last hour of rain and the next six, for one place, on the home screen.</string>
     <string name="widget_configure_title">Choose a location</string>
 
     <!-- Shown in Settings > Notifications, so they have to stand on their own. -->
