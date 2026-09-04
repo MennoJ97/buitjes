@@ -47,6 +47,16 @@ class RadarCycle(private val client: BuitjesClient) {
     var manifest: Manifest? = null
         private set
 
+    /**
+     * Decoded frames, counted rather than weighed.
+     *
+     * Sized to hold a whole cycle once one is known, because the alternative is
+     * what scrubbing looked like before: a cache of sixteen against sixty-one
+     * frames, so dragging the timeline back and forth evicted the frame it was
+     * about to need and re-downloaded it. A cycle is about 35 MB decoded, which
+     * is real but bounded, and it is the difference between a timeline that
+     * scrubs and one that stutters.
+     */
     private val decoded = object : LruCache<String, Bitmap>(16) {
         override fun sizeOf(key: String, value: Bitmap) = 1
     }
@@ -71,6 +81,8 @@ class RadarCycle(private val client: BuitjesClient) {
         if (result is FetchResult.Success && result.value.drawable) {
             val previous = manifest
             manifest = result.value
+            // Room for the whole cycle, now that its length is known.
+            decoded.resize(result.value.frames.size.coerceIn(16, 96))
             // Frames are named by their timestamps, so a new cycle simply does
             // not hit the old entries — except for the observed steps it shares
             // with the last one, which are byte-identical and worth keeping.
@@ -93,6 +105,39 @@ class RadarCycle(private val client: BuitjesClient) {
         val bitmap = RadarFrames.decode(bytes, maxPrecip) ?: return null
         decoded.put(frame.file, bitmap)
         return bitmap
+    }
+
+    /**
+     * Fetch and decode the whole cycle, starting at `from` and working outward.
+     *
+     * Outward rather than left to right because the frame somebody is looking
+     * at is the one nearest now, and the ends of a six-hour window are where
+     * they will get to last if at all. A caller in a `LaunchedEffect` gets
+     * cancellation for free: leave the screen and the remaining downloads stop.
+     *
+     * About 8 MB over the wire for a full cycle, which is why this is only done
+     * on the radar screen — the card on the forecast page asks for the handful
+     * of frames it loops and no more.
+     */
+    suspend fun prefetch(from: Int, onProgress: (done: Int, total: Int) -> Unit) {
+        val all = frames
+        if (all.isEmpty()) return
+
+        val order = ArrayList<FrameRef>(all.size)
+        var low = from.coerceIn(all.indices)
+        var high = low
+        order.add(all[low])
+        while (order.size < all.size) {
+            if (high < all.lastIndex) order.add(all[++high])
+            if (low > 0 && order.size < all.size) order.add(all[--low])
+        }
+
+        var done = 0
+        for (frame in order) {
+            bitmapFor(frame)
+            done++
+            onProgress(done, all.size)
+        }
     }
 
     /** Already decoded, or null — for a caller that must not block on a frame. */

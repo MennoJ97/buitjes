@@ -17,9 +17,12 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngQuad
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.RasterLayer
+import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.style.sources.ImageSource
+import org.maplibre.geojson.Point
 
 /**
  * The radar, on a map, drawn the way the web app draws it.
@@ -41,6 +44,9 @@ private const val STYLE_LIGHT = "https://tiles.openfreemap.org/styles/bright"
 
 private const val RADAR_SOURCE = "buitjes-radar"
 private const val RADAR_LAYER = "buitjes-radar-layer"
+private const val HERE_SOURCE = "buitjes-here"
+private const val HERE_HALO = "buitjes-here-halo"
+private const val HERE_DOT = "buitjes-here-dot"
 
 /**
  * What the map is showing, kept outside the composable so a recomposition
@@ -57,6 +63,14 @@ fun RadarMap(
     manifest: Manifest?,
     frame: Bitmap?,
     centre: LatLng?,
+    /**
+     * The place this map is about, marked. Distinct from [centre], which is
+     * only where the camera starts: an interactive map keeps its marker while
+     * the reader pans away from it, and a radar with no location fix is centred
+     * on the domain and marks nothing, rather than putting a dot in the North
+     * Sea and calling it you.
+     */
+    marker: LatLng?,
     zoom: Double,
     night: Boolean,
     interactive: Boolean,
@@ -111,6 +125,7 @@ fun RadarMap(
                 map.setStyle(if (night) STYLE_DARK else STYLE_LIGHT) { style ->
                     state.style = style
                     state.applyFrame(manifest, frame)
+                    state.applyMarker(marker)
                 }
                 state.point(map, centre, zoom, interactive)
             }
@@ -118,6 +133,7 @@ fun RadarMap(
         },
         update = {
             state.applyFrame(manifest, frame)
+            state.applyMarker(marker)
             state.map?.let { state.point(it, centre, zoom, interactive) }
         },
         modifier = modifier,
@@ -133,6 +149,7 @@ private class RadarMapState {
     var map: org.maplibre.android.maps.MapLibreMap? = null
     var style: Style? = null
     private var sourceAdded = false
+    private var markerAdded = false
     private var placed = false
 
     /**
@@ -159,6 +176,46 @@ private class RadarMapState {
         if (interactive && placed) return
         map.cameraPosition = CameraPosition.Builder().target(centre).zoom(zoom).build()
         placed = true
+    }
+
+    /**
+     * A dot where the forecast is for.
+     *
+     * Black inside a white ring, and neither colour is in the rain ramp on
+     * purpose. A marker tinted anywhere near the ramp disappears exactly when
+     * it matters — a blue dot under blue rain — and the two-tone version reads
+     * on the dark basemap (the ring) and on pale drizzle over it (the dot).
+     *
+     * Added after the radar layer, so it sits on top of the weather rather than
+     * under it.
+     */
+    fun applyMarker(marker: LatLng?) {
+        val style = style ?: return
+        if (marker == null) return
+
+        val point = Point.fromLngLat(marker.longitude, marker.latitude)
+        val existing = style.getSourceAs<GeoJsonSource>(HERE_SOURCE)
+        if (existing != null) {
+            existing.setGeoJson(point)
+            return
+        }
+        if (markerAdded) return
+
+        style.addSource(GeoJsonSource(HERE_SOURCE, point))
+        style.addLayer(
+            CircleLayer(HERE_HALO, HERE_SOURCE).withProperties(
+                PropertyFactory.circleRadius(7f),
+                PropertyFactory.circleColor("#FFFFFF"),
+                PropertyFactory.circleOpacity(0.9f),
+            ),
+        )
+        style.addLayer(
+            CircleLayer(HERE_DOT, HERE_SOURCE).withProperties(
+                PropertyFactory.circleRadius(3.5f),
+                PropertyFactory.circleColor("#111318"),
+            ),
+        )
+        markerAdded = true
     }
 
     fun applyFrame(manifest: Manifest?, frame: Bitmap?) {

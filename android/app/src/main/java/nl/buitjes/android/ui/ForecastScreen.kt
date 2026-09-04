@@ -501,6 +501,10 @@ private fun MiniRadarCard(snapshot: Snapshot?) {
                 manifest = live.manifest,
                 frame = bitmap,
                 centre = LatLng(forecast.location.lat, forecast.location.lon),
+                // The place this screen is about, which for "Here" is the
+                // coarsened position the server was asked about — the same
+                // point the chart above describes.
+                marker = LatLng(forecast.location.lat, forecast.location.lon),
                 zoom = 7.6,
                 night = night,
                 // A picture, not a map: a card inside a scrolling screen that
