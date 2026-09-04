@@ -64,6 +64,31 @@ class TargetGrid:
             f'{self.north:.6f},{self.width},{self.height}'
         )
 
+    def pixel_for(self, lon: float, lat: float):
+        """The output pixel a coordinate falls on as ``(row, column)``.
+
+        ``None`` when the coordinate falls outside the published domain, which
+        is a real answer rather than an error: a location can sit inside the
+        forecast's own grid and outside the crop that gets published.
+
+        Mercator down the rows, because that is how these frames are drawn - the
+        frontend stretches one canvas across the corner coordinates, and a
+        lookup treating the rows as linear in latitude drifts by kilometres at
+        the edges. Deliberately the same arithmetic as ``_pixelFor`` in the web
+        app's ``radar.js``: a rate this publishes for a location and one a
+        browser reads off the same frame at the same coordinate have to come
+        from the same pixel, or the chart and the map disagree about the point
+        the reader is looking at.
+        """
+        x = (lon - self.west) / (self.east - self.west)
+        merc_north = mercator_y(self.north)
+        merc_south = mercator_y(self.south)
+        y = (merc_north - mercator_y(lat)) / (merc_north - merc_south)
+        if not (0.0 <= x < 1.0 and 0.0 <= y < 1.0):
+            return None
+        return (min(self.height - 1, int(y * self.height)),
+                min(self.width - 1, int(x * self.width)))
+
     def lonlat_mesh(self):
         """Longitude and latitude of every output pixel centre."""
         lons = self.west + (np.arange(self.width) + 0.5) / self.width * (self.east - self.west)

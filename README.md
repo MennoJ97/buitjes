@@ -40,7 +40,11 @@ as twitchy as convective rain is a number that will be wrong.
   by sampling all 20 KNMI members while the timestep is in memory. Probability
   comes in two flavours: on your square kilometre, and within ten of them. The
   second is usually what you meant, because members disagree about where a
-  shower will land long before they disagree that one is coming.
+  shower will land long before they disagree that one is coming. Each document
+  opens with the hour of radar *behind* it — the same frames the map loops over,
+  one number per step and no band, because a measurement has none — so the chart
+  answers "is it raining now" as well as "will it", and it is refreshed as each
+  new radar frame lands rather than only when a forecast cycle does.
 - **A chart whose line and band are the same kind of number.** The obvious
   candidates for the line are both unreadable at one point through time: the
   members' median is dry unless half of them rain on that exact square

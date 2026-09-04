@@ -110,6 +110,31 @@ def decode_frame(data: bytes, max_precip_mm_h: float):
     return values, measured
 
 
+def sample_frame(data: bytes, max_precip_mm_h: float, pixels):
+    """The rate at a handful of pixels of an encoded frame.
+
+    ``pixels`` are ``(row, column)`` pairs; one value comes back per pixel, and
+    ``None`` where the blue flag says no radar looked there. That distinction is
+    the reason this cannot just recombine the two rate bytes: an unmeasured
+    pixel is encoded as zero rain, so reading it as a rate would publish "dry"
+    for about a quarter of an observed frame.
+
+    Separate from :func:`decode_frame`, which materialises two full-size arrays
+    to answer what is here a question about three pixels.
+    """
+    image = Image.open(io.BytesIO(data)).convert('RGBA')
+    width, height = image.size
+    values = []
+    for row, column in pixels:
+        if not (0 <= row < height and 0 <= column < width):
+            values.append(None)
+            continue
+        red, green, blue, _ = image.getpixel((column, row))
+        values.append(None if blue >= NO_DATA_FLAG
+                      else (red * 256 + green) / 65535.0 * max_precip_mm_h)
+    return values
+
+
 # -------------------------------------------------------------------- spread
 
 #: Bottom of the log scale the spread frames use, matching the bottom of the

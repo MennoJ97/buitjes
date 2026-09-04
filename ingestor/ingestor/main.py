@@ -31,7 +31,7 @@ from .blend import (
     repaired_steps, spread_fields,
 )
 from .config import Config
-from .encode import SPREAD_FLOOR_MM_H, encode_frame, encode_spread_frame
+from .encode import SPREAD_FLOOR_MM_H, encode_frame, encode_spread_frame, sample_frame
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
@@ -525,6 +525,110 @@ def observed_frames(config: Config, reference_time: int):
     return [{'t': t, 'kind': 'observed', 'file': observed_frame_name(t)} for t in present]
 
 
+def measured_history(config: Config, grid: TargetGrid, reference_time: int) -> dict:
+    """The measured rain rate at each configured location, frame by frame.
+
+    Read back off the published observed frames rather than sampled while they
+    were being made. The frames are the record: they arrive out of order, they
+    fill in over several cycles, and they survive a restart - so a store built
+    alongside them would have to be kept in step with all of that, and would
+    still start empty on a container that had just come up. Decoding thirteen
+    small frames once a cycle costs a fraction of what encoding one of them
+    does, and it makes this a pure function of what is on disk.
+
+    Sampled at the location's own pixel and nowhere near it. The ensemble series
+    beside this one publishes a neighbourhood because a neighbourhood is what
+    twenty members are for; a measurement has no members, and the honest answer
+    for one is what the radar saw here. `None` - a pixel no radar looked at - is
+    published as a gap rather than as dry, the same call the frontend makes when
+    it reads these frames itself.
+
+    Returns ``{name: [{'t', 'measured'}, ...]}``, ascending, locations outside
+    the published domain omitted.
+    """
+    if config.history_minutes <= 0 or not config.widget_locations:
+        return {}
+
+    names, pixels = [], []
+    for location in config.widget_locations:
+        pixel = grid.pixel_for(location.lon, location.lat)
+        if pixel is None:
+            # Not an error and not worth a warning every cycle: PointExtractor
+            # has already refused any location outside the *forecast* domain, so
+            # this is one inside it and outside the crop that gets published.
+            continue
+        names.append(location.name)
+        pixels.append(pixel)
+    if not pixels:
+        return {}
+
+    history = {name: [] for name in names}
+    present = wanted_observed_times(reference_time, config) & existing_observed_times(config)
+    for valid_time in sorted(present):
+        path = os.path.join(config.frame_dir, observed_frame_name(valid_time))
+        try:
+            with open(path, 'rb') as handle:
+                values = sample_frame(handle.read(), config.max_precip, pixels)
+        except (OSError, ValueError) as error:
+            # A frame pruned or rewritten under us costs one step, and a step
+            # with no measurement is already what a gap in the series means.
+            log.warning('observed: could not sample %s (%s)', path, error)
+            continue
+        for name, value in zip(names, values):
+            if value is not None:
+                history[name].append({'t': valid_time, 'measured': round(value, 2)})
+    return history
+
+
+def publish_measured_history(config: Config, grid: TargetGrid, reference_time: int) -> None:
+    """Put the measured hour in front of the forecast in the point documents.
+
+    Written here rather than in :func:`publish_points` because the two halves
+    move on different clocks. The forecast half comes out of members that are
+    only in memory while a cycle is being decoded, once every five minutes; the
+    measured half is a radar frame that lands on its own schedule, sometimes
+    with no forecast cycle behind it at all, and the newest one always arrives
+    just *after* the cycle that published the document. Composing them together
+    at publication time would leave a five-minute hole at exactly the join a
+    reader looks at first - "is it raining now" - and would leave the answer
+    frozen between forecast cycles.
+
+    Only the measured prefix is touched. The summary, the alert evaluation and
+    the `current_<name>.json` headline are the forecast's own and are not
+    reconsidered: they answer questions about what is coming, and a document
+    that grew an hour of history has not changed any of them.
+
+    Idempotent by construction - the previous prefix is dropped before the new
+    one goes on - so a document cannot collect the same hour twice as the window
+    slides, and a cycle that publishes no new radar can run through this safely.
+    """
+    written = []
+    for name, measured in measured_history(config, grid, reference_time).items():
+        path = os.path.join(config.frame_dir, point_file_name(name))
+        try:
+            with open(path, 'rb') as handle:
+                document = json.loads(handle.read())
+        except (OSError, ValueError):
+            continue  # no document for this location yet; the next cycle writes one
+        # Only this cycle's document. An older one is about to be replaced, and
+        # splicing the current hour onto a forecast that has already expired
+        # would publish two different reference times in one series.
+        if document.get('reference_time') != reference_time:
+            continue
+        block = document.get('precipitation')
+        if not block:
+            continue
+        forecast = [entry for entry in block['series'] if 'measured' not in entry]
+        block['series'] = measured + forecast
+        write_atomic(config.frame_dir, point_file_name(name), json.dumps(document).encode())
+        written.append(f'{name} {len(measured)}')
+
+    # The step counts, because a short one is the visible symptom of history
+    # that has not finished filling in - and the only place it shows.
+    if written:
+        log.info('measured history published: %s', ', '.join(written))
+
+
 # ------------------------------------------------------------------ retention
 
 
@@ -698,6 +802,11 @@ def update_observed(client: KnmiClient, config: Config, state: State) -> None:
         state.published = fingerprint
         log.info('published manifest: %d observed + %d forecast frames',
                  len(observed), len(state.forecast_frames))
+        # The same frames, in front of the same locations' forecasts. Under the
+        # manifest write rather than beside it: this is exactly the moment the
+        # observed window has changed, and the only moment a point document's
+        # measured half can be out of date.
+        publish_measured_history(config, state.grid, reference_time)
 
     keep = sorted(known_reference_times(config), reverse=True)[: config.keep_cycles]
     prune(config, set(keep), reference_time)
