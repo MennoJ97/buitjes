@@ -19,6 +19,23 @@ from ingestor.alerts import (  # noqa: E402
     AlertRunner, AlertState, Rule, describe, evaluate, parse_rules, process,
 )
 
+# The environment this file inherits is not empty, and that is not an accident
+# of how somebody happened to run it: the header above says to run it through
+# `docker compose run`, which hands the container the deployment's own env_file.
+# So every check below that turns on a variable being *absent* was really
+# asserting that this particular server had not set it. One had. With the
+# stack's STALL_WEBHOOK_URL in the environment, "with no STALL_WEBHOOK_URL it
+# falls back to the rain one" failed on the server and passed everywhere else —
+# the least useful shape a failing test can have, since the thing it reports is
+# not the thing that is wrong.
+#
+# Cleared by prefix rather than by name, so a variable added to either family
+# later is covered without anyone having to remember this list exists. Only
+# these two: everything else the config reads is either set explicitly by the
+# checks that read it, or of no interest to them.
+for _inherited in [key for key in os.environ if key.startswith(('ALERT_', 'STALL_'))]:
+    del os.environ[_inherited]
+
 NOW = 1_700_000_000
 failures = []
 
