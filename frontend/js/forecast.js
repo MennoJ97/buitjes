@@ -8,7 +8,9 @@
  */
 
 import { renderBandChart, centreValue } from './chart.js';
-import { centreOf, displayName, pointForName, pointForCoordinates } from './point.js';
+import {
+    centreOf, displayName, pointForName, pointForCoordinates, withMeasuredHistory,
+} from './point.js';
 import { apiFetch, hasApiKey } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
@@ -47,6 +49,9 @@ const CHARTS = [
         format: (value) => (value >= 10 ? value.toFixed(0) : value.toFixed(1)),
     },
 ];
+
+/** The card the measured hour is backfilled into, by key rather than by index. */
+const RAIN_CHART = CHARTS.find((config) => config.key === 'precipitation');
 
 /**
  * What the page is showing, and enough to ask for it again.
@@ -147,9 +152,66 @@ function showRadar(location) {
             nowEl: $('mini-now'),
         });
     }
-    minimap.show(location).catch((error) => {
+    // Returned as well as swallowed: the rain chart wants the observed frames
+    // this card is about to download, and this promise is when they exist. A
+    // caller chaining onto it still gets a resolved promise when the radar
+    // failed, which is right — the frames are then simply absent and the chart
+    // stays as it was drawn.
+    return minimap.show(location).catch((error) => {
         $('mini-status').textContent = `unavailable — ${error.message}`;
     });
+}
+
+/** One card: its range in the header, its series in the chart. */
+function drawChart(config, block, reference) {
+    const container = $(config.container);
+    const meta = $(config.meta);
+    if (!block) {
+        container.innerHTML = '<p class="chart-empty">Not published for this location.</p>';
+        meta.textContent = '';
+        return;
+    }
+    meta.textContent = describeRange(block);
+    renderBandChart(container, block.series, {
+        ...centreOf(block, config.label),
+        unit: block.unit,
+        colour: config.colour,
+        zeroFloor: config.zeroFloor,
+        minSpan: config.minSpan,
+        formatValue: config.format,
+        now: reference,
+    });
+}
+
+/**
+ * The rain card's note: which statistic the line is, and how far back it goes.
+ *
+ * The two rain cards carry different statistics — a neighbourhood median here,
+ * a per-cell median in the outlook, and no radius small enough to change that
+ * — so the note names the one above it rather than leaving them to be compared
+ * as though they were the same measurement.
+ *
+ * The measured clause is conditional on the series actually having those steps,
+ * not on the chart wanting them: it is added a moment after the first paint,
+ * and a note promising an hour of radar that is not drawn yet is worse than no
+ * note at all. Written from the series for the same reason `centreOf` is.
+ */
+function renderRainNote(document_) {
+    const rain = document_.precipitation;
+    const radius = rain?.nearby_radius_km ?? rain?.band_radius_km;
+    const measured = (rain?.series ?? []).some((entry) => entry.measured != null);
+    $('rain-note').textContent = describeSeries(
+        [
+            measured ? 'Measured radar, then KNMI ensemble' : 'KNMI ensemble',
+            '5-minute steps',
+            radius
+                ? `median and spread within ${Math.round(radius)} km`
+                : rain?.frame_only
+                    ? 'probability-matched mean · no spread away from a sampled location'
+                    : null,
+        ].filter(Boolean).join(' · '),
+        rain,
+    );
 }
 
 function render(document_) {
@@ -160,19 +222,7 @@ function render(document_) {
     $('summary-text').textContent = document_.summary?.text ?? '';
     $('location-coords').textContent =
         `${document_.location.lat.toFixed(4)}, ${document_.location.lon.toFixed(4)}`;
-    // The note names the statistic on the line, since the two rain cards now
-    // carry different ones — a neighbourhood median here, a per-cell median in
-    // the outlook, and no radius small enough to change that; see below.
-    const rain = document_.precipitation;
-    const radius = rain?.nearby_radius_km ?? rain?.band_radius_km;
-    $('rain-note').textContent = describeSeries(
-        radius
-            ? `KNMI ensemble · 5-minute steps · median and spread within ${Math.round(radius)} km`
-            : rain?.frame_only
-                ? 'KNMI ensemble, probability-matched mean · 5-minute steps · no spread away from a sampled location'
-                : 'KNMI ensemble · 5-minute steps',
-        rain,
-    );
+    renderRainNote(document_);
     // Not a neighbourhood: this model's grid is about 0.125 degrees, so every
     // point within ten kilometres of another returns the identical series and a
     // radius would be a no-op. Per-cell members is what it can honestly offer.
@@ -187,28 +237,27 @@ function render(document_) {
     }
 
     renderSummaryStats(document_);
-    showRadar(document_.location);
+    const radarReady = showRadar(document_.location);
 
     for (const config of CHARTS) {
-        const block = document_[config.key];
-        const container = $(config.container);
-        const meta = $(config.meta);
-        if (!block) {
-            container.innerHTML = '<p class="chart-empty">Not published for this location.</p>';
-            meta.textContent = '';
-            continue;
-        }
-        meta.textContent = describeRange(block);
-        renderBandChart(container, block.series, {
-            ...centreOf(block, config.label),
-            unit: block.unit,
-            colour: config.colour,
-            zeroFloor: config.zeroFloor,
-            minSpan: config.minSpan,
-            formatValue: config.format,
-            now: reference,
-        });
+        drawChart(config, document_[config.key], reference);
     }
+
+    // The measured hour lives on the frames the radar card downloads, so it can
+    // only be glued on once those have arrived. Deliberately after the first
+    // paint rather than before it: the charts are the page, and holding all
+    // five of them behind a couple of megabytes of radar to backfill an hour on
+    // one of them would be a poor trade. Redrawing that one chart is cheap.
+    radarReady.then(() => {
+        // A load that finished while the frames were coming down owns the page
+        // now, and it will do this for itself.
+        if (currentDocument !== document_) return;
+        const merged = withMeasuredHistory(document_, minimap?.frames);
+        if (merged === document_) return;
+        currentDocument = merged;
+        renderRainNote(merged);
+        drawChart(RAIN_CHART, merged.precipitation, merged.reference_time);
+    });
 
 
     const source = document_.source ?? {};
@@ -257,8 +306,14 @@ function renderSummaryStats(document_) {
     // They used to span the whole series, which put "Peak rate 1.9 mm/h" under
     // a sentence saying "peaking at 0.7 mm/h": both true, one describing a
     // shower that had already passed.
+    //
+    // Forward in time and forecast rather than measurement, which are not the
+    // same cut. The history window ends *on* the reference time, so its last
+    // radar frame sits exactly on the boundary, and a filter by time alone
+    // would let one measured step into a number labelled "expected".
     const reference = document_.reference_time;
-    const ahead = (block) => (block?.series ?? []).filter((entry) => entry.t >= reference);
+    const ahead = (block) => (block?.series ?? []).filter(
+        (entry) => entry.t >= reference && entry.measured == null);
 
     const rain = ahead(document_.precipitation);
     // Down the same chain the chart draws, so these describe the line above

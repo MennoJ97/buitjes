@@ -2,7 +2,7 @@ import { RadarRenderer, FrameStore } from './radar.js';
 import { renderLegend, colorForRate, rampPosition, formatRate } from './ramp.js';
 import { renderBandChart } from './chart.js';
 import { centreOf, displayName, pointForName, pointForCoordinates,
-         summariseFrames } from './point.js';
+         summariseFrames, withMeasuredHistory } from './point.js';
 import { apiFetch } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
@@ -1127,7 +1127,11 @@ async function openTrend(lngLat = inspectPoint) {
     if (trendLocation === point.name && trendPoint) return; // already showing it
     try {
         trendLocation = point.name;
-        renderTrend(await pointForName(point.name));
+        // The measured hour in front of the forecast, which a clicked point has
+        // had all along — the frames are already downloaded and decoded here,
+        // since the map is drawing them. Without it the two ways into this same
+        // panel disagreed about what "now" looks like.
+        renderTrend(withMeasuredHistory(await pointForName(point.name), store));
     } catch (error) {
         trendLocation = null;
         el.trendBody.innerHTML = `<p class="chart-empty">Could not load: ${error.message}</p>`;

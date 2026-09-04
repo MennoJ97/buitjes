@@ -167,6 +167,59 @@ function frameSeries(sampled, bands) {
 
 
 /**
+ * A published location's series with the measured hour glued on in front.
+ *
+ * A clicked coordinate has had this all along, for free: its series is read off
+ * the frames end to end, so it starts with the hour of observed radar and only
+ * then becomes forecast. A named location's series is written by the ingestor,
+ * which samples the members while a timestep is in memory and therefore has
+ * nothing to say about the past - its first entry is one step *after* the
+ * reference time. Two paths, the same chart, and only one of them could answer
+ * "is it raining now": the shower that had just gone through was on the map,
+ * on the radar loop beside the chart, and missing from the chart itself.
+ *
+ * The past comes from the same published frames the map draws, under the same
+ * `measured` key the coordinate path uses - so nothing downstream needs to know
+ * this happened. `centreOf` already falls through to `measured` for steps that
+ * carry nothing else, the chart already draws a series that changes kind part
+ * way along, and the summary and the stats already count from the reference
+ * time forward.
+ *
+ * How far back it reaches is however many observed frames the server publishes
+ * (`HISTORY_MINUTES`, an hour by default) rather than a constant here, so this
+ * chart and the radar loop above it cover the same stretch of past.
+ *
+ * Returns a new document rather than pushing into the one it was given: callers
+ * hold on to theirs and re-render from it, and a series that grew an hour every
+ * time the page was resized would be a strange thing to debug.
+ */
+export function withMeasuredHistory(document_, frames) {
+    const block = document_?.precipitation;
+    if (!block?.series?.length || !frames?.frames?.length) return document_;
+    // Nothing to do for a series that was already read off the frames - a
+    // clicked point, or this document coming back through here on a re-render.
+    if (block.series.some((entry) => entry.measured != null)) return document_;
+
+    const { lat, lon } = document_.location;
+    const startsAt = block.series[0].t;
+    const measured = frames.series(lon, lat).filter((point) =>
+        point.kind === 'observed' && point.t < startsAt && point.mmh !== null);
+    if (!measured.length) return document_;
+
+    return {
+        ...document_,
+        precipitation: {
+            ...block,
+            // No bands: radar is one number, not twenty. `frameSeries` leaves
+            // an observed step bandless, which is what puts the chart's band on
+            // the forecast half alone.
+            series: [...frameSeries(measured, null), ...block.series],
+        },
+    };
+}
+
+
+/**
  * Which entry fields carry a block's line, what to call each of them, and which
  * pair of keys the band around it comes from.
  *

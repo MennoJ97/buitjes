@@ -265,6 +265,19 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
     }
 
     return {
+        /**
+         * The frames this card downloaded, for the chart below it.
+         *
+         * The rain chart wants the measured hour in front of the forecast, and
+         * these are already the frames it would have to fetch to get it — the
+         * observed window, decoded and in memory. Exposing the store rather
+         * than a series keeps the sampling in one place (`point.js`), and
+         * whoever reads it must wait on `show()` first: before that resolves
+         * there are no frames, and `series()` over an empty store is an empty
+         * answer rather than an error, which is a quiet way to draw nothing.
+         */
+        get frames() { return store; },
+
         /** Point the loop at a location. Safe to call again when it changes. */
         async show(next) {
             const moved = !point || point.lat !== next.lat || point.lon !== next.lon;
