@@ -39,8 +39,11 @@ import org.maplibre.geojson.Point
  * protecting all along: this app runs on a fresh install with nothing but a
  * server address.
  */
+// The same two the web app uses, and `positron` rather than `bright` for the
+// light one: bright is a colourful general-purpose style, and rain drawn over
+// it competes with the cartography instead of sitting on top of it.
 private const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
-private const val STYLE_LIGHT = "https://tiles.openfreemap.org/styles/bright"
+private const val STYLE_LIGHT = "https://tiles.openfreemap.org/styles/positron"
 
 private const val RADAR_SOURCE = "buitjes-radar"
 private const val RADAR_LAYER = "buitjes-radar-layer"
@@ -124,6 +127,10 @@ fun RadarMap(
                 }
                 map.setStyle(if (night) STYLE_DARK else STYLE_LIGHT) { style ->
                     state.style = style
+                    // Dark is repainted; light is not, exactly as on the web —
+                    // Positron's ground is already pale enough that rain reads
+                    // over it without help.
+                    if (night) applyHighContrastDark(style)
                     state.applyFrame(manifest, frame)
                     state.applyMarker(marker)
                 }
