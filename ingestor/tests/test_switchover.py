@@ -318,8 +318,26 @@ class FakeStall:
         self.cycles += 1
 
 
+class FakeWatch:
+    """Records the transitions run_once announces, without the latch.
+
+    Unlatched on purpose: the latch is FallbackWatch's own and is tested there.
+    What is worth checking here is that run_once calls it on the transitions
+    and on nothing else, which a latch would hide.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def engaged(self, now, dataset, quiet):
+        self.calls.append(('engaged', dataset, quiet))
+
+    def restored(self, now, dataset):
+        self.calls.append(('restored', dataset))
+
+
 def run(client, cfg, st, stall=None, primary_meta=None, fallback=None,
-        check_forecast=True):
+        check_forecast=True, watch=None):
     """run_once with both builders and the observed top-up stubbed out.
 
     ``fallback`` is ``(run_id, frames, meta, grid)`` or None for "unavailable".
@@ -341,7 +359,8 @@ def run(client, cfg, st, stall=None, primary_meta=None, fallback=None,
     m.build_fallback = build
     m.update_observed = lambda *a, **k: observed.append(True)
     try:
-        m.run_once(client, cfg, st, stall=stall, check_forecast=check_forecast)
+        m.run_once(client, cfg, st, stall=stall, check_forecast=check_forecast,
+                   watch=watch)
     finally:
         (m.build_forecast, m.fallback_sources, m.build_fallback,
          m.update_observed) = original
@@ -441,6 +460,46 @@ with tempfile.TemporaryDirectory() as frame_dir:
                  primary_meta={'reference_time': int(now)})
     check('a restart onto a current primary just uses it',
           st.fallback_active is False and st.grid is GRID and result.builds == 0)
+
+    # Announcing it. The stand-in silences the stall watch by design, so these
+    # transitions are the only thing that pushes during an outage the fallback
+    # covers — and they have to fire on the edges and nowhere else.
+    st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,
+               grid=GRID, meta={'reference_time': int(now) - 3600})
+    fw = FakeWatch()
+    run(FakeClient(primary='cycle_a.nc'), cfg, st, fallback=BUILT, watch=fw)
+    check('handing over announces it once, with how long the primary was quiet',
+          len(fw.calls) == 1 and fw.calls[0][0] == 'engaged'
+          and fw.calls[0][2] == 3600, fw.calls)
+
+    st.meta = {'reference_time': int(now)}
+    run(FakeClient(primary='cycle_a.nc'), cfg, st, fallback=BUILT, watch=fw)
+    check('a cycle that republishes nothing announces nothing',
+          len(fw.calls) == 1, fw.calls)
+
+    moved2 = ('radarC+modelA',) + BUILT[1:]
+    run(FakeClient(primary='cycle_a.nc'), cfg, st, fallback=moved2, watch=fw)
+    check('and neither does a rebuild on newer radar, which is not a transition',
+          len(fw.calls) == 1, fw.calls)
+
+    run(FakeClient(primary='cycle_z.nc'), cfg, st, watch=fw,
+        primary_meta={'reference_time': int(now) + 300})
+    check('the way back is announced too',
+          len(fw.calls) == 2 and fw.calls[1][0] == 'restored', fw.calls)
+
+    run(FakeClient(primary='cycle_y.nc'), cfg, st, watch=fw,
+        primary_meta={'reference_time': int(now) + 600})
+    check('and a healthy primary carrying on announces nothing at all',
+          len(fw.calls) == 2, fw.calls)
+
+    # A run with no watch configured must not blow up on any of those paths.
+    st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,
+               grid=GRID, meta={'reference_time': int(now) - 3600})
+    run(FakeClient(primary='cycle_a.nc'), cfg, st, fallback=BUILT)
+    run(FakeClient(primary='cycle_b.nc'), cfg, st,
+        primary_meta={'reference_time': int(now)})
+    check('and none of it requires a watch to be configured',
+          st.fallback_active is False)
 
     # The primary comes back.
     st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,

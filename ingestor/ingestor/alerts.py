@@ -431,6 +431,77 @@ class Notifier:
             return False
 
 
+class FallbackWatch:
+    """Says when the forecast changes product, in either direction.
+
+    Separate from :class:`StallWatch` because the stand-in working is precisely
+    what silences that one. ``refresh_fallback`` counts a published stand-in as
+    progress — deliberately, since a stall alert repeating while a working
+    forecast is on air describes the wrong problem — so a KNMI outage the
+    fallback covers produces no stall alert at all. The 24-hour outage of
+    2026-09-07 passed that way: the site was fine, the badge said so, and
+    nothing pushed. This is what pushes.
+
+    Latched on the transition, like the rules and like StallWatch, and for the
+    same reason: the stand-in republishes every five minutes and a message per
+    cycle would be a notification every five minutes for as long as KNMI is
+    down. Delivery failure does not reopen the latch — an outage lasts hours,
+    and retrying a dead webhook every cycle until the weather changes is the
+    behaviour StallWatch already rejected.
+
+    Not persisted across restarts, also like StallWatch. A restart while the
+    stand-in is on air therefore announces it again, which is the honest
+    reading: this process has just started standing in, and it is the first
+    thing it did.
+    """
+
+    def __init__(self, notifier: Notifier):
+        self.notifier = notifier
+        self.active = False
+        self.since: float | None = None
+
+    @classmethod
+    def from_config(cls, config) -> 'FallbackWatch | None':
+        if not config.fallback_webhook or config.fallback_alert <= 0:
+            return None
+        return cls(Notifier(config.fallback_webhook, config.fallback_format,
+                            config.fallback_auth))
+
+    def engaged(self, now: float, dataset: str, quiet_seconds: int | None) -> None:
+        """The stand-in has taken over. Speaks once per outage."""
+        if self.active:
+            return
+        self.active = True
+        self.since = now
+        quiet = (f'The seamless ensemble has been quiet for '
+                 f'{max(1, quiet_seconds // 60)} min. '
+                 if quiet_seconds else 'The seamless ensemble has stopped publishing. ')
+        self.notifier.deliver(
+            'Forecast standing in for KNMI',
+            f'{quiet}Now on {dataset} — one deterministic run, so the '
+            f'spread band is gone until KNMI publishes again.',
+            tags='warning',
+            payload={'fallback': True, 'dataset': dataset,
+                     'primary_quiet_seconds': quiet_seconds},
+        )
+
+    def restored(self, now: float, dataset: str) -> None:
+        """The real product is back. Speaks only if it said the opposite."""
+        if not self.active:
+            return
+        stood_in = int(now - (self.since or now))
+        self.active = False
+        self.since = None
+        self.notifier.deliver(
+            'KNMI forecast restored',
+            f'{dataset} is publishing again after '
+            f'{max(1, stood_in // 60)} min on the stand-in. Ensemble spread is back.',
+            tags='white_check_mark',
+            payload={'fallback': False, 'dataset': dataset,
+                     'stood_in_seconds': stood_in},
+        )
+
+
 class StallWatch:
     """Has the upstream gone quiet?
 

@@ -39,7 +39,9 @@ from .encode import SPREAD_FLOOR_MM_H, encode_frame, encode_spread_frame, sample
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
-from .alerts import AlertRunner, StallWatch, describe as describe_alert
+from .alerts import (
+    AlertRunner, FallbackWatch, StallWatch, describe as describe_alert,
+)
 from .conditions import ATTRIBUTION as CONDITIONS_ATTRIBUTION, ConditionsSource
 from .raster import MercatorResampler, StereographicResampler, TargetGrid
 
@@ -915,7 +917,8 @@ def build_fallback(client: KnmiClient, config: Config, radar_name: str,
 
 
 def refresh_fallback(client: KnmiClient, config: Config, state: State,
-                     conditions=None, alert_runner=None, stall=None) -> bool:
+                     conditions=None, alert_runner=None, stall=None,
+                     watch=None) -> bool:
     """Publish the stand-in if its inputs have moved. True if it did."""
     sources = fallback_sources(client, config)
     if sources is None:
@@ -936,6 +939,10 @@ def refresh_fallback(client: KnmiClient, config: Config, state: State,
         log.warning('primary quiet for %s; falling back to %s',
                     f'{quiet}s' if quiet else 'longer than the threshold',
                     meta['dataset'])
+        # After the log and before the state flips, so the message is sent
+        # exactly once per outage whatever the delivery does.
+        if watch:
+            watch.engaged(time.time(), meta['dataset'], quiet)
     state.last_fallback_run = run_id
     state.fallback_active = True
     state.forecast_frames, state.meta, state.grid = frames, meta, grid
@@ -993,7 +1000,8 @@ def forecast_check_due(config: Config, announced, quiet_since: float, now: float
 
 
 def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
-             check_forecast: bool = True, alert_runner=None, stall=None) -> None:
+             check_forecast: bool = True, alert_runner=None, stall=None,
+             watch=None) -> None:
     # A radar-only notification means the forecast cannot have moved, so looking
     # it up would spend a request to learn nothing.
     #
@@ -1006,7 +1014,8 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
     # has something new to say.
     if not check_forecast and state.grid is not None:
         if primary_is_stale(config, state, time.time()):
-            refresh_fallback(client, config, state, conditions, alert_runner, stall)
+            refresh_fallback(client, config, state, conditions, alert_runner,
+                             stall, watch)
         return update_observed(client, config, state)
 
     filename = client.latest_filename(config.dataset, config.version)
@@ -1042,6 +1051,8 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
         state.primary_reference = meta['reference_time']
         if state.fallback_active:
             log.info('primary forecast is back; leaving the deterministic fallback')
+            if watch:
+                watch.restored(time.time(), config.dataset)
         state.fallback_active = False
         state.last_fallback_run = None
 
@@ -1053,7 +1064,8 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
     # weather for five minutes. Both happen in one pass: the stale cycle is
     # built, dates the primary clock, and is immediately superseded.
     if primary_is_stale(config, state, time.time()):
-        refresh_fallback(client, config, state, conditions, alert_runner, stall)
+        refresh_fallback(client, config, state, conditions, alert_runner,
+                         stall, watch)
 
     if state.grid is None:
         return  # nothing published yet and no cycle to build one from
@@ -1143,6 +1155,10 @@ def main() -> None:
     if stall:
         log.info('stall alert after %ds without a new forecast cycle', stall.threshold)
 
+    watch = FallbackWatch.from_config(config)
+    if watch:
+        log.info('fallback alert on: both directions')
+
     state = State()
     if stall:
         # Start the clock at boot, so a process that never manages to ingest
@@ -1153,7 +1169,8 @@ def main() -> None:
     while True:
         try:
             run_once(client, config, state, conditions,
-                     alert_runner=alert_runner, stall=stall, **continue_kwargs)
+                     alert_runner=alert_runner, stall=stall, watch=watch,
+                     **continue_kwargs)
             continue_kwargs = {'check_forecast': True}
             delay = seconds_until_next_publication(config, state, time.time())
         except RateLimited as exc:

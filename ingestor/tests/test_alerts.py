@@ -342,7 +342,7 @@ print('stall: one alert per stall, one when it clears')
 # The failure this guards is the same one the rain rules guard, from the other
 # side: an alarm that repeats every minute for a four-hour KNMI outage gets
 # muted, and then the next outage goes unnoticed.
-from ingestor.alerts import StallWatch  # noqa: E402
+from ingestor.alerts import FallbackWatch, StallWatch  # noqa: E402
 
 
 class Collecting:
@@ -376,6 +376,55 @@ watch.cycle(NOW + 7300)
 check('a recovery notice on the next cycle', len(sent.sent) == 2, sent.sent)
 check('the recovery says how long it was quiet',
       '121 min' in sent.sent[1][1], sent.sent[1])
+
+
+print()
+print('fallback watch')
+
+# The stand-in working is exactly what silences the stall watch — a published
+# stand-in counts as progress — so a KNMI outage the fallback covers pushes
+# nothing at all without this. That is how the 24-hour outage of 2026-09-07
+# passed in silence.
+fb = Collecting()
+fw = FallbackWatch(fb)
+DATASET = 'radar_forecast + uwcw-ha-det-nl-s1'
+
+fw.restored(NOW, 'seamless')
+check('silent if it never said the opposite', fb.sent == [], fb.sent)
+
+fw.engaged(NOW, DATASET, 74615)
+check('the handover is announced once', len(fb.sent) == 1, fb.sent)
+check('and names what took over', DATASET in fb.sent[0][1], fb.sent[0])
+check('and how long the primary had been quiet', '1243 min' in fb.sent[0][1], fb.sent[0])
+check('and warns that the spread is gone', 'spread' in fb.sent[0][1], fb.sent[0])
+
+# Latched: the stand-in republishes every five minutes for as long as KNMI is
+# down, and a message per cycle would be a notification every five minutes.
+fw.engaged(NOW + 300, DATASET, 74915)
+fw.engaged(NOW + 3600, DATASET, 78215)
+check('and not once per republished cycle', len(fb.sent) == 1, fb.sent)
+
+fw.restored(NOW + 7200, 'seamless_precipitation_ensemble_forecast_members')
+check('the way back is announced too', len(fb.sent) == 2, fb.sent)
+check('and says how long the stand-in was on air',
+      '120 min' in fb.sent[1][1], fb.sent[1])
+check('and that the spread is back', 'spread is back' in fb.sent[1][1].lower(), fb.sent[1])
+
+fw.restored(NOW + 9000, 'seamless')
+check('and only once for one recovery', len(fb.sent) == 2, fb.sent)
+
+# A second outage after a recovery has to speak again, or the watch is useful
+# exactly once per process.
+fw.engaged(NOW + 10000, DATASET, 2000)
+check('a later outage speaks again', len(fb.sent) == 3, fb.sent)
+
+# An outage with no known primary reference — nothing ingested yet — still
+# says something rather than printing a bare "None".
+bare = Collecting()
+FallbackWatch(bare).engaged(NOW, DATASET, None)
+check('an unknown quiet time still reads as a sentence',
+      'None' not in bare.sent[0][1] and 'stopped publishing' in bare.sent[0][1],
+      bare.sent[0])
 
 watch.cycle(NOW + 7600)
 watch.check(NOW + 7600)
@@ -460,6 +509,44 @@ os.environ['STALL_ALERT_FORMAT'] = 'ntfy'
 
 os.environ['STALL_ALERT_SECONDS'] = '0'
 check('zero disables it', StallWatch.from_config(reread()) is None)
+
+# The fallback watch inherits the stall family, because it is the same kind of
+# news — the pipeline, not the weather — and usually wants the same topic.
+print('fallback: inherits the stall settings, and can be split off')
+config = reread()
+fw = FallbackWatch.from_config(config)
+check('it rides on the stall webhook by default',
+      fw is not None and fw.notifier.url == 'http://ntfy/alerts')
+check('and the stall format and auth with it',
+      fw.notifier.format == 'ntfy' and fw.notifier.auth == 'Bearer tk_stall')
+check('a stall switched off does not switch this off too',
+      config.stall_alert == 0 and FallbackWatch.from_config(config) is not None)
+
+os.environ['FALLBACK_WEBHOOK_URL'] = 'http://ntfy/pipeline'
+os.environ['FALLBACK_ALERT_FORMAT'] = 'json'
+os.environ['FALLBACK_WEBHOOK_AUTH'] = 'Bearer tk_fb'
+fw = FallbackWatch.from_config(reread())
+check('but it can be split onto its own topic', fw.notifier.url == 'http://ntfy/pipeline')
+check('with its own format', fw.notifier.format == 'json')
+check('and its own auth', fw.notifier.auth == 'Bearer tk_fb')
+
+os.environ['FALLBACK_ALERT_FORMAT'] = 'carrier-pigeon'
+try:
+    reread()
+    check('a bad fallback format is refused at startup', False, '(accepted)')
+except SystemExit as error:
+    check('a bad fallback format is refused at startup',
+          'FALLBACK_ALERT_FORMAT' in str(error), str(error))
+os.environ['FALLBACK_ALERT_FORMAT'] = 'ntfy'
+
+os.environ['FALLBACK_ALERT'] = '0'
+check('zero disables it', FallbackWatch.from_config(reread()) is None)
+os.environ['FALLBACK_ALERT'] = '1'
+
+for key in ('STALL_WEBHOOK_URL', 'FALLBACK_WEBHOOK_URL'):
+    os.environ.pop(key, None)
+check('and with no webhook anywhere there is nothing to send to',
+      FallbackWatch.from_config(reread()) is None)
 
 print()
 if failures:

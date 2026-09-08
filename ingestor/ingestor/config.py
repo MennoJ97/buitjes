@@ -62,6 +62,10 @@ class Config:
     fallback_model_parameter: str
     fallback_horizon_minutes: int
     fallback_refine: int
+    fallback_alert: int
+    fallback_webhook: str
+    fallback_format: str
+    fallback_auth: str
     stall_alert: int
     stall_webhook: str
     stall_format: str
@@ -83,6 +87,11 @@ class Config:
         if stall_format not in ('json', 'ntfy'):
             raise SystemExit(
                 f'STALL_ALERT_FORMAT must be json or ntfy (got {stall_format!r})')
+        fallback_format = os.environ.get(
+            'FALLBACK_ALERT_FORMAT', stall_format).strip().lower()
+        if fallback_format not in ('json', 'ntfy'):
+            raise SystemExit(
+                f'FALLBACK_ALERT_FORMAT must be json or ntfy (got {fallback_format!r})')
         try:
             alert_rules = parse_rules(os.environ.get('ALERT_RULES', ''))
         except ValueError as error:
@@ -258,6 +267,23 @@ class Config:
             # (the seamless blend is 780 rows to the 2 km model's 390, so 2) to
             # get the same answer with no primary cycle to learn from.
             fallback_refine=int(os.environ.get('FALLBACK_REFINE', '0')),
+            # Says when the forecast changes product, in either direction. It
+            # exists because the stand-in working is exactly what stops the
+            # stall alert firing: `refresh_fallback` counts as progress, so a
+            # KNMI outage the fallback covers passes in silence and the only
+            # signal is a badge you have to be looking at. 0 disables it.
+            fallback_alert=int(os.environ.get('FALLBACK_ALERT', '1')),
+            # Same three-step fallback as the stall family, and for the same
+            # reason: this is news about the pipeline rather than the weather,
+            # so it usually wants the stall topic, and a deployment that has
+            # only ever set ALERT_WEBHOOK_URL still gets it.
+            fallback_webhook=(os.environ.get('FALLBACK_WEBHOOK_URL', '').strip()
+                              or os.environ.get('STALL_WEBHOOK_URL', '').strip()
+                              or os.environ.get('ALERT_WEBHOOK_URL', '').strip()),
+            fallback_format=fallback_format,
+            fallback_auth=(os.environ.get('FALLBACK_WEBHOOK_AUTH', '').strip()
+                           or os.environ.get('STALL_WEBHOOK_AUTH', '').strip()
+                           or os.environ.get('ALERT_WEBHOOK_AUTH', '').strip()),
             stall_alert=int(os.environ.get('STALL_ALERT_SECONDS', '1800')),
             # Its own webhook rather than the rain rules'. A stall is a
             # different kind of news — it is about the pipeline, not the
