@@ -1044,14 +1044,19 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
             log.info('primary forecast is back; leaving the deterministic fallback')
         state.fallback_active = False
         state.last_fallback_run = None
-    elif primary_is_stale(config, state, time.time()):
-        # The primary has stopped advancing. Publish the stand-in instead of
-        # holding a timeline that is getting older every cycle.
+
+    # Deliberately not an `elif` on the branch above. A restart during an
+    # outage ingests the newest primary file there is, which is the stale one —
+    # and reading it is how its age becomes known at all. Chained, that pass
+    # would publish a day-old forecast and then wait for the next radar
+    # notification before standing in, so every restart served yesterday's
+    # weather for five minutes. Both happen in one pass: the stale cycle is
+    # built, dates the primary clock, and is immediately superseded.
+    if primary_is_stale(config, state, time.time()):
         refresh_fallback(client, config, state, conditions, alert_runner, stall)
-        if state.grid is None:
-            return
-    elif state.grid is None:
-        return  # nothing published yet and no new cycle to build one from
+
+    if state.grid is None:
+        return  # nothing published yet and no cycle to build one from
 
     update_observed(client, config, state)
 

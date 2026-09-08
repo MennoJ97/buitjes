@@ -419,6 +419,29 @@ with tempfile.TemporaryDirectory() as frame_dir:
           result.builds == 0 and st.fallback_active is False and client.asked == [])
     check('and still tops up the observed history', result.observed == [True])
 
+    # A restart in the middle of an outage. The newest primary file is the
+    # stale one, so the cold start ingests it — that read is how its age is
+    # learnt — and must then stand in within the SAME pass. Chained behind an
+    # elif, this served a day-old forecast until the next radar notification.
+    st = state(started_at=now - 10)
+    stall = FakeStall()
+    run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=BUILT,
+        primary_meta={'reference_time': int(now) - 72000})
+    check('a restart onto an already-stale primary stands in the same pass',
+          st.fallback_active is True and st.grid is OTHER_GRID
+          and st.last_fallback_run == 'radarA+modelA')
+    check('and still dates the primary clock from the stale cycle it read',
+          st.primary_reference == int(now) - 72000)
+    check('which is what lets the next pass know it is still standing in',
+          m.primary_is_stale(cfg, st, now) is True)
+
+    # A restart onto a HEALTHY primary must not stand in for it.
+    st = state(started_at=now - 10)
+    result = run(FakeClient(primary='cycle_a.nc'), cfg, st, fallback=BUILT,
+                 primary_meta={'reference_time': int(now)})
+    check('a restart onto a current primary just uses it',
+          st.fallback_active is False and st.grid is GRID and result.builds == 0)
+
     # The primary comes back.
     st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,
                grid=OTHER_GRID, fallback_active=True, last_fallback_run='radarA+modelA')
