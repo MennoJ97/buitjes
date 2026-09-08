@@ -855,21 +855,33 @@ def fallback_refine(config: Config, model_rows: int, target_height: int | None) 
     return max(1, target_height // model_rows)
 
 
-def build_fallback(client: KnmiClient, config: Config, conditions=None,
-                   alert_runner=None):
-    """Build one cycle from the deterministic stand-in.
+def fallback_sources(client: KnmiClient, config: Config):
+    """The two files the stand-in would be built from, and their joint id.
 
-    Returns ``(frames, meta, grid, run_id)``, or None when either half is
-    unavailable — in which case the caller keeps holding the last good cycle,
-    which is still better than publishing half a timeline.
+    Resolved before anything is downloaded so a cycle whose inputs have not
+    moved costs two listings rather than 8 MiB. That matters now the stand-in
+    is refreshed on the radar's own five-minute cadence: the model half only
+    changes hourly, so eleven cycles in twelve would otherwise re-fetch a file
+    they already have.
+
+    None when either half is unavailable.
     """
     radar_name = client.latest_filename(
         config.fallback_nowcast_dataset, config.fallback_nowcast_version)
     model_name = latest_model_file(client, config)
     if not radar_name or not model_name:
         return None
+    return radar_name, model_name, f'{radar_name}+{model_name}'
 
-    run_id = f'{radar_name}+{model_name}'
+
+def build_fallback(client: KnmiClient, config: Config, radar_name: str,
+                   model_name: str, conditions=None, alert_runner=None):
+    """Build one cycle from the deterministic stand-in.
+
+    Returns ``(frames, meta, grid)``, or None when a download or decode fails —
+    in which case the caller keeps holding the last good cycle, which is still
+    better than publishing half a timeline.
+    """
     label = f'{config.fallback_nowcast_dataset} + {config.fallback_model_dataset}'
     with tempfile.TemporaryDirectory() as scratch:
         radar_path = client.download(
@@ -892,7 +904,41 @@ def build_fallback(client: KnmiClient, config: Config, conditions=None,
                 source, replace(config, spread_radius_km=None),
                 conditions, alert_runner)
     meta['dataset'] = label
-    return frames, meta, grid, run_id
+    return frames, meta, grid
+
+
+def refresh_fallback(client: KnmiClient, config: Config, state: State,
+                     conditions=None, alert_runner=None, stall=None) -> bool:
+    """Publish the stand-in if its inputs have moved. True if it did."""
+    sources = fallback_sources(client, config)
+    if sources is None:
+        return False
+    radar_name, model_name, run_id = sources
+    if run_id == state.last_fallback_run:
+        return False  # the same two files; nothing to rebuild
+
+    built = build_fallback(client, config, radar_name, model_name,
+                           conditions, alert_runner)
+    if built is None:
+        return False
+
+    frames, meta, grid = built
+    if not state.fallback_active:
+        quiet = (int(time.time() - state.primary_reference)
+                 if state.primary_reference else None)
+        log.warning('primary quiet for %s; falling back to %s',
+                    f'{quiet}s' if quiet else 'longer than the threshold',
+                    meta['dataset'])
+    state.last_fallback_run = run_id
+    state.fallback_active = True
+    state.forecast_frames, state.meta, state.grid = frames, meta, grid
+    reconcile_grid(config, grid)
+    # Counts as progress: the timeline is advancing again, and a stall alert
+    # that keeps firing while a working stand-in is on air is telling the
+    # reader about the wrong thing.
+    if stall:
+        stall.cycle(time.time())
+    return True
 
 
 def primary_is_stale(config: Config, state: State, now: float) -> bool:
@@ -943,7 +989,17 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
              check_forecast: bool = True, alert_runner=None, stall=None) -> None:
     # A radar-only notification means the forecast cannot have moved, so looking
     # it up would spend a request to learn nothing.
+    #
+    # The stand-in is a different question and must not be gated behind that
+    # one. How old the newest primary cycle is is already known here, from the
+    # cycle itself — it needs no request to establish, so waiting for the
+    # notification clock before acting on it just adds silence to an outage
+    # that is already visible. It also caps the refresh rate: the radar that
+    # just moved is the stand-in's own input, so this is exactly the moment it
+    # has something new to say.
     if not check_forecast and state.grid is not None:
+        if primary_is_stale(config, state, time.time()):
+            refresh_fallback(client, config, state, conditions, alert_runner, stall)
         return update_observed(client, config, state)
 
     filename = client.latest_filename(config.dataset, config.version)
@@ -984,24 +1040,7 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
     elif primary_is_stale(config, state, time.time()):
         # The primary has stopped advancing. Publish the stand-in instead of
         # holding a timeline that is getting older every cycle.
-        built = build_fallback(client, config, conditions, alert_runner)
-        if built is not None:
-            frames, meta, grid, run_id = built
-            if run_id != state.last_fallback_run:
-                if not state.fallback_active:
-                    log.warning('primary quiet for %ds; falling back to %s',
-                                int(time.time() - (state.primary_reference or 0))
-                                if state.primary_reference else config.fallback_after,
-                                meta['dataset'])
-                state.last_fallback_run = run_id
-                state.fallback_active = True
-                state.forecast_frames, state.meta, state.grid = frames, meta, grid
-                reconcile_grid(config, grid)
-                # Counts as progress: the timeline is advancing again, and a
-                # stall alert that keeps firing while a working stand-in is on
-                # air is telling the reader about the wrong thing.
-                if stall:
-                    stall.cycle(time.time())
+        refresh_fallback(client, config, state, conditions, alert_runner, stall)
         if state.grid is None:
             return
     elif state.grid is None:

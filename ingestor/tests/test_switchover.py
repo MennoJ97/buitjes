@@ -295,16 +295,17 @@ class FakeClient:
     def __init__(self, primary=None, files=None):
         self.primary = primary
         self.files = files or []
-        self.downloads = []
+        self.asked = []
 
     def latest_filename(self, dataset, version):
+        self.asked.append(dataset)
         return self.primary if dataset == PRIMARY else 'newest.h5'
 
     def newest_filenames(self, dataset, version, count=1):
+        self.asked.append(dataset)
         return self.files[:count]
 
     def download(self, dataset, version, filename, destination):
-        self.downloads.append(filename)
         open(destination, 'wb').close()
         return destination
 
@@ -317,24 +318,41 @@ class FakeStall:
         self.cycles += 1
 
 
-def run(client, cfg, st, stall=None, primary_meta=None, fallback=None):
-    """run_once with the two builders and the observed top-up stubbed out."""
+def run(client, cfg, st, stall=None, primary_meta=None, fallback=None,
+        check_forecast=True):
+    """run_once with both builders and the observed top-up stubbed out.
+
+    ``fallback`` is ``(run_id, frames, meta, grid)`` or None for "unavailable".
+    """
     built_primary = ([{'t': REF}], primary_meta or {'reference_time': REF}, GRID)
-    observed = []
-    original = (m.build_forecast, m.build_fallback, m.update_observed)
+    observed, builds = [], []
+    original = (m.build_forecast, m.fallback_sources, m.build_fallback,
+                m.update_observed)
+
+    def sources(*a, **k):
+        return None if fallback is None else ('radar.h5', 'model.nc', fallback[0])
+
+    def build(*a, **k):
+        builds.append(True)
+        return None if fallback is None else tuple(fallback[1:])
+
     m.build_forecast = lambda *a, **k: built_primary
-    m.build_fallback = lambda *a, **k: fallback
+    m.fallback_sources = sources
+    m.build_fallback = build
     m.update_observed = lambda *a, **k: observed.append(True)
     try:
-        m.run_once(client, cfg, st, stall=stall)
+        m.run_once(client, cfg, st, stall=stall, check_forecast=check_forecast)
     finally:
-        m.build_forecast, m.build_fallback, m.update_observed = original
-    return observed
+        (m.build_forecast, m.fallback_sources, m.build_fallback,
+         m.update_observed) = original
+    return SimpleNamespace(observed=observed, builds=len(builds))
 
 
 with tempfile.TemporaryDirectory() as frame_dir:
     cfg = config(frame_dir=frame_dir)
     now = time.time()
+    BUILT = ('radarA+modelA', [{'t': REF}],
+             {'reference_time': int(now), 'dataset': 'radar + harmonie'}, OTHER_GRID)
 
     # A primary that advances is ingested, and nothing about the stand-in is
     # touched — including the clock the next outage will be measured against.
@@ -348,12 +366,10 @@ with tempfile.TemporaryDirectory() as frame_dir:
     check('and it counts as progress for the stall watch', stall.cycles == 1)
 
     # The same file again, with the primary long stale: the stand-in takes over.
-    built = ([{'t': REF}], {'reference_time': int(now), 'dataset': 'radar + harmonie'},
-             OTHER_GRID, 'radarA+modelA')
     st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,
                grid=GRID, meta={'reference_time': int(now) - 3600})
     stall = FakeStall()
-    run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=built)
+    run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=BUILT)
     check('a stale primary hands over to the stand-in',
           st.fallback_active is True and st.last_fallback_run == 'radarA+modelA'
           and st.grid is OTHER_GRID)
@@ -362,22 +378,50 @@ with tempfile.TemporaryDirectory() as frame_dir:
     check('and the primary clock is left where it was, not refreshed by the stand-in',
           st.primary_reference == int(now) - 3600)
 
-    # Same two source files next time round: nothing to republish.
+    # Same two source files next time round: nothing to republish, and — the
+    # reason the id is resolved before anything is fetched — nothing downloaded.
     stall = FakeStall()
     st.meta = {'reference_time': int(now)}
-    run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=built)
+    result = run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=BUILT)
     check('rebuilding the same stand-in from the same files republishes nothing',
           stall.cycles == 0 and st.last_fallback_run == 'radarA+modelA')
+    check('and does not download either half again', result.builds == 0)
 
     # New radar file: it does republish.
-    moved = ([{'t': REF}], {'reference_time': int(now), 'dataset': 'radar + harmonie'},
-             OTHER_GRID, 'radarB+modelA')
+    moved = ('radarB+modelA',) + BUILT[1:]
     stall = FakeStall()
-    run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=moved)
+    result = run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=moved)
     check('a newer radar file does republish the stand-in',
-          stall.cycles == 1 and st.last_fallback_run == 'radarB+modelA')
+          stall.cycles == 1 and st.last_fallback_run == 'radarB+modelA'
+          and result.builds == 1)
+
+    # The one this was reworked for. A radar-only notification does not look at
+    # the primary — that would spend a request to learn nothing — but the
+    # stand-in must still advance on it, because the radar is its own input and
+    # the primary's age is already known without asking anyone.
+    st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,
+               grid=GRID, meta={'reference_time': int(now) - 3600})
+    client = FakeClient(primary='cycle_a.nc')
+    stall = FakeStall()
+    run(client, cfg, st, stall=stall, fallback=BUILT, check_forecast=False)
+    check('a radar-only pass still advances the stand-in',
+          st.fallback_active is True and st.last_fallback_run == 'radarA+modelA'
+          and stall.cycles == 1)
+    check('and gets there without asking about the primary at all',
+          PRIMARY not in client.asked, f'{client.asked}')
+
+    # ...but a radar-only pass while the primary is healthy must stay cheap.
+    st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now),
+               grid=GRID, meta={'reference_time': int(now)})
+    client = FakeClient(primary='cycle_a.nc')
+    result = run(client, cfg, st, fallback=BUILT, check_forecast=False)
+    check('a radar-only pass with a healthy primary builds nothing',
+          result.builds == 0 and st.fallback_active is False and client.asked == [])
+    check('and still tops up the observed history', result.observed == [True])
 
     # The primary comes back.
+    st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,
+               grid=OTHER_GRID, fallback_active=True, last_fallback_run='radarA+modelA')
     stall = FakeStall()
     run(FakeClient(primary='cycle_b.nc'), cfg, st, stall=stall,
         primary_meta={'reference_time': int(now) + 300})
@@ -393,22 +437,22 @@ with tempfile.TemporaryDirectory() as frame_dir:
     st = state(last_forecast_file='cycle_a.nc', primary_reference=int(now) - 3600,
                grid=GRID, meta={'reference_time': int(now) - 3600})
     stall = FakeStall()
-    observed = run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=None)
+    result = run(FakeClient(primary='cycle_a.nc'), cfg, st, stall=stall, fallback=None)
     check('a stand-in that cannot be built leaves the published cycle alone',
           st.fallback_active is False and st.last_fallback_run is None
           and st.grid is GRID and stall.cycles == 0)
-    check('and the observed history is still topped up meanwhile', observed == [True])
+    check('and the observed history is still topped up meanwhile',
+          result.observed == [True])
 
     # The pilot withdrawn outright: latest_filename finds nothing at all. This
     # is the failure the dataset page actually warns about, and bailing on it
     # would make it the one case the stand-in cannot answer.
     st = state(started_at=now - 3600)
-    stall = FakeStall()
-    run(FakeClient(primary=None), cfg, st, stall=stall, fallback=built)
+    run(FakeClient(primary=None), cfg, st, fallback=BUILT)
     check('a withdrawn primary dataset still reaches the stand-in',
           st.fallback_active is True and st.grid is OTHER_GRID)
 
-    # And with the fallback switched off, that same case must not crash or
+    # And with the fallback disabled, that same case must not crash or
     # publish: it holds, exactly as it did before any of this existed.
     st = state(started_at=now - 3600)
     run(FakeClient(primary=None), config(frame_dir=frame_dir, fallback_after=0), st)
