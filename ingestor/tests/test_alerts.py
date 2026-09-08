@@ -48,18 +48,23 @@ def check(name, condition, detail=''):
         failures.append(name)
 
 
-def document(*rates, start=None, probability=1.0, location='home'):
-    """A point document with one 5-minute step per rate given."""
+def document(*rates, start=None, probability=1.0, location='home', members=None):
+    """A point document with one 5-minute step per rate given.
+
+    ``members`` is left out by default, which is what a document written before
+    the deterministic stand-in existed looks like — so every check that does not
+    pass it is asserting the wording is unchanged for those.
+    """
     start = NOW if start is None else start
-    return {
-        'location': {'name': location},
-        'precipitation': {
-            'series': [
-                {'t': start + index * 300, 'median': rate, 'probability': probability}
-                for index, rate in enumerate(rates)
-            ]
-        },
+    precipitation = {
+        'series': [
+            {'t': start + index * 300, 'median': rate, 'probability': probability}
+            for index, rate in enumerate(rates)
+        ]
     }
+    if members is not None:
+        precipitation['members'] = members
+    return {'location': {'name': location}, 'precipitation': precipitation}
 
 
 def fresh_state():
@@ -119,6 +124,51 @@ check('title names the location and lead time', 'home' in title and 'min' in tit
 check('body carries the peak', '1.4 mm/h' in body, body)
 now_title, now_body = describe(evaluate(document(2.0), rule, NOW), NOW)
 check('raining now reads differently', 'Raining now' in now_body, now_body)
+
+# A share of members is only a share because the members disagree. The
+# deterministic stand-in publishes one, so every such figure is 0 or 1 and
+# "100% of members" is a consensus of nobody. The rules still work on it — "the
+# run we have puts rain here" is usable — but the sentence has to say what it
+# actually knows, and an alert is read away from any badge that would say which
+# product is on air.
+det_body = describe(evaluate(document(0.0, 0.0, 1.4, members=1), rule, NOW), NOW)[1]
+check('a one-member forecast never claims a share of members',
+      '% of members' not in det_body, det_body)
+check('and says so, since a notification carries no badge',
+      'One run, no ensemble.' in det_body, det_body)
+check('a rate rule keeps its peak, which is a real number either way',
+      '1.4 mm/h' in det_body, det_body)
+
+# The peak of a probability metric on one member is 0 or 1, so there is nothing
+# to quote — the clause goes rather than being reworded.
+# Started in the future on purpose: the raining-now branch carries neither a
+# lead time nor the floor's parenthetical, so an onset inside the next five
+# minutes would assert nothing about either.
+prob_rule = parse_rules('home:prob_nearby@0.4:60')[0]
+prob_body = describe(evaluate(document(1.0, probability=1.0, members=1,
+                                       start=NOW + 600), prob_rule, NOW), NOW)[1]
+check('a probability rule on one member drops the peak clause entirely',
+      'peaking' not in prob_body and '%' not in prob_body, prob_body)
+check('but still says when it starts', 'Starting around' in prob_body, prob_body)
+
+# The floor's parenthetical is the third site and goes the same way.
+floor_rule = parse_rules('home:0.5:60:0.6')[0]
+floor_body = describe(evaluate(document(0.0, 2.0, probability=1.0, members=1,
+                                       start=NOW + 600), floor_rule, NOW), NOW)[1]
+check('the probability floor is not quoted as members either',
+      'members' not in floor_body, floor_body)
+
+# Twenty members, and a document that says nothing, both read as before.
+ens_body = describe(evaluate(document(0.0, 2.0, probability=0.8, members=20,
+                                      start=NOW + 600), floor_rule, NOW), NOW)[1]
+check('a full ensemble still quotes its share of members',
+      '80% of members' in ens_body, ens_body)
+check('and a document that does not say keeps the old wording',
+      describe(evaluate(document(0.0, 2.0, probability=0.8, start=NOW + 600),
+                        floor_rule, NOW), NOW)[1] == ens_body)
+check('raining now on one member also carries the note',
+      'One run, no ensemble.' in describe(
+          evaluate(document(2.0, members=1), rule, NOW), NOW)[1])
 
 # Each cycle republishes a forecast covering *its* next hour, so a document has
 # to be built relative to the moment it is evaluated. Reusing one fixed document

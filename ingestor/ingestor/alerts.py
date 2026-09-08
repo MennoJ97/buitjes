@@ -199,10 +199,26 @@ class Event:
     peak_at: int | None
     probability: float      # share of members at the onset step
     raining_now: bool
+    #: How many members the forecast was reduced from, or None when the
+    #: document does not say. Defaulted so an Event built by hand — or by a
+    #: caller written before the stand-in existed — reads exactly as it did.
+    members: int | None = None
 
     @property
     def matched(self) -> bool:
         return self.onset is not None
+
+    @property
+    def deterministic(self) -> bool:
+        """Whether this came from a one-member forecast.
+
+        The stand-in in :mod:`ingestor.fallback` publishes a single
+        deterministic run, and every share-of-members figure then collapses to
+        0 or 1. A rule still works on that — "the run we have puts rain here"
+        is a usable answer — but no sentence may present it as agreement
+        between members that do not exist.
+        """
+        return self.members is not None and self.members < 2
 
     @property
     def peak_text(self) -> str:
@@ -219,13 +235,15 @@ def evaluate(document: dict, rule: Rule, now: float) -> Event:
     forecast places beyond the lead time is not yet news, and rain in the past
     is not news at all.
     """
-    series = (document.get('precipitation') or {}).get('series') or []
+    precipitation = document.get('precipitation') or {}
+    series = precipitation.get('series') or []
+    members = precipitation.get('members')
     window = [
         entry for entry in series
         if now - 300 <= entry['t'] <= now + rule.within
     ]
     if not window:
-        return Event(rule, None, 0.0, None, 0.0, False)
+        return Event(rule, None, 0.0, None, 0.0, False, members)
 
     # The peak is taken in the rule's own metric, because it is what the
     # hysteresis in `process` compares against the rule's own threshold. Mixing
@@ -248,6 +266,7 @@ def evaluate(document: dict, rule: Rule, now: float) -> Event:
         peak_at=peak_entry['t'],
         probability=_floor_probability(onset) if onset else 0.0,
         raining_now=bool(onset and onset['t'] <= now + 300),
+        members=members,
     )
 
 
@@ -264,19 +283,33 @@ def _floor_probability(entry: dict | None) -> float:
 def describe(event: Event, now: float) -> tuple[str, str]:
     """A title and a body, for whatever ends up displaying them."""
     where = event.rule.location
-    peak = event.peak_text
+    # A probability rule reads a metric that is 0 or 1 on a one-member
+    # forecast, so there is no peak to quote and the clause is dropped rather
+    # than reworded: "peaking around 100% of members" is arithmetic on a
+    # sample of one wearing the clothes of a consensus. A *rate* rule keeps
+    # its peak, which is a real number whatever produced it.
+    peak_clause = ('' if event.rule.is_probability and event.deterministic
+                   else f', peaking around {event.peak_text}')
+    # Worth saying out loud on an alert. A notification is read away from the
+    # map, with none of the badges that say which product is on air, and one
+    # run agreeing with itself is a weaker reason to fetch a coat than
+    # eighteen members out of twenty.
+    note = ' One run, no ensemble.' if event.deterministic else ''
+
     if event.raining_now:
-        return (f'Rain at {where}', f'Raining now, peaking around {peak}.')
+        return (f'Rain at {where}', f'Raining now{peak_clause}.{note}')
 
     minutes = max(1, round((event.onset - now) / 60))
     clock = datetime.fromtimestamp(event.onset).strftime('%H:%M')
     # Suppressed for a rule already watching a probability: the body would
-    # otherwise quote the same percentage twice in one sentence.
+    # otherwise quote the same percentage twice in one sentence. Suppressed on
+    # a one-member forecast for the other reason - there is no share to quote.
     chance = (f' ({round(event.probability * 100)}% of members)'
-              if event.rule.probability and not event.rule.is_probability else '')
+              if event.rule.probability and not event.rule.is_probability
+              and not event.deterministic else '')
     return (
         f'Rain at {where} in {minutes} min',
-        f'Starting around {clock}, peaking around {peak}{chance}.',
+        f'Starting around {clock}{peak_clause}{chance}.{note}',
     )
 
 
