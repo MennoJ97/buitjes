@@ -573,6 +573,12 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(5
     white-space: nowrap;
     cursor: help;
 }
+/* Load-bearing, and the reason every other component here carries the same
+   line: the `hidden` attribute is styled by the UA stylesheet, so an author
+   rule setting `display` on the class beats it and the element never hides.
+   Without this the badge stayed up after KNMI came back, wearing a help cursor
+   over the empty title it correctly has when there is nothing to warn about. */
+.src-badge[hidden] { display: none; }
 
 .panel-buttons { flex: none; display: flex; align-items: center; gap: 6px; }
 .btn-collapse svg { transition: transform 0.2s; }
