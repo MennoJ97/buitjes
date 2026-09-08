@@ -239,6 +239,10 @@ class SplicedSource:
     member_count = 1
     product_label = PRODUCT_LABEL
     reducer_label = REDUCER_LABEL
+    #: Published straight through to the manifest and the point documents. A
+    #: reader should never have to recognise this by parsing `product`: the
+    #: wording is for people and may be reworded, the flag is the contract.
+    is_fallback = True
 
     def __init__(self, radar: RadarForecastFile, model: HarmonieFile,
                  horizon_minutes: int = 360, refine: int = 1):

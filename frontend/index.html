@@ -83,6 +83,11 @@
                 <time id="ref-time">--:--</time>
                 <span class="ref-time-age" id="ref-time-age"></span>
             </p>
+            <!-- Only while the ingestor is standing in for KNMI's seamless
+                 ensemble. It sits beside the update time because that is where
+                 a reader already looks to ask "is this current?", and this is
+                 the other half of that question: current, but coarser. -->
+            <span class="src-badge" id="src-badge" hidden>Fallback</span>
             <button type="button" id="locate-btn" class="icon-btn" aria-label="Find my location" title="Find my location">
                 <svg aria-hidden="true"><use href="#icon-locate"/></svg>
             </button>

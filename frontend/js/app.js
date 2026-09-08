@@ -115,6 +115,7 @@ const el = {
     opacityLabel: $('opacity-label'),
     basemapSelect: $('basemap-select'),
     aboutSource: $('about-source'),
+    srcBadge: $('src-badge'),
     trendPanel: $('trend-panel'),
     trendToggle: $('trend-toggle'),
     trendClose: $('trend-close'),
@@ -1191,6 +1192,16 @@ function describeSources(manifest) {
             item.append(link, kind, note);
             el.aboutDatasets.appendChild(item);
         }
+    }
+
+    // Read from the flag, never by recognising the product wording: the words
+    // are for people and can be reworded, `fallback` is the contract.
+    if (el.srcBadge) {
+        el.srcBadge.hidden = !source.fallback;
+        el.srcBadge.title = source.fallback
+            ? `${source.product ?? 'Deterministic fallback'}. No ensemble spread `
+              + 'until KNMI publishes again.'
+            : '';
     }
 
     if (el.aboutSource) {

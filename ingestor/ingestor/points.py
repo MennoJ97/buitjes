@@ -278,7 +278,8 @@ def _round(value: float) -> float:
 
 def summarise(series: list[dict], reference_time: int,
               radius_km: float | None = None,
-              max_mm_h: float | None = None) -> dict:
+              max_mm_h: float | None = None,
+              members: int | None = None) -> dict:
     """A plain-language read of the series, for a widget with one line of room.
 
     Describes the same number the map paints and the chart draws - each entry's
@@ -303,6 +304,16 @@ def summarise(series: list[dict], reference_time: int,
 
     ``radius_km`` is only used to name the neighbourhood in the sentence; with
     it left out the text says "nearby" instead.
+
+    ``members`` is how many the series was reduced from, and it changes the
+    words rather than the numbers. A share of members is only a chance because
+    the members disagree; on the deterministic stand-in
+    (:mod:`ingestor.fallback`) there is exactly one, so the share is 0 or 1 and
+    "100% of members put rain nearby" is a true sentence that reads as a
+    near-certainty when all it means is "the one run we have says yes". The
+    prose drops the arithmetic there and describes the forecast instead. Left
+    out, the sentence keeps its ensemble wording, so a caller that has not been
+    updated reads exactly what it read before.
 
     ``max_mm_h`` is the frame format's ceiling, and the sentence stops there
     because the map does. The field is published unclipped, so at the domain's
@@ -337,13 +348,20 @@ def summarise(series: list[dict], reference_time: int,
             # numbers - but "probably dry, 100% chance of rain" reads as a bug.
             where = f'within {round(radius_km)} km' if radius_km else 'nearby'
             when = _clock(best_chance['t'])
-            text = (
-                f'Showers about — {round(chance * 100)}% of members put rain '
-                f'{where} around {when}, though it may miss you.'
-                if chance >= 0.7 else
-                f'Probably dry, but a {round(chance * 100)}% chance of a shower '
-                f'{where} around {when}.'
-            )
+            if members is not None and members < 2:
+                # No percentage: with one member the only honest reading is
+                # that this forecast puts rain nearby, and any number attached
+                # to that is the arithmetic of a sample of one.
+                text = (f'Showers about — rain {where} around {when}, '
+                        f'though it may miss you.')
+            else:
+                text = (
+                    f'Showers about — {round(chance * 100)}% of members put rain '
+                    f'{where} around {when}, though it may miss you.'
+                    if chance >= 0.7 else
+                    f'Probably dry, but a {round(chance * 100)}% chance of a shower '
+                    f'{where} around {when}.'
+                )
             return {'raining_now': False, 'starts_at': None,
                     'chance_nearby': round(chance, 2), 'chance_at': best_chance['t'],
                     'text': text}

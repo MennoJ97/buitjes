@@ -245,6 +245,33 @@ check('40% is reported as 40%', '40%' in maybe['text'], maybe['text'])
 
 check('without a radius it says "nearby"',
       'nearby' in summarise([step(600, 0.0, 1.0)], REF)['text'])
+
+# A share of members is only a chance because the members disagree. On the
+# deterministic stand-in there is one, so the share is 0 or 1 — and "100% of
+# members put rain nearby" is then a true sentence that reads as a
+# near-certainty when all it says is that the single run we have is wet.
+one = summarise([step(0, 0.0, 0.0), step(600, 0.0, 1.0)], REF, radius_km=10, members=1)
+check('one member does not describe itself as a percentage of members',
+      '%' not in one['text'] and 'members' not in one['text'], one['text'])
+check('but it still says a shower is about, and where and when',
+      'Showers about' in one['text'] and '10 km' in one['text']
+      and 'may miss you' in one['text'], one['text'])
+check('and still admits it may miss you, which is the honest half',
+      one['raining_now'] is False and one['chance_nearby'] == 1.0)
+check('a full ensemble keeps the wording it had',
+      '%' in summarise([step(0, 0.0, 0.0), step(600, 0.0, 1.0)], REF,
+                       radius_km=10, members=20)['text'])
+check('and so does a caller that says nothing about members',
+      summarise([step(0, 0.0, 0.0), step(600, 0.0, 1.0)], REF, radius_km=10)['text']
+      == certain['text'])
+check('a deterministic dry cell is still just dry',
+      summarise([step(600, 0.0, 0.0)], REF, 10, members=1)['text'] == 'Staying dry.')
+# The rain sentences describe the drawn field, not the members, so one member
+# changes nothing about them and must not.
+wet_one = summarise([step(0, 2.0, 1.0)], REF, radius_km=10, members=1)
+check('a wet forecast reads the same on one member as on twenty',
+      wet_one['text'] == summarise([step(0, 2.0, 1.0)], REF, radius_km=10)['text'],
+      wet_one['text'])
 check('a low chance is still just dry',
       summarise([step(600, 0.0, 0.1)], REF, 10)['text'] == 'Staying dry.')
 check('a wet median is unaffected by any of this',

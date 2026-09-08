@@ -410,12 +410,14 @@ def publish_points(config: Config, source, extractor: PointExtractor,
                 'series': series,
             },
             'summary': summarise(series, source.reference_time,
-                                 extractor.neighbourhood_km, config.max_precip),
+                                 extractor.neighbourhood_km, config.max_precip,
+                                 members=source.member_count),
             'source': {
                 # The stand-in names the two datasets it actually read, so a
                 # saved point document still says where its numbers came from.
                 'dataset': getattr(source, 'dataset_label', None) or config.dataset,
                 'version': config.version,
+                'fallback': bool(getattr(source, 'is_fallback', False)),
                 'attribution': 'KNMI (CC BY 4.0)',
             },
         }
@@ -753,6 +755,10 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
         'source': {
             'dataset': meta.get('dataset') or config.dataset,
             'version': config.version,
+            # True only while the deterministic stand-in is on air. Clients
+            # badge it rather than silently drawing a spreadless forecast that
+            # looks like the real one having an unusually confident day.
+            'fallback': bool(meta.get('fallback')),
             'product': meta['product'],
             # The same thing in two lengths on purpose. `product` names the
             # member count for the About dialog; `reducer` is what to call the
@@ -904,6 +910,7 @@ def build_fallback(client: KnmiClient, config: Config, radar_name: str,
                 source, replace(config, spread_radius_km=None),
                 conditions, alert_runner)
     meta['dataset'] = label
+    meta['fallback'] = True
     return frames, meta, grid
 
 

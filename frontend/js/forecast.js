@@ -262,6 +262,16 @@ function render(document_) {
 
     const source = document_.source ?? {};
     const conditions = document_.conditions_source ?? {};
+    // This page is the ensemble, so the stand-in costs it more than it costs
+    // the map: every band on it is missing rather than merely narrower.
+    const badge = $('src-badge');
+    if (badge) {
+        badge.hidden = !source.fallback;
+        badge.title = source.fallback
+            ? `${source.product ?? 'Deterministic fallback'}. One run, so the `
+              + 'bands are absent until KNMI publishes again.'
+            : '';
+    }
     $('forecast-foot').textContent = [
         `Precipitation: ${source.attribution ?? 'KNMI'} — ${source.dataset ?? ''}`,
         conditions.model ? `Conditions: ${conditions.attribution} — ${conditions.model}` : null,

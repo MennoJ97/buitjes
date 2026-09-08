@@ -554,6 +554,26 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(5
    a warning about one, and it should not read as a peer of the other three. */
 .kind-badge--estimated { background: rgba(245, 158, 11, 0.22); color: #fcd34d; }
 
+/* Same amber as the estimated badge, and for the same reason: it is a warning
+   about the data rather than a label for a kind of it. Deliberately a badge and
+   not the stale dot — the feed is not stale, it is standing in, and a reader
+   who has learnt that the amber dot means "old numbers" must not read this as
+   that. It carries the product string as a title so the detail is one hover
+   away without spending a line of the topbar on it. */
+.src-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: rgba(245, 158, 11, 0.22);
+    color: #fcd34d;
+    white-space: nowrap;
+    cursor: help;
+}
+
 .panel-buttons { flex: none; display: flex; align-items: center; gap: 6px; }
 .btn-collapse svg { transition: transform 0.2s; }
 .panel.is-collapsed .btn-collapse svg { transform: rotate(180deg); }
