@@ -54,6 +54,14 @@ class Config:
     alert_format: str
     alert_auth: str
     alert_state_file: str
+    fallback_after: int
+    fallback_nowcast_dataset: str
+    fallback_nowcast_version: str
+    fallback_model_dataset: str
+    fallback_model_version: str
+    fallback_model_parameter: str
+    fallback_horizon_minutes: int
+    fallback_refine: int
     stall_alert: int
     stall_webhook: str
     stall_format: str
@@ -214,6 +222,42 @@ class Config:
             # alert of its own. Wants only ALERT_WEBHOOK_URL: this reports the
             # pipeline, not the weather, so it is useful to someone who
             # configured no rain rules at all. 0 disables it.
+            # How long the primary may go without a new cycle before the
+            # deterministic stand-in takes over — see ingestor/fallback.py. The
+            # primary publishes every 5 minutes, so this is many missed cycles
+            # rather than a late one, and it is deliberately longer than the
+            # notification idle timeout so a poll gets the chance to disprove it
+            # first. 0 disables the stand-in and keeps the old behaviour of
+            # holding the last good cycle indefinitely.
+            fallback_after=int(os.environ.get('FALLBACK_AFTER_SECONDS', '1800')),
+            # Radar extrapolation: 5-minute steps to +2 h. Version 2.0 is the
+            # gauge-corrected accumulation product, which shares an encoding
+            # with the observed frames; v1.0 is dBZ reflectivity and would need
+            # a Z-R conversion, so it is the wrong one to point this at.
+            fallback_nowcast_dataset=os.environ.get(
+                'FALLBACK_NOWCAST_DATASET', 'radar_forecast'),
+            fallback_nowcast_version=os.environ.get('FALLBACK_NOWCAST_VERSION', '2.0'),
+            # The HARMONIE half, as per-parameter NetCDF on the 2 km NL domain.
+            # Not harmonie_arome_cy43_p1: same model, but 862 MiB of GRIB in a
+            # tar every hour against 7 MiB here, and eccodes in the image.
+            fallback_model_dataset=os.environ.get(
+                'FALLBACK_MODEL_DATASET', 'uwcw-ha-det-nl-s1'),
+            fallback_model_version=os.environ.get('FALLBACK_MODEL_VERSION', '1.0'),
+            fallback_model_parameter=os.environ.get(
+                'FALLBACK_MODEL_PARAMETER', 'total-precipitation-rate-gl'),
+            # Matched to the primary's +6 h by default. The model reaches +59 h,
+            # but a timeline that suddenly grows tenfold when the stand-in takes
+            # over is a change of product wearing the shape of a change of
+            # weather.
+            fallback_horizon_minutes=int(os.environ.get('FALLBACK_HORIZON_MINUTES', '360')),
+            # How many output cells per model cell, so the stand-in publishes
+            # the same raster the primary does and a switchover does not throw
+            # the measured hour away. 0 means work it out from the last grid a
+            # primary cycle published, which is right unless the very first
+            # thing this container ever does is stand in. Pin it to the ratio
+            # (the seamless blend is 780 rows to the 2 km model's 390, so 2) to
+            # get the same answer with no primary cycle to learn from.
+            fallback_refine=int(os.environ.get('FALLBACK_REFINE', '0')),
             stall_alert=int(os.environ.get('STALL_ALERT_SECONDS', '1800')),
             # Its own webhook rather than the rain rules'. A stall is a
             # different kind of news — it is about the pipeline, not the

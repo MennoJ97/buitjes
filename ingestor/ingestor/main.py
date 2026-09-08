@@ -24,6 +24,7 @@ import random
 import re
 import tempfile
 import time
+from dataclasses import replace
 
 from .blend import (
     REDUCER_LABELS, SPREAD_PERCENTILES, BlendFile, cell_reach, pool_members,
@@ -31,6 +32,9 @@ from .blend import (
     repaired_steps, spread_fields,
 )
 from .config import Config
+from .fallback import (
+    HarmonieFile, RadarForecastFile, SplicedSource, is_model_parameter,
+)
 from .encode import SPREAD_FLOOR_MM_H, encode_frame, encode_spread_frame, sample_frame
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
@@ -196,157 +200,178 @@ def published_steps(valid_times, reference_time: int, config: Config) -> set[int
 def build_forecast(path: str, config: Config, conditions=None, alert_runner=None):
     """Decode one forecast cycle into frames. Returns (frames, meta, grid)."""
     with BlendFile(path) as source:
-        resampler = MercatorResampler(
-            source.lat, source.lon, config.crop_bounds, config.output_height
-        )
-        log.info(
-            'forecast %s: %d steps, %d members, output %dx%d',
-            source.reference_time, len(source), source.member_count,
-            resampler.width, resampler.height,
-        )
+        return build_from_source(source, config, conditions, alert_runner)
 
-        # Cells, not kilometres, and worked out once: the grid is regular, so
-        # the reach is the same for every pixel and every timestep.
-        factor, reach, spread_resampler = spread_plan(source, resampler, config)
 
-        extractor = PointExtractor(
-            config.widget_locations, source.lat, source.lon, config.neighbourhood_km,
-            # So it can read the reduced field, which is cropped where its own
-            # cells are indices into the full KNMI grid.
-            crop_origin=resampler.origin,
-            # And the band, which is on the spread layer's coarser grid.
-            nearby_scale=factor,
-        )
+def build_from_source(source, config: Config, conditions=None, alert_runner=None):
+    """Decode one already-open cycle into frames. Returns (frames, meta, grid).
 
-        if reach is not None:
-            # The covered radius as well as the asked-for one: on a pooled grid
-            # they round apart, and a band a kilometre wider than its label is
-            # worth seeing in the log rather than inferring from the picture.
-            covered = pooled_reach_km(
-                reach, float(source.lat[1] - source.lat[0]),
-                float(source.lon[1] - source.lon[0]),
-                float(source.lat[len(source.lat) // 2]), factor)
-            log.info('spread: %.1f km is %d x %d cells (covering %.1f x %.1f km) '
-                     'on a %dx%d grid, %dx pooled',
-                     config.spread_radius_km, *reach, *covered,
-                     spread_resampler.width, spread_resampler.height, factor)
+    Split from :func:`build_forecast` so the deterministic stand-in in
+    :mod:`ingestor.fallback` reaches exactly this code. It touches ``source``
+    only through the interface :class:`~ingestor.blend.BlendFile` publishes, so
+    the cadence, the point extraction, the frame naming and the manifest are
+    the same work on either product rather than two versions that drift.
+    """
+    resampler = MercatorResampler(
+        source.lat, source.lon, config.crop_bounds, config.output_height
+    )
+    log.info(
+        'forecast %s: %d steps, %d members, output %dx%d',
+        source.reference_time, len(source), source.member_count,
+        resampler.width, resampler.height,
+    )
 
-        nowcast_until = source.reference_time + config.nowcast_minutes * 60
-        wanted = published_steps(source.valid_times, source.reference_time, config)
-        if len(wanted) < len(source):
-            log.info('cadence: every step to +%d min, then one every %d min '
-                     '(%d of %d steps published)',
-                     config.full_cadence_minutes, config.tail_step_minutes,
-                     len(wanted), len(source))
-        frames = []
-        written = 0
-        spread_written = 0
-        estimated_steps = 0
-        # One read serves both outputs: the reduced field for the map and, while
-        # the members are still in memory, the point samples. Timesteps KNMI
-        # published without an ensemble behind them are stood in for or dropped
-        # before they get here; see :func:`ingestor.blend.repaired_steps`.
-        for valid_time, members, estimated in repaired_steps(source):
-            # Before the reduction, the dilation and the two encodes, which is
-            # all of the expensive work: a step nobody publishes should cost no
-            # more than the read that proved it sound. The read itself stays -
-            # a dead step is stood in for by the members either side of it in
-            # the *source*, so those have to be looked at whether or not they
-            # are published themselves.
-            if valid_time not in wanted:
-                continue
-            # Cropped before reducing, not after: pmm pools every value it is
-            # given, so the reduction has to see exactly what will be published
-            # and nothing else.
-            reduced = reduce_members(resampler.crop(members), config.ensemble_stat)
-            # Computed once and used twice: the point documents sample it at
-            # their own cells, the frames carry it for every pixel.
-            # Pooled first, so the dilation and the sort run on a quarter of
-            # the array at 2x. The maximum is the pool that belongs here: see
-            # :func:`ingestor.blend.pool_members`. Percentiles are still taken
-            # across members, inside spread_fields, and are not pooled at all.
-            nearby = (spread_fields(pool_members(members, factor), *reach)
-                      if reach else None)
-            # Three outputs off one read: the members for the point
-            # percentiles, the field they were reduced into, and the
-            # neighbourhood band that makes a usable line at a location.
-            extractor.observe(valid_time, members, field=reduced, nearby=nearby,
-                              estimated=estimated)
-            field = resampler(reduced)
-            payload = encode_frame(field, config.max_precip)
-            name = forecast_frame_name(source.reference_time, valid_time)
-            write_atomic(config.frame_dir, name, payload)
-            written += len(payload)
-            frame = {
-                't': valid_time,
-                'kind': 'nowcast' if valid_time <= nowcast_until else 'forecast',
-                'file': name,
-            }
-            if reach is not None:
-                # Same members, still in memory: the spread costs a dilation and
-                # a percentile rather than a second read of the file. Dilated
-                # before the crop, so a pixel at the crop edge still sees the
-                # neighbours that exist just outside it.
-                spread = [spread_resampler(spread_resampler.crop(percentile))
-                          for percentile in nearby]
-                spread_payload = encode_spread_frame(spread, config.max_precip)
-                spread_name = spread_frame_name(source.reference_time, valid_time)
-                write_atomic(config.frame_dir, spread_name, spread_payload)
-                spread_written += len(spread_payload)
-                frame['spread'] = spread_name
-            # Present only when true: a reader that has never heard of the flag
-            # reads exactly what it read before, and one that has can say so.
-            if estimated:
-                frame['estimated'] = True
-                estimated_steps += 1
-            frames.append(frame)
+    # Cells, not kilometres, and worked out once: the grid is regular, so
+    # the reach is the same for every pixel and every timestep.
+    factor, reach, spread_resampler = spread_plan(source, resampler, config)
 
-        log.info('forecast %s: wrote %d frames, %.1f MiB%s%s',
-                 source.reference_time, len(frames), written / 1024 / 1024,
-                 f' + {spread_written / 1024 / 1024:.1f} MiB spread' if spread_written else '',
-                 f' ({estimated_steps} estimated)' if estimated_steps else '')
-        # Against the steps meant for publication, not every step in the file:
-        # one deliberately thinned away is not a gap anybody needs telling about.
-        dropped = len(wanted) - len(frames)
-        if dropped:
-            log.warning('forecast %s: %d of %d steps had nothing to stand in for them '
-                        'and are published as a gap in the timeline',
-                        source.reference_time, dropped, len(wanted))
+    extractor = PointExtractor(
+        config.widget_locations, source.lat, source.lon, config.neighbourhood_km,
+        # So it can read the reduced field, which is cropped where its own
+        # cells are indices into the full KNMI grid.
+        crop_origin=resampler.origin,
+        # And the band, which is on the spread layer's coarser grid.
+        nearby_scale=factor,
+    )
 
-        publish_points(config, source, extractor, conditions, alert_runner)
+    if reach is not None:
+        # The covered radius as well as the asked-for one: on a pooled grid
+        # they round apart, and a band a kilometre wider than its label is
+        # worth seeing in the log rather than inferring from the picture.
+        covered = pooled_reach_km(
+            reach, float(source.lat[1] - source.lat[0]),
+            float(source.lon[1] - source.lon[0]),
+            float(source.lat[len(source.lat) // 2]), factor)
+        log.info('spread: %.1f km is %d x %d cells (covering %.1f x %.1f km) '
+                 'on a %dx%d grid, %dx pooled',
+                 config.spread_radius_km, *reach, *covered,
+                 spread_resampler.width, spread_resampler.height, factor)
 
-        meta = {
-            'reference_time': source.reference_time,
-            'product': (f'{REDUCER_LABELS[config.ensemble_stat]} of '
-                        f'{source.member_count} ensemble members'),
-            # What the second file on each frame holds, and how to read it. The
-            # frames are useless without this: three bytes on a log scale say
-            # nothing about which percentile or how far around each pixel.
-            'spread': None if reach is None else {
-                'radius_km': config.spread_radius_km,
-                'percentiles': list(SPREAD_PERCENTILES),
-                'channels': ['r', 'g', 'b'],
-                'encoding': 'log8',
-                'floor_mm_h': SPREAD_FLOOR_MM_H,
-                'max_mm_h': config.max_precip,
-                'shape': 'square',
-                # The band's own raster size, which is not the manifest's when
-                # the layer is pooled. Both cover the same corner coordinates,
-                # so a shader sampling in normalised coordinates needs nothing
-                # from this - but anything reading a *pixel* does, and reading
-                # it at the rain layer's size lands somewhere else entirely.
-                'width': spread_resampler.width,
-                'height': spread_resampler.height,
-                'downsample': factor,
-            },
-            # Coordinates too: a client that knows where the user clicked can
-            # then pick the nearest published location without another request.
-            'points': [
-                {'name': location.name, 'lat': location.lat, 'lon': location.lon}
-                for location in extractor.locations
-            ],
+    nowcast_until = source.reference_time + config.nowcast_minutes * 60
+    wanted = published_steps(source.valid_times, source.reference_time, config)
+    if len(wanted) < len(source):
+        log.info('cadence: every step to +%d min, then one every %d min '
+                 '(%d of %d steps published)',
+                 config.full_cadence_minutes, config.tail_step_minutes,
+                 len(wanted), len(source))
+    frames = []
+    written = 0
+    spread_written = 0
+    estimated_steps = 0
+    # One read serves both outputs: the reduced field for the map and, while
+    # the members are still in memory, the point samples. Timesteps KNMI
+    # published without an ensemble behind them are stood in for or dropped
+    # before they get here; see :func:`ingestor.blend.repaired_steps`.
+    for valid_time, members, estimated in repaired_steps(source):
+        # Before the reduction, the dilation and the two encodes, which is
+        # all of the expensive work: a step nobody publishes should cost no
+        # more than the read that proved it sound. The read itself stays -
+        # a dead step is stood in for by the members either side of it in
+        # the *source*, so those have to be looked at whether or not they
+        # are published themselves.
+        if valid_time not in wanted:
+            continue
+        # Cropped before reducing, not after: pmm pools every value it is
+        # given, so the reduction has to see exactly what will be published
+        # and nothing else.
+        reduced = reduce_members(resampler.crop(members), config.ensemble_stat)
+        # Computed once and used twice: the point documents sample it at
+        # their own cells, the frames carry it for every pixel.
+        # Pooled first, so the dilation and the sort run on a quarter of
+        # the array at 2x. The maximum is the pool that belongs here: see
+        # :func:`ingestor.blend.pool_members`. Percentiles are still taken
+        # across members, inside spread_fields, and are not pooled at all.
+        nearby = (spread_fields(pool_members(members, factor), *reach)
+                  if reach else None)
+        # Three outputs off one read: the members for the point
+        # percentiles, the field they were reduced into, and the
+        # neighbourhood band that makes a usable line at a location.
+        extractor.observe(valid_time, members, field=reduced, nearby=nearby,
+                          estimated=estimated)
+        field = resampler(reduced)
+        payload = encode_frame(field, config.max_precip)
+        name = forecast_frame_name(source.reference_time, valid_time)
+        write_atomic(config.frame_dir, name, payload)
+        written += len(payload)
+        frame = {
+            't': valid_time,
+            'kind': 'nowcast' if valid_time <= nowcast_until else 'forecast',
+            'file': name,
         }
-        return frames, meta, resampler.target
+        if reach is not None:
+            # Same members, still in memory: the spread costs a dilation and
+            # a percentile rather than a second read of the file. Dilated
+            # before the crop, so a pixel at the crop edge still sees the
+            # neighbours that exist just outside it.
+            spread = [spread_resampler(spread_resampler.crop(percentile))
+                      for percentile in nearby]
+            spread_payload = encode_spread_frame(spread, config.max_precip)
+            spread_name = spread_frame_name(source.reference_time, valid_time)
+            write_atomic(config.frame_dir, spread_name, spread_payload)
+            spread_written += len(spread_payload)
+            frame['spread'] = spread_name
+        # Present only when true: a reader that has never heard of the flag
+        # reads exactly what it read before, and one that has can say so.
+        if estimated:
+            frame['estimated'] = True
+            estimated_steps += 1
+        frames.append(frame)
+
+    log.info('forecast %s: wrote %d frames, %.1f MiB%s%s',
+             source.reference_time, len(frames), written / 1024 / 1024,
+             f' + {spread_written / 1024 / 1024:.1f} MiB spread' if spread_written else '',
+             f' ({estimated_steps} estimated)' if estimated_steps else '')
+    # Against the steps meant for publication, not every step in the file:
+    # one deliberately thinned away is not a gap anybody needs telling about.
+    dropped = len(wanted) - len(frames)
+    if dropped:
+        log.warning('forecast %s: %d of %d steps had nothing to stand in for them '
+                    'and are published as a gap in the timeline',
+                    source.reference_time, dropped, len(wanted))
+
+    publish_points(config, source, extractor, conditions, alert_runner)
+
+    meta = {
+        'reference_time': source.reference_time,
+        # Taken from the source when it offers its own words. The stand-in in
+        # :mod:`ingestor.fallback` is one deterministic run, and describing it
+        # as a probability-matched mean of one member would be a sentence that
+        # is technically true and entirely misleading.
+        'product': getattr(source, 'product_label', None) or (
+            f'{REDUCER_LABELS[config.ensemble_stat]} of '
+            f'{source.member_count} ensemble members'),
+        # Carried in meta rather than recomputed in publish(), which never sees
+        # the source and so cannot tell which product it is labelling.
+        'reducer': getattr(source, 'reducer_label', None)
+        or REDUCER_LABELS[config.ensemble_stat],
+        # What the second file on each frame holds, and how to read it. The
+        # frames are useless without this: three bytes on a log scale say
+        # nothing about which percentile or how far around each pixel.
+        'spread': None if reach is None else {
+            'radius_km': config.spread_radius_km,
+            'percentiles': list(SPREAD_PERCENTILES),
+            'channels': ['r', 'g', 'b'],
+            'encoding': 'log8',
+            'floor_mm_h': SPREAD_FLOOR_MM_H,
+            'max_mm_h': config.max_precip,
+            'shape': 'square',
+            # The band's own raster size, which is not the manifest's when
+            # the layer is pooled. Both cover the same corner coordinates,
+            # so a shader sampling in normalised coordinates needs nothing
+            # from this - but anything reading a *pixel* does, and reading
+            # it at the rain layer's size lands somewhere else entirely.
+            'width': spread_resampler.width,
+            'height': spread_resampler.height,
+            'downsample': factor,
+        },
+        # Coordinates too: a client that knows where the user clicked can
+        # then pick the nearest published location without another request.
+        'points': [
+            {'name': location.name, 'lat': location.lat, 'lon': location.lon}
+            for location in extractor.locations
+        ],
+    }
+    return frames, meta, resampler.target
 
 
 def point_file_name(name: str) -> str:
@@ -375,7 +400,8 @@ def publish_points(config: Config, source, extractor: PointExtractor,
                 'percentiles': list(PERCENTILES),
                 # What each entry's `field` is, so a reader drawing it can name
                 # it rather than calling every central number a median.
-                'field_product': REDUCER_LABELS[config.ensemble_stat],
+                'field_product': (getattr(source, 'reducer_label', None)
+                                  or REDUCER_LABELS[config.ensemble_stat]),
                 # What the `nearby_*` keys are a radius of. Absent with the
                 # spread layer switched off, and so are the keys.
                 'nearby_radius_km': config.spread_radius_km,
@@ -386,7 +412,9 @@ def publish_points(config: Config, source, extractor: PointExtractor,
             'summary': summarise(series, source.reference_time,
                                  extractor.neighbourhood_km, config.max_precip),
             'source': {
-                'dataset': config.dataset,
+                # The stand-in names the two datasets it actually read, so a
+                # saved point document still says where its numbers came from.
+                'dataset': getattr(source, 'dataset_label', None) or config.dataset,
                 'version': config.version,
                 'attribution': 'KNMI (CC BY 4.0)',
             },
@@ -661,14 +689,36 @@ def known_reference_times(config: Config) -> set[int]:
     return found
 
 
-def reconcile_grid(config: Config, grid: TargetGrid) -> None:
+def primary_height(config: Config) -> int | None:
+    """The row count of the last grid a *primary* cycle published, if known.
+
+    Recorded so the stand-in can be built at the same resolution, which is what
+    keeps a switchover from discarding the measured hour. Persisted rather than
+    held in memory because the restart worth surviving is the one that happens
+    mid-outage, when there is no primary cycle to relearn it from.
+    """
+    try:
+        with open(os.path.join(config.frame_dir, GRID_NAME)) as handle:
+            recorded = json.load(handle).get('primary_height')
+    except (OSError, ValueError):
+        return None
+    return int(recorded) if recorded else None
+
+
+def reconcile_grid(config: Config, grid: TargetGrid, primary: bool = False) -> None:
     """Drop observed frames if the output grid has changed under them.
 
     They are resampled onto the forecast's grid, so a changed domain would leave
     them silently misaligned rather than merely stale.
+
+    ``primary`` says this grid came from the real product rather than the
+    stand-in, and is the only thing that updates the remembered height. A
+    stand-in that had to fall back to its native resolution must not overwrite
+    the target it was trying to hit.
     """
     path = os.path.join(config.frame_dir, GRID_NAME)
     signature = grid.signature()
+    recorded = primary_height(config)
     try:
         with open(path) as handle:
             previous = json.load(handle).get('signature')
@@ -682,8 +732,10 @@ def reconcile_grid(config: Config, grid: TargetGrid) -> None:
             if OBSERVED_PATTERN.match(entry):
                 os.unlink(os.path.join(config.frame_dir, entry))
 
-    if previous != signature:
-        write_atomic(config.frame_dir, GRID_NAME, json.dumps({'signature': signature}).encode())
+    height = grid.height if primary else recorded
+    if previous != signature or height != recorded:
+        write_atomic(config.frame_dir, GRID_NAME, json.dumps(
+            {'signature': signature, 'primary_height': height}).encode())
 
 
 # ------------------------------------------------------------------ loop
@@ -699,7 +751,7 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
         'height': grid.height,
         'max_precip_mm_h': config.max_precip,
         'source': {
-            'dataset': config.dataset,
+            'dataset': meta.get('dataset') or config.dataset,
             'version': config.version,
             'product': meta['product'],
             # The same thing in two lengths on purpose. `product` names the
@@ -707,7 +759,7 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
             # number itself, under a value in a tooltip where "of 20 ensemble
             # members" is noise. The point documents publish this short one too,
             # so a reader gets the same words whichever route they came by.
-            'reducer': REDUCER_LABELS[config.ensemble_stat],
+            'reducer': meta.get('reducer') or REDUCER_LABELS[config.ensemble_stat],
             'observed': config.observed_dataset if config.history_minutes > 0 else None,
             'attribution': 'KNMI (CC BY 4.0)',
         },
@@ -720,12 +772,19 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
 
 class State:
     def __init__(self):
+        self.started_at: float = time.time()
         self.last_forecast_file: str | None = None
         self.forecast_frames: list = []
         self.meta: dict | None = None
         self.grid: TargetGrid | None = None
         self.published: tuple | None = None
         self.backfilling: bool = False
+        # Tracked apart from `meta` because in fallback mode `meta` describes
+        # the stand-in, which is always fresh — asking it how old the primary
+        # is would answer "not old at all" and flap straight back.
+        self.primary_reference: int | None = None
+        self.fallback_active: bool = False
+        self.last_fallback_run: str | None = None
 
 
 def seconds_until_next_publication(config: Config, state: State, now: float) -> float:
@@ -750,6 +809,136 @@ def seconds_until_next_publication(config: Config, state: State, now: float) -> 
     return remaining if remaining > 0 else config.poll_retry
 
 
+def latest_model_file(client: KnmiClient, config: Config) -> str | None:
+    """The newest file for the one HARMONIE parameter the stand-in reads.
+
+    A run publishes ~22 parameters at once, so the newest file overall is
+    usually the wrong one. Asked for by page rather than by name because the
+    run that is current changes hourly, and a guessed filename would be a
+    request spent to learn nothing on the hour it is wrong.
+    """
+    names = client.newest_filenames(
+        config.fallback_model_dataset, config.fallback_model_version, 100)
+    for name in names:
+        if is_model_parameter(name, config.fallback_model_parameter):
+            return name
+    log.warning('no %s file among the %d newest in %s',
+                config.fallback_model_parameter, len(names),
+                config.fallback_model_dataset)
+    return None
+
+
+def fallback_refine(config: Config, model_rows: int, target_height: int | None) -> int:
+    """How many output cells per model cell, so the two products share a raster.
+
+    The stand-in's model half is 2 km where the primary is ~1.4 km, so left
+    alone it publishes a grid of a different size over the same corner
+    coordinates — and :func:`reconcile_grid` rightly discards the measured hour
+    every time the source changes, twice per outage.
+
+    Refining the model's axes to the primary's row count removes that. It buys
+    no detail in the model half and does not pretend to; what it buys is one
+    grid across the switchover. The radar half is a real gain, being 1 km
+    native. Only exact multiples are taken: a ratio that does not divide would
+    land the cells somewhere between the two grids, which is worse than
+    honestly publishing a different one.
+    """
+    if config.fallback_refine:
+        return max(1, config.fallback_refine)
+    if not target_height or model_rows <= 0:
+        return 1
+    if target_height % model_rows:
+        log.info('fallback: primary grid is %d rows against the model\'s %d, '
+                 'which is not a whole multiple; publishing at the model\'s own '
+                 'resolution', target_height, model_rows)
+        return 1
+    return max(1, target_height // model_rows)
+
+
+def build_fallback(client: KnmiClient, config: Config, conditions=None,
+                   alert_runner=None):
+    """Build one cycle from the deterministic stand-in.
+
+    Returns ``(frames, meta, grid, run_id)``, or None when either half is
+    unavailable — in which case the caller keeps holding the last good cycle,
+    which is still better than publishing half a timeline.
+    """
+    radar_name = client.latest_filename(
+        config.fallback_nowcast_dataset, config.fallback_nowcast_version)
+    model_name = latest_model_file(client, config)
+    if not radar_name or not model_name:
+        return None
+
+    run_id = f'{radar_name}+{model_name}'
+    label = f'{config.fallback_nowcast_dataset} + {config.fallback_model_dataset}'
+    with tempfile.TemporaryDirectory() as scratch:
+        radar_path = client.download(
+            config.fallback_nowcast_dataset, config.fallback_nowcast_version,
+            radar_name, os.path.join(scratch, radar_name))
+        model_path = client.download(
+            config.fallback_model_dataset, config.fallback_model_version,
+            model_name, os.path.join(scratch, model_name))
+        with RadarForecastFile(radar_path) as radar, \
+                HarmonieFile(model_path, config.fallback_model_parameter) as model:
+            refine = fallback_refine(config, len(model.lat), primary_height(config))
+            source = SplicedSource(radar, model, config.fallback_horizon_minutes,
+                                   refine=refine)
+            source.dataset_label = label
+            # The spread layer is forced off rather than computed from one
+            # member: percentiles of a single value are that value three times,
+            # which would draw a zero-width band and call it certainty. The
+            # frontend already treats a missing spread block as "no band".
+            frames, meta, grid = build_from_source(
+                source, replace(config, spread_radius_km=None),
+                conditions, alert_runner)
+    meta['dataset'] = label
+    return frames, meta, grid, run_id
+
+
+def primary_is_stale(config: Config, state: State, now: float) -> bool:
+    """Whether the primary has been quiet long enough to stand in for it."""
+    if config.fallback_after <= 0:
+        return False
+    if state.primary_reference is None:
+        # Never seen one. Only stand in once the process has been up long
+        # enough that this is an outage rather than a cold start.
+        return state.meta is None and now - state.started_at > config.fallback_after
+    return now - state.primary_reference > config.fallback_after
+
+
+def forecast_check_due(config: Config, announced, quiet_since: float, now: float):
+    """Whether to look at the forecast dataset, and the updated quiet clock.
+
+    ``announced`` is the set of datasets the notification service named since
+    the last wait; an empty set means the wait timed out with nothing published.
+
+    The idle timeout on its own is a per-*connection* watchdog, and that is not
+    the failure this has actually seen. ``announced`` covers both topics, and
+    the radar one heartbeats every five minutes, so while the connection is up
+    it is never empty — which means a forecast subscription that quietly stops
+    delivering looks exactly like KNMI having nothing to say, and the forecast
+    would never be looked at again. On 2026-09-07 that was the difference
+    between "upstream is down" and "we stopped listening", and telling the two
+    apart took a hand-run query against the files API.
+
+    So the forecast dataset gets a clock of its own: once it has been quiet for
+    the idle timeout, poll it directly whatever the radar topic is doing. One
+    request per idle timeout is well inside what KNMI asks of a client, and it
+    is the only thing that can distinguish the two failures.
+
+    The clock resets whenever the forecast is checked, not only when KNMI
+    announces it — otherwise a quiet dataset would be polled on every pass round
+    the loop rather than once per timeout.
+    """
+    if not announced:
+        return True, now  # the connection may be dead; a cycle proves it either way
+    if config.dataset in announced:
+        return True, now
+    if now - quiet_since >= config.notification_idle_timeout:
+        return True, now
+    return False, quiet_since
+
+
 def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
              check_forecast: bool = True, alert_runner=None, stall=None) -> None:
     # A radar-only notification means the forecast cannot have moved, so looking
@@ -759,10 +948,14 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
 
     filename = client.latest_filename(config.dataset, config.version)
     if not filename:
+        # Deliberately not a return. The primary is a pilot that KNMI says may
+        # be "discontinued at any time without prior notice", and a dataset
+        # withdrawn outright is exactly when the stand-in is most wanted —
+        # bailing here would make the one unrecoverable failure the only one
+        # the fallback cannot answer.
         log.warning('dataset %s has no files', config.dataset)
-        return
 
-    if filename != state.last_forecast_file:
+    if filename and filename != state.last_forecast_file:
         log.info('new forecast cycle: %s', filename)
         with tempfile.TemporaryDirectory() as scratch:
             downloaded = client.download(
@@ -771,7 +964,7 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
             frames, meta, grid = build_forecast(downloaded, config, conditions, alert_runner)
         state.last_forecast_file = filename
         state.forecast_frames, state.meta, state.grid = frames, meta, grid
-        reconcile_grid(config, grid)
+        reconcile_grid(config, grid, primary=True)
         # The transition the stall watch counts from, and deliberately down
         # here: a cycle that KNMI announced but that failed to download is not
         # progress, and marking it as such would keep resetting the clock
@@ -781,6 +974,36 @@ def run_once(client: KnmiClient, config: Config, state: State, conditions=None,
         # publishing, which is the outage that started all this.
         if stall:
             stall.cycle(time.time())
+        # Back on the real product: forget the stand-in so its next run is
+        # rebuilt from scratch rather than compared against a stale id.
+        state.primary_reference = meta['reference_time']
+        if state.fallback_active:
+            log.info('primary forecast is back; leaving the deterministic fallback')
+        state.fallback_active = False
+        state.last_fallback_run = None
+    elif primary_is_stale(config, state, time.time()):
+        # The primary has stopped advancing. Publish the stand-in instead of
+        # holding a timeline that is getting older every cycle.
+        built = build_fallback(client, config, conditions, alert_runner)
+        if built is not None:
+            frames, meta, grid, run_id = built
+            if run_id != state.last_fallback_run:
+                if not state.fallback_active:
+                    log.warning('primary quiet for %ds; falling back to %s',
+                                int(time.time() - (state.primary_reference or 0))
+                                if state.primary_reference else config.fallback_after,
+                                meta['dataset'])
+                state.last_fallback_run = run_id
+                state.fallback_active = True
+                state.forecast_frames, state.meta, state.grid = frames, meta, grid
+                reconcile_grid(config, grid)
+                # Counts as progress: the timeline is advancing again, and a
+                # stall alert that keeps firing while a working stand-in is on
+                # air is telling the reader about the wrong thing.
+                if stall:
+                    stall.cycle(time.time())
+        if state.grid is None:
+            return
     elif state.grid is None:
         return  # nothing published yet and no new cycle to build one from
 
@@ -875,6 +1098,7 @@ def main() -> None:
         # anything reports that too, rather than waiting forever in silence.
         stall.cycle(time.time())
     continue_kwargs = {'check_forecast': True}
+    forecast_quiet_since = time.time()
     while True:
         try:
             run_once(client, config, state, conditions,
@@ -899,12 +1123,15 @@ def main() -> None:
         # safety net against a connection that died without saying so.
         if listener is not None and not state.backfilling:
             announced = listener.wait(config.notification_idle_timeout)
+            quiet_for = time.time() - forecast_quiet_since
+            check_forecast, forecast_quiet_since = forecast_check_due(
+                config, announced, forecast_quiet_since, time.time())
             if not announced:
                 log.warning('no notification for %ds; running a cycle anyway',
                             config.notification_idle_timeout)
-                check_forecast = True
-            else:
-                check_forecast = config.dataset in announced
+            elif check_forecast and config.dataset not in announced:
+                log.warning('no %s notification for %ds; polling it directly',
+                            config.dataset, int(quiet_for))
             continue_kwargs['check_forecast'] = check_forecast
             continue
 
