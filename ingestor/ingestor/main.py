@@ -745,6 +745,40 @@ def reconcile_grid(config: Config, grid: TargetGrid, primary: bool = False) -> N
 # ------------------------------------------------------------------ loop
 
 
+def knmi_datasets(config: Config) -> list[dict]:
+    """The KNMI datasets this deployment reads, by name and version.
+
+    Published alongside the human-readable `dataset` label because that label
+    is prose — in fallback mode it is two names joined by a plus — and the
+    About dialog builds dataset-page links out of it. Names and versions belong
+    in their own field, where a client can slug them without guessing.
+    """
+    datasets = [{'dataset': config.dataset, 'version': config.version,
+                 'kind': 'forecast'}]
+    if config.history_minutes > 0:
+        datasets.append({'dataset': config.observed_dataset,
+                         'version': config.observed_version,
+                         'kind': 'observed'})
+    return datasets
+
+
+def standby_datasets(config: Config) -> list[dict]:
+    """The two the stand-in would splice, or none with the stand-in disabled.
+
+    Listed whether or not it is currently on air: the About dialog says what
+    happens when the ensemble goes quiet, which is worth reading *before* it
+    does.
+    """
+    if not config.fallback_after:
+        return []
+    return [
+        {'dataset': config.fallback_nowcast_dataset,
+         'version': config.fallback_nowcast_version, 'kind': 'nowcast'},
+        {'dataset': config.fallback_model_dataset,
+         'version': config.fallback_model_version, 'kind': 'model'},
+    ]
+
+
 def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
     frames = sorted(frames, key=lambda frame: frame['t'])
     manifest = {
@@ -769,6 +803,10 @@ def publish(config: Config, grid: TargetGrid, meta: dict, frames: list) -> None:
             # so a reader gets the same words whichever route they came by.
             'reducer': meta.get('reducer') or REDUCER_LABELS[config.ensemble_stat],
             'observed': config.observed_dataset if config.history_minutes > 0 else None,
+            # Machine-readable companions to `dataset` / `observed` above: what
+            # is being read now, and what stands in when it stops.
+            'datasets': knmi_datasets(config),
+            'standby': standby_datasets(config),
             'attribution': 'KNMI (CC BY 4.0)',
         },
         'points': meta.get('points', []),

@@ -107,6 +107,7 @@ const el = {
     aboutBackdrop: $('about-backdrop'),
     aboutClose: $('about-close'),
     aboutDatasets: $('about-datasets'),
+    aboutFallback: $('about-fallback'),
     collapseBtn: $('collapse-btn'),
     locateBtn: $('locate-btn'),
     speedSlider: $('speed-slider'),
@@ -1164,33 +1165,67 @@ const DATASET_NOTES = {
         'of the timeline before now.',
 };
 
+/** Anchor to a KNMI dataset page, given an entry from the manifest. */
+function datasetLink(entry) {
+    const link = document.createElement('a');
+    link.href = knmiDatasetUrl(entry.dataset, entry.version);
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = entry.dataset;
+    return link;
+}
+
 /**
  * Build the data-source list from the manifest, so the About box describes what
  * is actually being served rather than what was true when it was written.
  */
 function describeSources(manifest) {
     const source = manifest.source ?? {};
-    if (el.aboutDatasets) {
-        const entries = [
+    // `datasets` carries names and versions; `dataset` is the label shown
+    // elsewhere and is prose — while the stand-in is on air it is two names
+    // joined by a plus, which slugs into a dataset page that does not exist.
+    // Only fall back to it for a manifest written before `datasets` existed.
+    const datasets = Array.isArray(source.datasets) && source.datasets.length
+        ? source.datasets
+        : [
             { dataset: source.dataset, version: source.version, kind: 'forecast' },
             { dataset: source.observed, version: '1.0', kind: 'observed' },
         ].filter((entry) => entry.dataset);
+    const standby = Array.isArray(source.standby) ? source.standby : [];
 
+    if (el.aboutDatasets) {
         el.aboutDatasets.innerHTML = '';
-        for (const entry of entries) {
+        for (const entry of datasets) {
             const item = document.createElement('li');
-            const link = document.createElement('a');
-            link.href = knmiDatasetUrl(entry.dataset, entry.version);
-            link.target = '_blank';
-            link.rel = 'noopener';
-            link.textContent = entry.dataset;
             const kind = document.createElement('span');
             kind.className = 'about-kind';
             kind.textContent = entry.kind;
             const note = document.createElement('p');
             note.textContent = DATASET_NOTES[entry.kind] ?? '';
-            item.append(link, kind, note);
+            item.append(datasetLink(entry), kind, note);
             el.aboutDatasets.appendChild(item);
+        }
+    }
+
+    // Two datasets to name in the middle of a sentence, so it is built here
+    // rather than written into the page: which ones is a server setting.
+    if (el.aboutFallback) {
+        el.aboutFallback.hidden = standby.length < 2;
+        if (standby.length >= 2) {
+            el.aboutFallback.innerHTML = '';
+            const lead = source.fallback
+                ? 'That ensemble is quiet right now, so what you are looking at is the '
+                  + 'stand-in: '
+                : 'If the ensemble goes quiet for long enough, a stand-in takes over, '
+                  + 'spliced here from ';
+            el.aboutFallback.append(document.createTextNode(lead));
+            el.aboutFallback.append(datasetLink(standby[0]));
+            el.aboutFallback.append(document.createTextNode(' for the first two hours and '));
+            el.aboutFallback.append(datasetLink(standby[1]));
+            el.aboutFallback.append(document.createTextNode(
+                ' beyond them. It is one run rather than twenty, so it carries no spread: '
+                + 'Low and High are switched off while it is on air, and the Fallback badge '
+                + 'beside the update time says so.'));
         }
     }
 
