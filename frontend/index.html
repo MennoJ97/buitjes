@@ -136,28 +136,23 @@
 
             <section class="about-section">
                 <h3>How sure is it?</h3>
-                <p class="about-note">The forecast is twenty runs, not one. What the map
-                   paints — <strong>Expected</strong> on the switch — is the twenty pooled
-                   into a single field: their average decides where the rain is, and the runs'
-                   own range of intensities decides how hard it falls, so a shower keeps its
-                   edges instead of being smeared across twenty guesses at its position. But
-                   where a shower lands is the thing twenty runs disagree about most, long
-                   before they disagree that one is coming at all.</p>
-                <p class="about-note"><strong>Low</strong> and <strong>High</strong> above the
-                   colour bar redraw the map as the dry and wet ends of that disagreement:
-                   the rate that all but two of the runs beat, and the one only two of them
-                   reach. The gap between them is how much the ensemble is arguing. Hover
-                   anywhere to read all three at once.</p>
+                <p class="about-note">The forecast is twenty runs, not one.
+                   <strong>Expected</strong> on the switch is the twenty pooled into a single
+                   field: their average decides where the rain is, the runs' own range of
+                   intensities how hard it falls, so a shower keeps its edges instead of being
+                   smeared across twenty guesses at its position.</p>
+                <p class="about-note"><strong>Low</strong> and <strong>High</strong> redraw the
+                   map as the dry and wet ends of the runs' disagreement: the rate all but two
+                   of them beat, and the one only two reach. The wider the gap, the more the
+                   ensemble is arguing — usually about where a shower lands, long before it
+                   argues that one is coming at all. Hover to read all three at once.</p>
                 <p class="about-note">Both are taken over
                    <span id="about-spread-radius">a small radius</span>
-                   rather than a single square kilometre, which is deliberate: at one
-                   kilometre the low end reads zero almost everywhere, because a shower two
-                   streets away counts as a miss. So read them as <em>near here</em> rather
-                   than <em>exactly here</em>.</p>
-                <p class="about-note">None of this exists over the measured hour: radar is one
-                   number, not twenty, and a measurement has no percentiles to take. Scrub back
-                   into it and the map shows what was measured whichever end you have selected,
-                   and the readout says <em>measured</em> rather than naming a band.</p>
+                   rather than a single square kilometre: at one kilometre the low end reads
+                   zero almost everywhere, because a shower two streets away counts as a miss.
+                   Read them as <em>near here</em>. Over the measured hour there is nothing to
+                   take — radar is one number, not twenty — so the map shows what was measured
+                   whichever end is selected.</p>
             </section>
 
             <section class="about-section">
@@ -165,11 +160,9 @@
                 <p class="about-note">Precipitation comes from the
                    <a href="https://dataplatform.knmi.nl/" target="_blank" rel="noopener">KNMI Data Platform</a>,
                    licensed CC BY 4.0.</p>
+                <!-- Built by describeSources(), including the note about the
+                     stand-in that hangs off the ensemble entry. -->
                 <ul class="about-list" id="about-datasets"></ul>
-                <!-- Written by describeSources(), which names the stand-in's two
-                     datasets and links them, and switches the sentence to the
-                     present tense while the stand-in is actually on air. -->
-                <p class="about-note" id="about-fallback" hidden></p>
                 <ul class="about-list">
                     <li>
                         <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>

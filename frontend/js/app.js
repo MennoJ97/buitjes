@@ -107,7 +107,6 @@ const el = {
     aboutBackdrop: $('about-backdrop'),
     aboutClose: $('about-close'),
     aboutDatasets: $('about-datasets'),
-    aboutFallback: $('about-fallback'),
     collapseBtn: $('collapse-btn'),
     locateBtn: $('locate-btn'),
     speedSlider: $('speed-slider'),
@@ -1176,6 +1175,31 @@ function datasetLink(entry) {
 }
 
 /**
+ * The note about the stand-in, or null where there is no stand-in configured.
+ *
+ * Built here rather than written into the page because which two datasets it
+ * splices is a server setting, and because it changes tense: describing a
+ * hypothetical while the reader is looking at the thing described is worse
+ * than saying nothing.
+ */
+function standbyNote(standby, onAir) {
+    if (standby.length < 2) return null;
+    const note = document.createElement('p');
+    note.className = 'about-standby';
+    note.append(document.createTextNode(onAir
+        ? 'Quiet right now, so what you are looking at is the stand-in: '
+        : 'If it goes quiet for long enough, a stand-in takes over, spliced here from '));
+    note.append(datasetLink(standby[0]));
+    note.append(document.createTextNode(' for the first two hours and '));
+    note.append(datasetLink(standby[1]));
+    note.append(document.createTextNode(
+        ' beyond them. One run rather than twenty, so it carries no spread: Low and '
+        + 'High are switched off while it is on air, and the Fallback badge beside the '
+        + 'update time says so.'));
+    return note;
+}
+
+/**
  * Build the data-source list from the manifest, so the About box describes what
  * is actually being served rather than what was true when it was written.
  */
@@ -1203,29 +1227,14 @@ function describeSources(manifest) {
             const note = document.createElement('p');
             note.textContent = DATASET_NOTES[entry.kind] ?? '';
             item.append(datasetLink(entry), kind, note);
+            // Hangs off the ensemble entry rather than the end of the list:
+            // it is about that dataset going quiet, and with the radar entry
+            // in between it read as though the radar were what had stopped.
+            if (entry.kind === 'forecast') {
+                const standing = standbyNote(standby, source.fallback);
+                if (standing) item.append(standing);
+            }
             el.aboutDatasets.appendChild(item);
-        }
-    }
-
-    // Two datasets to name in the middle of a sentence, so it is built here
-    // rather than written into the page: which ones is a server setting.
-    if (el.aboutFallback) {
-        el.aboutFallback.hidden = standby.length < 2;
-        if (standby.length >= 2) {
-            el.aboutFallback.innerHTML = '';
-            const lead = source.fallback
-                ? 'That ensemble is quiet right now, so what you are looking at is the '
-                  + 'stand-in: '
-                : 'If the ensemble goes quiet for long enough, a stand-in takes over, '
-                  + 'spliced here from ';
-            el.aboutFallback.append(document.createTextNode(lead));
-            el.aboutFallback.append(datasetLink(standby[0]));
-            el.aboutFallback.append(document.createTextNode(' for the first two hours and '));
-            el.aboutFallback.append(datasetLink(standby[1]));
-            el.aboutFallback.append(document.createTextNode(
-                ' beyond them. It is one run rather than twenty, so it carries no spread: '
-                + 'Low and High are switched off while it is on air, and the Fallback badge '
-                + 'beside the update time says so.'));
         }
     }
 

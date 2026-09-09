@@ -814,6 +814,14 @@ kbd {
     font-size: 0.8rem;
     line-height: 1.5;
 }
+/* The stand-in note sits inside the ensemble entry, so it needs to read as an
+   aside on that dataset rather than as a second half of its description. */
+.about-list li p.about-standby {
+    margin-top: 7px;
+    padding-left: 9px;
+    border-left: 2px solid var(--border-strong);
+}
+
 .about-list--plain li {
     color: var(--muted);
     font-size: 0.82rem;
