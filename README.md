@@ -182,7 +182,9 @@ you from.
 For a real deployment, put it behind a reverse proxy rather than publishing
 port 3000: `docker-compose.yml` carries Traefik labels and a rate limiter, and
 `BUITJES_HOST` and `BUITJES_MIDDLEWARES` in `.env` set the hostname and the
-middleware chain. Two things worth knowing before you do:
+middleware chain. If this ends up on a subdomain of a site you already run,
+`SITE_HOME_URL` links the header back to it; unset, as it ships, there is no
+such link. Two things worth knowing before you do:
 
 - Put an auth middleware in front and you can leave both `API_KEYS` and
   `CORS_ALLOWED_ORIGINS` empty. The key was only ever an identifier — a string

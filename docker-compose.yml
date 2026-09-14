@@ -100,6 +100,14 @@ services:
       # the only clients that can reach the port are already trusted.
       API_KEYS: ${API_KEYS:-}
       API_KEY_PROTECTED_PREFIXES: ${API_KEY_PROTECTED_PREFIXES:-/api/point,/api/current}
+      # The site this instance belongs to, linked from the header of both pages
+      # and from the About dialog. Buitjes usually runs on a subdomain of
+      # something larger, and a visitor who lands here has no way up to it.
+      # Unset — the default — shows no link rather than pointing at a site that
+      # is not yours. Must be a plain http(s) URL; the label defaults to the
+      # host, minus any www.
+      SITE_HOME_URL: ${SITE_HOME_URL:-}
+      SITE_HOME_LABEL: ${SITE_HOME_LABEL:-}
     volumes:
       # Read-only: the ingestor owns this directory, the server only serves it.
       - frames:/data:ro

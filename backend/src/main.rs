@@ -43,6 +43,9 @@ struct AppState {
     documents: point::DocumentCache,
     /// The published extent, cached from the manifest. See `served_domain`.
     domain: Arc<Mutex<Option<(Instant, Domain)>>>,
+    /// The site this instance belongs to, or `None` when nobody configured one.
+    /// Merged into the manifest on its way out; see `site_home`.
+    site: Option<Arc<serde_json::Value>>,
     /// Whether the newest forecast was stale the last time anyone asked.
     ///
     /// Only so that going stale — and coming back — is logged once each, on the
@@ -242,6 +245,31 @@ impl ConditionsProxy {
             cache.insert(key, (Instant::now(), Arc::clone(&body)));
         }
         Ok(body)
+    }
+}
+
+/// `SITE_HOME_URL` and `SITE_HOME_LABEL` into the value the manifest carries.
+///
+/// A rejected URL is logged rather than ignored: getting no link and no reason
+/// is how someone spends an afternoon looking for the bug in the frontend.
+fn site_from_env() -> Option<Arc<serde_json::Value>> {
+    let configured = std::env::var("SITE_HOME_URL").unwrap_or_default();
+    if configured.trim().is_empty() {
+        return None;
+    }
+    let label = std::env::var("SITE_HOME_LABEL").unwrap_or_default();
+    match site_home(&configured, Some(label.as_str())) {
+        Some(site) => {
+            info!(url = %configured, "site home link enabled");
+            Some(Arc::new(site))
+        }
+        None => {
+            warn!(
+                url = %configured,
+                "SITE_HOME_URL is not a plain http(s) URL; no home link will be shown"
+            );
+            None
+        }
     }
 }
 
@@ -466,6 +494,7 @@ async fn main() {
         conditions: ConditionsProxy::from_env(),
         documents: point::DocumentCache::new(),
         domain: Arc::new(Mutex::new(None)),
+        site: site_from_env(),
         was_stale: Arc::new(AtomicBool::new(false)),
     };
 
@@ -671,6 +700,69 @@ fn manifest_for(body: Vec<u8>, authorised: bool) -> Vec<u8> {
     }
 }
 
+/// The link back to the site this instance belongs to, as the frontend wants it.
+///
+/// Buitjes usually runs on a subdomain of something larger, and a visitor who
+/// lands here from a search or a bookmark has no way up to it. `SITE_HOME_URL`
+/// names that parent. Unset — the default, and what a fork gets — means no link
+/// at all, rather than everyone's deployment pointing at whoever wrote this.
+///
+/// The scheme check is the reason this is a function rather than a `Some(var)`:
+/// the value ends up in an `href`, `javascript:` is as valid there as `https:`,
+/// and it arrives from the environment rather than from the source. Anything
+/// that is not a plain http(s) URL is dropped, and the caller logs it.
+///
+/// `SITE_HOME_LABEL` is for the cases where the host is not what you want to
+/// read — a bare domain is the sensible default, so `www.` comes off and the
+/// label is otherwise the host as written.
+fn site_home(url: &str, label: Option<&str>) -> Option<serde_json::Value> {
+    let url = url.trim();
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    let rest = ["https://", "http://"].into_iter().find_map(|scheme| {
+        let head = url.get(..scheme.len())?;
+        head.eq_ignore_ascii_case(scheme).then(|| &url[scheme.len()..])
+    })?;
+    // Authority only: everything up to the path, query or fragment, and past
+    // any userinfo. A URL with no host at all ("https:///x") is not one.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    if host.is_empty() {
+        return None;
+    }
+    let label = label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| host.strip_prefix("www.").unwrap_or(host));
+
+    Some(json!({ "url": url, "label": label }))
+}
+
+/// Hand the manifest the home link on its way out.
+///
+/// It rides the manifest because both pages already fetch it to boot, so a link
+/// in the header costs no second request. The ingestor does not write this key
+/// and never sees it; a deployment that configures nothing is served the file
+/// byte for byte, as before this existed.
+fn with_site(body: Vec<u8>, site: Option<&serde_json::Value>) -> Vec<u8> {
+    let Some(site) = site else {
+        return body;
+    };
+    match serde_json::from_slice::<serde_json::Value>(&body) {
+        Ok(mut manifest) => {
+            let Some(object) = manifest.as_object_mut() else {
+                return body;
+            };
+            object.insert("site".to_string(), site.clone());
+            serde_json::to_vec(&manifest).unwrap_or(body)
+        }
+        // Same bargain as manifest_for: an unparseable manifest goes out
+        // unchanged rather than being swallowed over a missing header link.
+        Err(_) => body,
+    }
+}
+
 async fn serve_manifest(
     State(state): State<AppState>,
     request: axum::extract::Request,
@@ -686,7 +778,7 @@ async fn serve_manifest(
                 // Never let a shared cache serve the keyed answer to someone else.
                 (header::VARY, "x-api-key"),
             ],
-            manifest_for(body, authorised),
+            with_site(manifest_for(body, authorised), state.site.as_deref()),
         )
             .into_response(),
         // Normal for the first minute after startup: the ingestor has not
@@ -1175,7 +1267,7 @@ async fn serve_conditions(
 mod tests {
     use super::{
         domain_from_manifest, freshness, is_valid_frame_name, is_valid_point_name, liveness,
-        Duration, Instant, StatusCode, TokenBucket,
+        site_home, with_site, Duration, Instant, StatusCode, TokenBucket,
     };
 
     /// The real shape the ingestor publishes: a four-corner polygon, and not in
@@ -1303,6 +1395,64 @@ mod tests {
         assert!(bucket.take_at(much_later));
         assert!(bucket.take_at(much_later));
         assert!(!bucket.take_at(much_later), "capacity still caps the refill");
+    }
+
+    /// The label is what a reader sees, so the default has to be the domain and
+    /// nothing else — not the scheme, not the path, not `www.`.
+    #[test]
+    fn labels_a_home_link_with_its_bare_host() {
+        let cases = [
+            ("https://example.com", "example.com"),
+            ("https://www.example.com/", "example.com"),
+            ("http://example.com:8443/weather?x=1#top", "example.com:8443"),
+            ("HTTPS://Example.com", "Example.com"),
+            ("  https://example.com  ", "example.com"),
+        ];
+        for (url, expected) in cases {
+            let site = site_home(url, None).unwrap_or_else(|| panic!("should accept {url:?}"));
+            assert_eq!(site["label"], expected, "label for {url:?}");
+            assert_eq!(site["url"], url.trim(), "url for {url:?}");
+        }
+
+        // An explicit label wins, and a blank one is the same as none.
+        assert_eq!(site_home("https://example.com", Some(" Home ")).unwrap()["label"], "Home");
+        assert_eq!(site_home("https://example.com", Some("  ")).unwrap()["label"], "example.com");
+    }
+
+    /// This string is written straight into an `href`, and it comes from the
+    /// environment. A scheme other than http(s) is the whole risk.
+    #[test]
+    fn refuses_a_home_link_that_is_not_a_plain_web_url() {
+        for url in [
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox",
+            "file:///etc/passwd",
+            "//example.com",
+            "example.com",
+            "https://",
+            "https:///only-a-path",
+            "https://exa mple.com",
+            "https://example.com\n\rSet-Cookie: x=1",
+            "",
+            "   ",
+        ] {
+            assert!(site_home(url, None).is_none(), "should reject {url:?}");
+        }
+    }
+
+    /// Configuring nothing has to leave the manifest exactly as the ingestor
+    /// wrote it — byte for byte, not merely equivalent.
+    #[test]
+    fn an_unconfigured_site_leaves_the_manifest_untouched() {
+        let body = br#"{ "frames": [], "generated_at": 1 }"#.to_vec();
+        assert_eq!(with_site(body.clone(), None), body);
+
+        let site = site_home("https://example.com", None).unwrap();
+        let merged: serde_json::Value =
+            serde_json::from_slice(&with_site(body, Some(&site))).unwrap();
+        assert_eq!(merged["site"]["label"], "example.com");
+        assert_eq!(merged["generated_at"], 1, "the rest of the manifest survives");
     }
 
     #[test]

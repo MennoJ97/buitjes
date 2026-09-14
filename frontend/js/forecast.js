@@ -4,7 +4,7 @@
  *
  * Reads `/api/point/<name>` — one document holding precipitation and the
  * Open-Meteo conditions — plus `/api/config` for the list of locations the
- * ingestor publishes.
+ * ingestor publishes and the link home in the header.
  */
 
 import { renderBandChart, centreValue } from './chart.js';
@@ -15,6 +15,7 @@ import { apiFetch, hasApiKey } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
 import { formatClock } from './time.js';
 import { createRadarMinimap } from './minimap.js';
+import { applySiteHome } from './site.js';
 
 const $ = (id) => document.getElementById(id);
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -123,6 +124,9 @@ async function loadLocations() {
     const response = await apiFetch('/api/config', { cache: 'no-store' });
     if (!response.ok) return [];
     const manifest = await response.json();
+    // This is the one place the page reads the manifest, so the header's link
+    // home rides along rather than costing a second request for one anchor.
+    applySiteHome(manifest.site);
     // Older manifests published bare names; accept both.
     return (manifest.points ?? []).map((point) =>
         typeof point === 'string' ? { name: point, lat: null, lon: null } : point

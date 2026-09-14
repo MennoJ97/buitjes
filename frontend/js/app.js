@@ -5,6 +5,7 @@ import { centreOf, displayName, pointForName, pointForCoordinates,
          summariseFrames, withMeasuredHistory } from './point.js';
 import { apiFetch } from './key.js';
 import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.js';
+import { applySiteHome } from './site.js';
 import { formatClock } from './time.js';
 import {
     BASEMAPS, BASEMAP_STORAGE_KEY, OWN_CREDIT,
@@ -283,6 +284,7 @@ async function load({ initial }) {
         setupBandSwitch();
         el.refTime.textContent = formatClock(manifest.reference_time ?? manifest.generated_at);
         describeSources(manifest);
+        applySiteHome(manifest.site);
 
         if (initial) {
             // Open on the frame nearest to now, not the end of the forecast.

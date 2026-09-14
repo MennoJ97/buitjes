@@ -73,6 +73,13 @@
         <div class="brand">
             <svg class="brand-mark" aria-hidden="true"><use href="#icon-cloud"/></svg>
             <span class="brand-name">Buitjes</span>
+            <!-- The way back up, when a deployment has configured one: this
+                 usually runs on a subdomain of a larger site, and without this
+                 the only route there is editing the address bar. Filled in from
+                 the manifest by site.js, and hidden when nothing is configured.
+                 Hidden too with the name on narrow screens, where the top bar
+                 has no room to spare — the About dialog carries it there. -->
+            <a class="brand-home" data-site-home href="" hidden></a>
         </div>
         <div class="topbar-actions">
             <!-- The age suffix and the dot only appear when the feed has
@@ -252,7 +259,10 @@
                    the full timeline at that spot.</p>
             </section>
 
-            <p class="about-foot" id="about-source"></p>
+            <p class="about-foot">
+                <span id="about-source"></span>
+                <span class="about-home" data-site-home hidden>Part of <a href=""></a></span>
+            </p>
         </div>
     </div>
 

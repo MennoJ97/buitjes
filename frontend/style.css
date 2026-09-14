@@ -179,6 +179,22 @@ button { font: inherit; }
 }
 .brand-mark { width: 26px; height: 26px; color: var(--accent); flex: none; }
 
+/* The way back up to the site a deployment says it belongs to — empty and
+   hidden until site.js finds one in the manifest. Deliberately quieter than the
+   name beside it: it is navigation, not a second piece of branding competing
+   with the first. */
+.brand-home {
+    padding-left: 8px;
+    border-left: 1px solid var(--border-strong);
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0;
+    white-space: nowrap;
+    text-decoration: none;
+}
+.brand-home:hover { color: var(--text); text-decoration: underline; }
+
 .topbar-actions {
     pointer-events: auto;
     display: flex;
@@ -855,12 +871,18 @@ kbd {
 }
 
 .about-foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 4px 14px;
     margin: 22px 0 0;
     padding-top: 12px;
     border-top: 1px solid var(--border);
     color: var(--muted-dim);
     font-size: 0.75rem;
 }
+
+.about-home { white-space: nowrap; }
 
 .modal a { color: #7cb2ff; text-decoration: none; }
 .modal a:hover { text-decoration: underline; }
@@ -932,6 +954,10 @@ body.theme-light .brand { color: #0f172a; }
 body.theme-light .brand-mark { color: #1d4ed8; }
 body.theme-light .ref-time { color: #334155; }
 body.theme-light .ref-time time { color: #0f172a; }
+/* Muted against a light basemap means darker, not paler — and the rule above
+   hands this a white glow, which a #98a3b5 would disappear into. */
+body.theme-light .brand-home { color: #334155; border-left-color: rgba(15, 23, 42, 0.2); }
+body.theme-light .brand-home:hover { color: #0f172a; }
 
 /* The stale amber is picked for a dark background; on a light one it needs to
    go darker rather than brighter to gain the same separation. #92400e was the
@@ -962,6 +988,7 @@ body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
     .zone-key { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; }
     .tl-now span { display: none; }
     .brand-name { display: none; }
+    .topbar .brand-home { display: none; }
     .ref-time-label { display: none; }
     .topbar { top: 12px; left: 12px; right: 12px; }
     .popover--info { width: min(320px, calc(100vw - 24px)); }
