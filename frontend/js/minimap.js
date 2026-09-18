@@ -287,12 +287,12 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
             }
             if (map) {
                 marker?.remove();
-                marker = new maplibregl.Marker({ color: '#f8fafc', scale: 0.7 })
+                marker = new maplibregl.Marker({ color: '#F5F5F3', scale: 0.7 })
                     .setLngLat([point.lon, point.lat]).addTo(map);
             }
             await loadFrames();
             if (!marker) {
-                marker = new maplibregl.Marker({ color: '#f8fafc', scale: 0.7 })
+                marker = new maplibregl.Marker({ color: '#F5F5F3', scale: 0.7 })
                     .setLngLat([point.lon, point.lat]).addTo(map);
             }
         },

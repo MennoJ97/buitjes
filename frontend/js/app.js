@@ -849,7 +849,7 @@ function inspect(lngLat) {
     if (!inspectPopup.isOpen()) inspectPopup.addTo(map);
 
     if (!inspectMarker) {
-        inspectMarker = new maplibregl.Marker({ color: '#f8fafc', scale: 0.7 })
+        inspectMarker = new maplibregl.Marker({ color: '#F5F5F3', scale: 0.7 })
             .setLngLat(lngLat)
             .addTo(map);
     } else {
@@ -999,13 +999,13 @@ function drawSparkline(canvas, series) {
             ctx.fillStyle = colorForRate(rate);
             ctx.fillRect(x, height - barHeight, Math.max(1, barWidth - 1), barHeight);
         } else {
-            ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
+            ctx.fillStyle = 'rgba(156, 156, 152, 0.25)';
             ctx.fillRect(x, height - 2, Math.max(1, barWidth - 1), 2);
         }
     });
 
     // Marker for the frame currently on screen.
-    ctx.fillStyle = '#f8fafc';
+    ctx.fillStyle = '#F5F5F3';
     ctx.fillRect(currentIndex * barWidth, 0, Math.max(1.5, barWidth - 1), height);
 }
 

@@ -1,21 +1,27 @@
 :root {
-    --bg: #0a0c11;
-    --panel: rgba(16, 18, 25, 0.76);
-    --panel-solid: #14161d;
+    /* Neutrals and accent follow the mhjansen.nl family palette
+       (https://mhjansen.nl/family.css): pure greys, no blue tint, and buitjes'
+       own blue -- its dark-mode value, because this chrome is dark in both
+       themes (the light theme only swaps the basemap). The rainfall ramp and
+       the rain chart keep the radar colours: those encode data, not brand. */
+    --bg: #111111;
+    --panel: rgba(20, 20, 20, 0.78);
+    --panel-solid: #1A1A1A;
     --border: rgba(255, 255, 255, 0.09);
     --border-strong: rgba(255, 255, 255, 0.16);
-    --text: #f1f5f9;
-    --muted: #98a3b5;
-    --muted-dim: #6b7688;
-    --accent: #3b82f6;
-    --accent-strong: #2563eb;
+    --text: #ECECE9;
+    --muted: #9C9C98;
+    --muted-dim: #6E6E6A;
+    --accent: #6FB2EE;
+    /* filled controls: dark enough for a white icon on top (5.9:1) */
+    --accent-strong: #1B64B8;
     --danger: #f0a02a;
 
     /* Confidence fades from left to right: solid measurement, then two
        increasingly faint zones. The zone key and the info panel reuse these. */
-    --zone-observed: rgba(226, 232, 240, 0.30);
-    --zone-nowcast: rgba(226, 232, 240, 0.15);
-    --zone-forecast: rgba(226, 232, 240, 0.07);
+    --zone-observed: rgba(228, 228, 224, 0.30);
+    --zone-nowcast: rgba(228, 228, 224, 0.15);
+    --zone-forecast: rgba(228, 228, 224, 0.07);
 
     --thumb: 16px;
     --radius: 14px;
@@ -28,7 +34,7 @@ body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
     font-size: 14px;
     overflow: hidden;
 }
@@ -359,10 +365,9 @@ button { font: inherit; }
     width: 42px; height: 42px;
     background: var(--accent-strong);
     color: #fff;
-    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
 }
 .btn-play svg { width: 20px; height: 20px; fill: currentColor; }
-.btn-play:hover { background: #1d4ed8; }
+.btn-play:hover { background: #2A74C8; }
 .btn-play:active { transform: scale(0.95); }
 
 /* ------------------------------------------------------------ timeline */
@@ -421,7 +426,7 @@ button { font: inherit; }
     bottom: -4px;
     width: 2px;
     transform: translateX(-50%);
-    background: #f8fafc;
+    background: #F5F5F3;
     border-radius: 1px;
     pointer-events: none;
 }
@@ -465,8 +470,8 @@ input[type=range] {
     --progress: 100%;
 }
 input[type=range]:focus { outline: none; }
-input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.6); }
-input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.6); }
+input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(111, 178, 238, 0.6); }
+input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(111, 178, 238, 0.6); }
 
 #timeline-slider::-webkit-slider-runnable-track { height: 44px; background: transparent; cursor: pointer; }
 #timeline-slider::-webkit-slider-thumb {
@@ -563,9 +568,9 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(5
     background: rgba(255, 255, 255, 0.1);
     color: var(--muted);
 }
-.kind-badge--observed { background: rgba(226, 232, 240, 0.22); color: #e2e8f0; }
-.kind-badge--nowcast { background: rgba(59, 130, 246, 0.25); color: #bfdbfe; }
-.kind-badge--forecast { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
+.kind-badge--observed { background: rgba(228, 228, 224, 0.22); color: #E4E4E0; }
+.kind-badge--nowcast { background: rgba(111, 178, 238, 0.25); color: #CFE4F8; }
+.kind-badge--forecast { background: rgba(156, 156, 152, 0.18); color: #D0D0CC; }
 /* Amber rather than another zone colour: this is not a fourth kind of frame but
    a warning about one, and it should not read as a peer of the other three. */
 .kind-badge--estimated { background: rgba(245, 158, 11, 0.22); color: #fcd34d; }
@@ -668,7 +673,7 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(5
     cursor: pointer;
 }
 .pct-option:hover { color: var(--muted); background: rgba(255, 255, 255, 0.06); }
-.pct-option.is-active { background: rgba(59, 130, 246, 0.25); color: #bfdbfe; }
+.pct-option.is-active { background: rgba(111, 178, 238, 0.25); color: #CFE4F8; }
 /* The two ends of the ensemble get the same amber the estimated badge uses:
    what is drawn is no longer the expected field. */
 .pct-option.is-active[data-band="p10"],
@@ -931,7 +936,7 @@ kbd {
 /* ------------------------------------------------------------ light basemap */
 
 body.theme-light {
-    --panel: rgba(12, 14, 20, 0.86);
+    --panel: rgba(17, 17, 17, 0.86);
 }
 
 /* The top bar is the one piece of chrome with nothing behind it — brand and
@@ -950,14 +955,14 @@ body.theme-light .brand,
 body.theme-light .ref-time {
     text-shadow: 0 1px 10px rgba(255, 255, 255, 0.95), 0 0 3px rgba(255, 255, 255, 0.9);
 }
-body.theme-light .brand { color: #0f172a; }
-body.theme-light .brand-mark { color: #1d4ed8; }
-body.theme-light .ref-time { color: #334155; }
-body.theme-light .ref-time time { color: #0f172a; }
+body.theme-light .brand { color: #111111; }
+body.theme-light .brand-mark { color: #1B64B8; }
+body.theme-light .ref-time { color: #3A3A38; }
+body.theme-light .ref-time time { color: #111111; }
 /* Muted against a light basemap means darker, not paler — and the rule above
    hands this a white glow, which a #98a3b5 would disappear into. */
-body.theme-light .brand-home { color: #334155; border-left-color: rgba(15, 23, 42, 0.2); }
-body.theme-light .brand-home:hover { color: #0f172a; }
+body.theme-light .brand-home { color: #3A3A38; border-left-color: rgba(17, 17, 17, 0.2); }
+body.theme-light .brand-home:hover { color: #111111; }
 
 /* The stale amber is picked for a dark background; on a light one it needs to
    go darker rather than brighter to gain the same separation. #92400e was the
@@ -1008,7 +1013,7 @@ body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
 .chart-card > .chart { flex: 1; min-height: 190px; }
 .chart svg { display: block; overflow: visible; }
 .chart-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
-.chart-now { stroke: #f8fafc; stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.7; }
+.chart-now { stroke: #F5F5F3; stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.7; }
 /* Same amber as the map's badge, and deliberately fainter than "now": it is a
    footnote on one point, not a landmark on the axis. */
 .chart-estimated { stroke: #f59e0b; stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.55; }
@@ -1034,9 +1039,7 @@ body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
 
 body.page-forecast {
     overflow: auto;
-    background:
-        radial-gradient(1100px 520px at 50% -10%, rgba(59, 130, 246, 0.10), transparent 70%),
-        var(--bg);
+    background: var(--bg);
     min-height: 100vh;
 }
 
@@ -1441,7 +1444,7 @@ body.page-forecast {
     border-radius: 50%;
     background: var(--accent);
 }
-.mini-scrub:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.6); }
+.mini-scrub:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(111, 178, 238, 0.6); }
 
 /* MapLibre paints its own canvas; the card supplies the rounded corner. */
 .mini-map .maplibregl-canvas { border-radius: 10px; }
