@@ -1,8 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Buitjes">
     <rect width="24" height="24" rx="2" fill="#111111"/>
-    <!-- The brand mark from the topbar, unchanged but for the centring scale:
-         same path, the same family blue it has in the app (#6FB2EE, from
-         https://mhjansen.nl/family.css), on the same dark ground. -->
-    <path transform="translate(1.38 1.62) scale(0.88)" fill="#6FB2EE"
-          d="M7 18a4.5 4.5 0 0 1-.6-8.96 5.5 5.5 0 0 1 10.55-1.4A4.25 4.25 0 0 1 17.5 18z"/>
+    <!-- The brand mark from the topbar: the cloud with rain shading light to
+         strong, in the colours it has on the app's dark chrome (the family
+         blue #6FB2EE, rain #3A78B8 and #5596D6). The streaks are drawn a little
+         heavier than in the topbar so they survive at 16px. Presentation
+         attributes, not CSS: this file stands alone as an image. -->
+    <g transform="translate(1.9 2.4) scale(0.72)">
+        <path transform="translate(1 -1.5) scale(1.05)" fill="#6FB2EE"
+              d="M7 18a4.5 4.5 0 0 1-.6-8.96 5.5 5.5 0 0 1 10.55-1.4A4.25 4.25 0 0 1 17.5 18z"/>
+        <g stroke-width="3.2" stroke-linecap="square">
+            <line x1="8" y1="20" x2="6.5" y2="25" stroke="#3A78B8"/>
+            <line x1="13.5" y1="20" x2="12" y2="25" stroke="#5596D6"/>
+            <line x1="19" y1="20" x2="17.5" y2="25" stroke="#6FB2EE"/>
+        </g>
+    </g>
 </svg>
