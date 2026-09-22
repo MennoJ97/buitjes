@@ -36,7 +36,6 @@ export function applySiteHome(site) {
         }
         anchor.href = url;
         anchor.textContent = label;
-        anchor.title = `${label} — the site this is part of`;
         node.hidden = false;
     }
 }
