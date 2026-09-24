@@ -472,8 +472,8 @@ dead = dead_step()
 check('a real ensemble is not mistaken for a dead step', not is_degenerate(live))
 check('twenty identical members is a dead step', is_degenerate(dead))
 check('a dead step is not merely a dry one', float(dead.max()) > 0)
-check('an all-dry ensemble reads as degenerate, and harmlessly so',
-      is_degenerate(np.zeros((20, 8, 8), np.float32)))
+check('an all-dry ensemble is a forecast, not a dead step',
+      not is_degenerate(np.zeros((20, 8, 8), np.float32)))
 check('a one-member product is never degenerate',
       not is_degenerate(np.zeros((1, 8, 8), np.float32)))
 
@@ -513,6 +513,12 @@ check('the one in the middle, with nothing either side, is dropped rather than d
       len(surrounded) == 4 and 1_700_000_000 + 2 * 300 not in stamps)
 check('a wholly dead cycle publishes nothing at all',
       list(repaired_steps(FakeSource([dead, dead]))) == [])
+
+# 24 September 2026: a dry evening, KNMI's blend zero in every member at every
+# step, and each one taken for dead — the site had no forecast at all.
+dry_cycle = list(repaired_steps(FakeSource([np.zeros((20, 8, 8), np.float32)] * 3)))
+check('a wholly dry cycle is published in full, unflagged',
+      len(dry_cycle) == 3 and not any(flag for _, _, flag in dry_cycle))
 
 # The field the map draws, published beside the percentiles taken from the
 # members. They are different estimators and the whole point is that a reader

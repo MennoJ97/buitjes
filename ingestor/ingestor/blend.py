@@ -211,8 +211,12 @@ def is_degenerate(members) -> bool:
     cannot be. Twenty members of a convective blend agreeing to the bit over
     600,000 grid points does not happen; the only lawful way it could is a
     domain — half of western Europe, here — with no precipitation anywhere at
-    all, and in that case the steps either side are dry too and standing in for
-    this one changes nothing but the label.
+    all. That case is let through explicitly. It once looked harmless to call it
+    dead too, on the grounds that the steps either side would be dry and stand
+    in for it, but on a dry evening *every* step is like that, so no neighbour
+    is sound, every step became a gap, and the site showed nothing but past
+    radar (24 September 2026). The placeholder is never all-zero — it has its
+    stripe of 1.00 mm/h - so "wet nowhere" costs the test nothing.
 
     Deliberately narrow. A looser test (a collapse in wet area, say) would catch
     more shapes of corruption, and would also eventually fire on real weather,
@@ -224,7 +228,9 @@ def is_degenerate(members) -> bool:
     if len(members) < 2:
         return False  # nothing to disagree with; a one-member product is not this
     first = members[0]
-    return all(np.array_equal(members[i], first) for i in range(1, len(members)))
+    if not all(np.array_equal(members[i], first) for i in range(1, len(members))):
+        return False
+    return bool(first.any())  # every member dry everywhere is a forecast, not a dead step
 
 
 def estimate_step(before, after):
