@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from ingestor.alerts import Rule, evaluate, parse_rules  # noqa: E402
 from ingestor.blend import (  # noqa: E402
-    cell_reach, estimate_step, is_degenerate, neighbourhood_maximum,
+    cell_reach, estimate_step, is_degenerate, is_wet, neighbourhood_maximum,
     pool_members, pooled_axis, pooled_cell_reach, pooled_reach_km,
     probability_matched_mean, reduce_members, repaired_steps, spread_fields,
 )
@@ -519,6 +519,42 @@ check('a wholly dead cycle publishes nothing at all',
 dry_cycle = list(repaired_steps(FakeSource([np.zeros((20, 8, 8), np.float32)] * 3)))
 check('a wholly dry cycle is published in full, unflagged',
       len(dry_cycle) == 3 and not any(flag for _, _, flag in dry_cycle))
+
+# An empty step is only a dropout when real rain sits five minutes either side.
+blank = np.zeros_like(live)
+shower = np.zeros_like(live)
+# 25 cells: a real shower, but not a city's worth. The members disagree on its
+# strength, or twenty identical wet members would be the dead step itself.
+shower[:, 30:35, 30:35] = 2.0 + np.arange(len(shower), dtype=np.float32)[:, None, None] / 10
+check('the fixture ensembles hold enough rain to vouch for a blank step',
+      is_wet(live) and is_wet(after))
+check('and a single small shower does not', not is_wet(shower))
+
+source = FakeSource([live, blank, after, live])
+between = list(repaired_steps(source))
+check('an empty step between two wet ones is stood in for',
+      [flag for _, _, flag in between] == [False, True, False, False])
+check('from the steps either side of it, member by member',
+      np.allclose(between[1][1][7], (live[7] + after[7]) / 2))
+check('and the look-ahead is still reused rather than read twice',
+      source.reads == 4, f'{source.reads} reads')
+
+clearing = list(repaired_steps(FakeSource([live, blank, blank])))
+check('the rain clearing is weather: rain on one side only stays dry',
+      len(clearing) == 3 and not any(flag for _, _, flag in clearing))
+arriving = list(repaired_steps(FakeSource([blank, blank, live])))
+check('and so is the rain arriving',
+      len(arriving) == 3 and not any(flag for _, _, flag in arriving))
+small = list(repaired_steps(FakeSource([shower, blank, shower])))
+check('a small shower dying and another forming is left alone',
+      not any(flag for _, _, flag in small))
+
+# The stand-in's model half steps hourly, and a dry hour between two wet
+# ones is ordinary weather rather than a dropout.
+hourly = FakeSource([live, blank, after])
+hourly.valid_times = [1_700_000_000 + i * 3600 for i in range(3)]
+check('neighbours an hour apart do not vouch for an empty step',
+      not any(flag for _, _, flag in repaired_steps(hourly)))
 
 # The field the map draws, published beside the percentiles taken from the
 # members. They are different estimators and the whole point is that a reader

@@ -26,16 +26,20 @@ import tempfile
 import time
 from dataclasses import replace
 
+import numpy as np
+
 from .blend import (
-    REDUCER_LABELS, SPREAD_PERCENTILES, BlendFile, cell_reach, pool_members,
-    pooled_axis, pooled_cell_reach, pooled_reach_km, reduce_members,
-    repaired_steps, spread_fields,
+    BLANK_BETWEEN_WET_CELLS, REDUCER_LABELS, SPREAD_PERCENTILES, WET_MM_H,
+    BlendFile, cell_reach, pool_members, pooled_axis, pooled_cell_reach,
+    pooled_reach_km, reduce_members, repaired_steps, spread_fields,
 )
 from .config import Config
 from .fallback import (
     HarmonieFile, RadarForecastFile, SplicedSource, is_model_parameter,
 )
-from .encode import SPREAD_FLOOR_MM_H, encode_frame, encode_spread_frame, sample_frame
+from .encode import (
+    SPREAD_FLOOR_MM_H, decode_frame, encode_frame, encode_spread_frame, sample_frame,
+)
 from .knmi import KnmiClient, RateLimited
 from .points import PERCENTILES, PointExtractor, current_conditions, summarise
 from .radar import RadarFile, valid_time_from_filename
@@ -260,11 +264,16 @@ def build_from_source(source, config: Config, conditions=None, alert_runner=None
     written = 0
     spread_written = 0
     estimated_steps = 0
+    wet_anywhere = False
     # One read serves both outputs: the reduced field for the map and, while
     # the members are still in memory, the point samples. Timesteps KNMI
     # published without an ensemble behind them are stood in for or dropped
     # before they get here; see :func:`ingestor.blend.repaired_steps`.
     for valid_time, members, estimated in repaired_steps(source):
+        # Every step, published or not, and only until the first rain: on a
+        # wet day this costs one pass over one step.
+        if not wet_anywhere:
+            wet_anywhere = bool(members.any())
         # Before the reduction, the dilation and the two encodes, which is
         # all of the expensive work: a step nobody publishes should cost no
         # more than the read that proved it sound. The read itself stays -
@@ -330,6 +339,8 @@ def build_from_source(source, config: Config, conditions=None, alert_runner=None
         log.warning('forecast %s: %d of %d steps had nothing to stand in for them '
                     'and are published as a gap in the timeline',
                     source.reference_time, dropped, len(wanted))
+    if not wet_anywhere:
+        note_dry_cycle(config, source.reference_time)
 
     publish_points(config, source, extractor, conditions, alert_runner)
 
@@ -374,6 +385,56 @@ def build_from_source(source, config: Config, conditions=None, alert_runner=None
         ],
     }
     return frames, meta, resampler.target
+
+
+def note_dry_cycle(config: Config, reference_time: int):
+    """Log what the radar saw when a whole cycle forecasts no rain anywhere.
+
+    Log only, on purpose. A cycle that is zero everywhere is usually just a dry
+    evening. It is also what a KNMI file that lost its contents would look like,
+    and the radar can tell the two apart only up to a point. pySTEPS can set
+    aside a radar picture with too little rain in it and let the model speak
+    alone, so scattered showers under a dry forecast are sometimes KNMI's own
+    call, and where KNMI draws that line is not known here. Rejecting cycles on
+    a guess at it would drop good forecasts, the same kind of mistake as the
+    one fixed on 24 September 2026. So this collects the numbers instead:
+    INFO when the radar has a little rain, WARNING once it holds as much as
+    :data:`~ingestor.blend.BLANK_BETWEEN_WET_CELLS` says real rain is.
+
+    Reads the newest observed frame at or before the cycle's reference time,
+    up to fifteen minutes back, off disk as :func:`measured_history` does.
+    Frames are ~1 km pixels on the published crop, close enough to the blend's
+    cells for one yardstick to serve both. Returns
+    ``(frame_time, wet_pixels, peak_mm_h)``, or None when there was no frame
+    to read.
+    """
+    candidates = [t for t in existing_observed_times(config)
+                  if reference_time - 900 <= t <= reference_time]
+    if not candidates:
+        log.info('forecast %s: dry everywhere, no observed frame to compare it with',
+                 reference_time)
+        return None
+    frame_time = max(candidates)
+    path = os.path.join(config.frame_dir, observed_frame_name(frame_time))
+    try:
+        with open(path, 'rb') as handle:
+            values, measured = decode_frame(handle.read(), config.max_precip)
+    except (OSError, ValueError) as error:
+        log.warning('forecast %s: dry everywhere; could not read %s (%s)',
+                    reference_time, path, error)
+        return None
+
+    wet = measured & (values >= WET_MM_H)
+    wet_pixels = int(np.count_nonzero(wet))
+    peak = float(values[measured].max(initial=0.0))
+    if wet_pixels >= BLANK_BETWEEN_WET_CELLS:
+        log.warning('forecast %s: dry everywhere, but the radar at %d has %d wet '
+                    'pixels peaking at %.1f mm/h', reference_time, frame_time,
+                    wet_pixels, peak)
+    elif wet_pixels:
+        log.info('forecast %s: dry everywhere; the radar at %d has %d wet pixels '
+                 'peaking at %.1f mm/h', reference_time, frame_time, wet_pixels, peak)
+    return frame_time, wet_pixels, peak
 
 
 def point_file_name(name: str) -> str:

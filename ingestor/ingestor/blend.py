@@ -233,6 +233,29 @@ def is_degenerate(members) -> bool:
     return bool(first.any())  # every member dry everywhere is a forecast, not a dead step
 
 
+#: The bottom of the colour ramp. A cell at or above it is one the map paints.
+WET_MM_H = 0.1
+
+#: Wet area, in cells per member, that a step on each side of an empty one must
+#: hold before the empty one is taken for a dropout. On a 1 km grid a cell is
+#: about a square kilometre, so this is a patch of rain the size of a small
+#: city. A shower that size does not vanish from half of western Europe for
+#: five minutes and come back; one of a few cells, late in the run where the
+#: model does the talking, can, and that is the weather this leaves alone.
+BLANK_BETWEEN_WET_CELLS = 500
+
+#: What "either side" means for an empty step: KNMI's own cadence. The
+#: deterministic stand-in steps hourly once it reaches the model, and a dry
+#: hour between two wet ones is ordinary weather.
+_STEP_SECONDS = 300
+
+
+def is_wet(members) -> bool:
+    """Whether a step holds enough rain to vouch for an empty step beside it."""
+    members = np.asarray(members)
+    return np.count_nonzero(members >= WET_MM_H) >= BLANK_BETWEEN_WET_CELLS * len(members)
+
+
 def estimate_step(before, after):
     """Stand in for a dead timestep with the members either side of it.
 
@@ -273,21 +296,47 @@ def repaired_steps(source):
     lean outward, one to each side, rather than both reaching for the same
     distant survivor.
 
+    A step that is dry everywhere is a forecast (see :func:`is_degenerate`),
+    with one exception: an empty step with real rain five minutes either side of
+    it (:func:`is_wet`) is stood in for too. Nothing KNMI has been seen to
+    publish looks like that, but a dropout that wrote zeros instead of its
+    placeholder stripe would, and rain over hundreds of square kilometres
+    blinking out for one step is not weather. Both sides are required: the
+    last step of a real clearance has rain on one side only.
+
     Reads each step once. The step read ahead to repair its predecessor is
     carried into the next iteration rather than fetched again — the read is
     ~24 MiB off disk and an HDF5 decompression, which is the expensive part of a
     cycle. Peak memory is three member arrays during a repair (the two sides and
     the average) against one in the normal case; see the ingestor's `mem_limit`.
     """
-    count = len(source.valid_times)
+    times = source.valid_times
+    count = len(times)
     pending = None    # already read while looking ahead from the previous step
     previous = None   # the step just before this one, and only if it was sound
 
-    for index, valid_time in enumerate(source.valid_times):
+    for index, valid_time in enumerate(times):
         members = pending if pending is not None else source.members(index)
         pending = None
 
         if not is_degenerate(members):
+            # Cheapest test first. A wet step stops at the second clause; on a
+            # dry evening every `previous` is empty too, so it stops at the
+            # third. The look-ahead read only happens for a genuine candidate.
+            if (previous is not None and not members.any() and is_wet(previous)
+                    and valid_time - times[index - 1] == _STEP_SECONDS
+                    and index + 1 < count
+                    and times[index + 1] - valid_time == _STEP_SECONDS):
+                pending = source.members(index + 1)
+                if not is_degenerate(pending) and is_wet(pending):
+                    del members
+                    log.warning('step %d (%d) is dry everywhere between two wet '
+                                'steps; estimated from the steps before and after it',
+                                index, valid_time)
+                    repaired = estimate_step(previous, pending)
+                    previous = None
+                    yield valid_time, repaired, True
+                    continue
             previous = members
             yield valid_time, members, False
             continue

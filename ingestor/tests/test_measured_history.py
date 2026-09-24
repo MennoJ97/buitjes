@@ -196,6 +196,40 @@ with tempfile.TemporaryDirectory() as scratch:
     check('a location with no document yet is survivable', True)
 
 print()
+print('a dry cycle against the radar')
+
+
+def write_wet_block(cfg, valid_time, cells, rate=2.0):
+    """An observed frame with `cells` wet pixels and every pixel measured."""
+    field = np.zeros(GRID.height * GRID.width, dtype=np.float32)
+    field[:cells] = rate
+    m.write_atomic(cfg.frame_dir, m.observed_frame_name(valid_time),
+                   encode_frame(field.reshape(GRID.height, GRID.width), cfg.max_precip))
+
+
+with tempfile.TemporaryDirectory() as scratch:
+    cfg = config(scratch)
+    check('no observed frame is survivable and says so',
+          m.note_dry_cycle(cfg, REF) is None)
+
+    write_wet_block(cfg, REF - 1200, 4000)   # too old to speak for this cycle
+    check('a frame older than fifteen minutes is not used',
+          m.note_dry_cycle(cfg, REF) is None)
+
+    write_wet_block(cfg, REF - 300, 3)
+    write_wet_block(cfg, REF + 300, 4000)    # after the cycle: not what it saw
+    noted = m.note_dry_cycle(cfg, REF)
+    check('the newest frame at or before the cycle is the one read',
+          noted is not None and noted[0] == REF - 300, str(noted))
+    check('a little drizzle is counted', noted is not None and noted[1] == 3, str(noted))
+
+    write_wet_block(cfg, REF, 1000, rate=6.0)
+    noted = m.note_dry_cycle(cfg, REF)
+    check('real rain is counted with its peak',
+          noted is not None and noted[1] == 1000 and abs(noted[2] - 6.0) < 0.01,
+          str(noted))
+
+print()
 if failures:
     print(f'{len(failures)} failed: {", ".join(failures)}')
     sys.exit(1)
