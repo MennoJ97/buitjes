@@ -1055,7 +1055,10 @@ body.page-forecast {
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    padding: 18px clamp(14px, 4vw, 32px);
+    /* 10px, not 18: with the 31px controls row that lands at ~52px, the height
+       of the topnav on uitjes and stonks, so moving between sites the bar
+       doesn't jump. */
+    padding: 10px clamp(14px, 4vw, 32px);
     border-bottom: 1px solid var(--border);
 }
 .forecast-head .brand { text-shadow: none; }
