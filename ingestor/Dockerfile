@@ -32,5 +32,13 @@ USER buitjes
 # import. Say so once rather than letting it fail quietly each time.
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# numpy madvise()s every array of 4 MB or more for transparent huge pages. On a
+# kernel with THP defrag=madvise - Ubuntu's default - each of those allocations
+# stalls in direct compaction and reclaim until a free 2 MB block turns up, and
+# on a host with a few days of uptime it mostly never does. The reclaim is paid
+# system-wide, pushing other processes into swap. These arrays live for one
+# step, so huge pages would buy nothing even when granted: take 4 KB pages.
+ENV NUMPY_MADVISE_HUGEPAGE=0
+
 ENV FRAME_DIR=/data
 CMD ["python", "-u", "-m", "ingestor.main"]
