@@ -203,7 +203,7 @@ map.addControl(
     new maplibregl.AttributionControl({ compact: true, customAttribution: OWN_CREDIT })
 );
 el.basemapSelect.value = initialBasemap;
-document.body.classList.toggle('theme-light', !!initialConfig.lightUi);
+document.body.classList.toggle('map-light', !!initialConfig.lightUi);
 onStyleReady(async () => {
     applyStyleOverrides(map, initialConfig, await pristineStyle(initialConfig));
 });
@@ -849,7 +849,7 @@ function inspect(lngLat) {
     if (!inspectPopup.isOpen()) inspectPopup.addTo(map);
 
     if (!inspectMarker) {
-        inspectMarker = new maplibregl.Marker({ color: '#F5F5F3', scale: 0.7 })
+        inspectMarker = new maplibregl.Marker({ color: pinColour(), scale: 0.7 })
             .setLngLat(lngLat)
             .addTo(map);
     } else {
@@ -1004,8 +1004,9 @@ function drawSparkline(canvas, series) {
         }
     });
 
-    // Marker for the frame currently on screen.
-    ctx.fillStyle = '#F5F5F3';
+    // Marker for the frame currently on screen, in the popup's own "now" colour
+    // (near-white on the dark theme, near-black on the light one).
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--now').trim() || '#F5F5F3';
     ctx.fillRect(currentIndex * barWidth, 0, Math.max(1.5, barWidth - 1), height);
 }
 
@@ -1386,15 +1387,47 @@ let queuedBasemap = null;
  * applied, and only the last one is; the UI has already moved on regardless.
  */
 function setBasemap(name) {
-    const config = BASEMAPS[name];
-    if (!config) return;
-
-    document.body.classList.toggle('theme-light', !!config.lightUi);
+    if (!BASEMAPS[name]) return;
     rememberBasemap(name);
+    showBasemap(name);
+}
+
+/** Put a basemap on screen without making it the reader's choice. */
+function showBasemap(name) {
+    const config = BASEMAPS[name];
+    // What sits directly on the map (the top bar's text, the pin) is coloured
+    // for the map, not the page: see "text on the map" in style.css.
+    document.body.classList.toggle('map-light', !!config.lightUi);
+    if (inspectMarker) {
+        const at = inspectMarker.getLngLat();
+        inspectMarker.remove();
+        inspectMarker = new maplibregl.Marker({ color: pinColour(name), scale: 0.7 })
+            .setLngLat(at)
+            .addTo(map);
+    }
 
     if (loadingBasemap) queuedBasemap = name;
     else applyBasemap(name);
 }
+
+/** The clicked-point pin: near-white on a dark basemap, near-black on a light one. */
+function pinColour(name = el.basemapSelect.value) {
+    return BASEMAPS[name]?.lightUi ? '#111111' : '#F5F5F3';
+}
+
+/**
+ * The light/dark switch (family.js). Each theme remembers its own basemap, so
+ * flipping it can change the map too; and the popup's sparkline is a canvas,
+ * which keeps the colours it was drawn with until it is drawn again.
+ */
+window.addEventListener('themechange', () => {
+    const name = storedBasemap();
+    if (name !== el.basemapSelect.value) {
+        el.basemapSelect.value = name;
+        showBasemap(name);
+    }
+    if (inspectDom && inspectSeries) drawSparkline(inspectDom.spark, inspectSeries);
+});
 
 async function applyBasemap(name) {
     const config = BASEMAPS[name];

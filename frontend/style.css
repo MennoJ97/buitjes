@@ -61,6 +61,32 @@
     --series-wind: #22c55e;
     --series-solar: #eab308;
     --series-outlook: #818cf8;
+
+    /* Map-page chrome. */
+    --fill: rgba(255, 255, 255, 0.07);
+    --fill-strong: rgba(255, 255, 255, 0.14);
+    --hover-faint: rgba(255, 255, 255, 0.06);
+    --tick: rgba(255, 255, 255, 0.22);
+    --tick-hour: rgba(255, 255, 255, 0.42);
+    --thumb-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+    --thumb-shadow-small: 0 1px 4px rgba(0, 0, 0, 0.6);
+    --play-hover: #2A74C8;
+    --badge-bg: rgba(255, 255, 255, 0.1);
+    --badge-observed-bg: rgba(228, 228, 224, 0.22);
+    --badge-observed: #E4E4E0;
+    --badge-nowcast-bg: rgba(111, 178, 238, 0.25);
+    --badge-nowcast: #CFE4F8;
+    --badge-forecast-bg: rgba(156, 156, 152, 0.18);
+    --badge-forecast: #D0D0CC;
+    --swatch-border: rgba(255, 255, 255, 0.12);
+    --zone-hatch: rgba(226, 232, 240, 0.35);
+    --chip-bg: rgba(12, 16, 24, 0.86);
+    --chip-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    --backdrop: rgba(0, 0, 0, 0.6);
+    --link: #7cb2ff;
+    /* The panels over a light basemap: more opaque, so the map does not show
+       through a dark panel as a grey smear. See body.map-light. */
+    --panel-over-light-map: rgba(17, 17, 17, 0.86);
 }
 
 /* ------------------------------------------------------------ light theme */
@@ -69,13 +95,9 @@
    in which case js/family.js has set data-theme on <html>. The media query
    and the attribute cannot share a selector, so the block is written twice:
    keep the two identical.
- *
- * Gated on .has-light for now: only the forecast page carries it. The map
- * page's floating chrome has not been given light values yet, and until it
- * has, it stays dark whatever the system says. Drop the class from the
- * selectors once both pages have it. */
+ */
 @media (prefers-color-scheme: light) {
-    :root.has-light:not([data-theme="dark"]) {
+    :root:not([data-theme="dark"]) {
         color-scheme: light;
         --bg: #F5F5F3;
         --panel: rgba(255, 255, 255, 0.86);
@@ -116,9 +138,31 @@
         --series-wind: #1E8E48;
         --series-solar: #A67C00;
         --series-outlook: #6060D8;
+        --fill: rgba(0, 0, 0, 0.05);
+        --fill-strong: rgba(0, 0, 0, 0.10);
+        --hover-faint: rgba(0, 0, 0, 0.04);
+        --tick: rgba(0, 0, 0, 0.25);
+        --tick-hour: rgba(0, 0, 0, 0.45);
+        --thumb-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+        --thumb-shadow-small: 0 1px 3px rgba(0, 0, 0, 0.3);
+        --play-hover: #1B64B8;
+        --badge-bg: rgba(0, 0, 0, 0.06);
+        --badge-observed-bg: rgba(17, 17, 17, 0.10);
+        --badge-observed: #111111;
+        --badge-nowcast-bg: rgba(27, 100, 184, 0.14);
+        --badge-nowcast: #154F93;
+        --badge-forecast-bg: rgba(17, 17, 17, 0.05);
+        --badge-forecast: #3A3A38;
+        --swatch-border: rgba(0, 0, 0, 0.15);
+        --zone-hatch: rgba(17, 17, 17, 0.30);
+        --chip-bg: rgba(255, 255, 255, 0.92);
+        --chip-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+        --backdrop: rgba(0, 0, 0, 0.3);
+        --link: #1B64B8;
+        --panel-over-light-map: rgba(255, 255, 255, 0.86);
     }
 }
-:root.has-light[data-theme="light"] {
+:root[data-theme="light"] {
     color-scheme: light;
     --bg: #F5F5F3;
     --panel: rgba(255, 255, 255, 0.86);
@@ -157,6 +201,28 @@
     --series-wind: #1E8E48;
     --series-solar: #A67C00;
     --series-outlook: #6060D8;
+    --fill: rgba(0, 0, 0, 0.05);
+    --fill-strong: rgba(0, 0, 0, 0.10);
+    --hover-faint: rgba(0, 0, 0, 0.04);
+    --tick: rgba(0, 0, 0, 0.25);
+    --tick-hour: rgba(0, 0, 0, 0.45);
+    --thumb-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    --thumb-shadow-small: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --play-hover: #1B64B8;
+    --badge-bg: rgba(0, 0, 0, 0.06);
+    --badge-observed-bg: rgba(17, 17, 17, 0.10);
+    --badge-observed: #111111;
+    --badge-nowcast-bg: rgba(27, 100, 184, 0.14);
+    --badge-nowcast: #154F93;
+    --badge-forecast-bg: rgba(17, 17, 17, 0.05);
+    --badge-forecast: #3A3A38;
+    --swatch-border: rgba(0, 0, 0, 0.15);
+    --zone-hatch: rgba(17, 17, 17, 0.30);
+    --chip-bg: rgba(255, 255, 255, 0.92);
+    --chip-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+    --backdrop: rgba(0, 0, 0, 0.3);
+    --link: #1B64B8;
+    --panel-over-light-map: rgba(255, 255, 255, 0.86);
 }
 :root[data-theme="dark"] { color-scheme: dark; }
 
@@ -192,9 +258,9 @@ body {
     gap: 7px;
     padding: 5px 9px;
     border-radius: 8px;
-    background: rgba(12, 16, 24, 0.86);
+    background: var(--chip-bg);
     border: 1px solid var(--border);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--chip-shadow);
     backdrop-filter: blur(6px);
     font-size: 0.82rem;
     font-variant-numeric: tabular-nums;
@@ -490,18 +556,18 @@ button { font: inherit; }
 }
 .btn-step {
     width: 30px; height: 30px;
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--fill);
     color: var(--muted);
 }
 .btn-step svg { width: 16px; height: 16px; fill: currentColor; }
-.btn-step:hover { background: rgba(255, 255, 255, 0.14); color: var(--text); }
+.btn-step:hover { background: var(--fill-strong); color: var(--text); }
 .btn-play {
     width: 42px; height: 42px;
     background: var(--accent-strong);
     color: #fff;
 }
 .btn-play svg { width: 20px; height: 20px; fill: currentColor; }
-.btn-play:hover { background: #2A74C8; }
+.btn-play:hover { background: var(--play-hover); }
 .btn-play:active { transform: scale(0.95); }
 
 /* ------------------------------------------------------------ timeline */
@@ -550,9 +616,9 @@ button { font: inherit; }
     width: 1px;
     height: 5px;
     transform: translateX(-50%);
-    background: rgba(255, 255, 255, 0.22);
+    background: var(--tick);
 }
-.tl-tick--hour { height: 9px; background: rgba(255, 255, 255, 0.42); }
+.tl-tick--hour { height: 9px; background: var(--tick-hour); }
 
 .tl-now {
     position: absolute;
@@ -560,7 +626,7 @@ button { font: inherit; }
     bottom: -4px;
     width: 2px;
     transform: translateX(-50%);
-    background: #F5F5F3;
+    background: var(--now);
     border-radius: 1px;
     pointer-events: none;
 }
@@ -616,7 +682,7 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
     border-radius: 50%;
     background: #fff;
     border: 2px solid var(--accent-strong);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--thumb-shadow);
     cursor: grab;
 }
 #timeline-slider::-moz-range-track { height: 44px; background: transparent; cursor: pointer; }
@@ -626,7 +692,7 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
     border-radius: 50%;
     background: #fff;
     border: 2px solid var(--accent-strong);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--thumb-shadow);
     cursor: grab;
 }
 
@@ -634,7 +700,7 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
 .field input[type=range]::-webkit-slider-runnable-track {
     height: 4px;
     border-radius: 2px;
-    background: linear-gradient(to right, var(--accent) var(--progress), rgba(255, 255, 255, 0.14) var(--progress));
+    background: linear-gradient(to right, var(--accent) var(--progress), var(--fill-strong) var(--progress));
 }
 .field input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -643,11 +709,11 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
     border: none;
     border-radius: 50%;
     background: #fff;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--thumb-shadow-small);
     cursor: pointer;
 }
 .field input[type=range]::-moz-range-track {
-    height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.14);
+    height: 4px; border-radius: 2px; background: var(--fill-strong);
 }
 .field input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
 .field input[type=range]::-moz-range-thumb {
@@ -699,12 +765,12 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--badge-bg);
     color: var(--muted);
 }
-.kind-badge--observed { background: rgba(228, 228, 224, 0.22); color: #E4E4E0; }
-.kind-badge--nowcast { background: rgba(111, 178, 238, 0.25); color: #CFE4F8; }
-.kind-badge--forecast { background: rgba(156, 156, 152, 0.18); color: #D0D0CC; }
+.kind-badge--observed { background: var(--badge-observed-bg); color: var(--badge-observed); }
+.kind-badge--nowcast { background: var(--badge-nowcast-bg); color: var(--badge-nowcast); }
+.kind-badge--forecast { background: var(--badge-forecast-bg); color: var(--badge-forecast); }
 /* Amber rather than another zone colour: this is not a fourth kind of frame but
    a warning about one, and it should not read as a peer of the other three. */
 .kind-badge--estimated { background: var(--warn-bg); color: var(--warn-text); }
@@ -769,12 +835,12 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
 .zone-key-item small { color: var(--muted-dim); font-weight: 500; font-variant-numeric: tabular-nums; }
 .zone-swatch {
     width: 14px; height: 9px; flex: none; border-radius: 2px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--swatch-border);
 }
 .zone-swatch--observed { background: var(--zone-observed); }
 .zone-swatch--nowcast { background: var(--zone-nowcast); }
 .zone-swatch--forecast {
-    background: repeating-linear-gradient(-45deg, rgba(226,232,240,0.35), rgba(226,232,240,0.35) 3px, transparent 3px, transparent 6px);
+    background: repeating-linear-gradient(-45deg, var(--zone-hatch), var(--zone-hatch) 3px, transparent 3px, transparent 6px);
 }
 
 .scale { flex: 1 1 auto; min-width: 0; }
@@ -806,8 +872,8 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
     text-transform: uppercase;
     cursor: pointer;
 }
-.pct-option:hover { color: var(--muted); background: rgba(255, 255, 255, 0.06); }
-.pct-option.is-active { background: rgba(111, 178, 238, 0.25); color: #CFE4F8; }
+.pct-option:hover { color: var(--muted); background: var(--hover-faint); }
+.pct-option.is-active { background: var(--badge-nowcast-bg); color: var(--badge-nowcast); }
 /* The two ends of the ensemble get the same amber the estimated badge uses:
    what is drawn is no longer the expected field. */
 .pct-option.is-active[data-band="p10"],
@@ -894,7 +960,7 @@ kbd {
     padding: 1px 5px;
     border: 1px solid var(--border-strong);
     border-radius: 4px;
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--fill);
     font-family: inherit;
     font-size: 0.9em;
     color: var(--text);
@@ -907,7 +973,7 @@ kbd {
     position: fixed;
     inset: 0;
     z-index: 40;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--backdrop);
     -webkit-backdrop-filter: blur(3px);
     backdrop-filter: blur(3px);
 }
@@ -1000,7 +1066,7 @@ kbd {
     margin-left: 7px;
     padding: 1px 7px;
     border-radius: 20px;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--hover);
     font-size: 0.62rem;
     font-weight: 700;
     letter-spacing: 0.05em;
@@ -1023,7 +1089,7 @@ kbd {
 
 .about-home { white-space: nowrap; }
 
-.modal a { color: #7cb2ff; text-decoration: none; }
+.modal a { color: var(--link); text-decoration: none; }
 .modal a:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------ map popup */
@@ -1067,46 +1133,59 @@ kbd {
 .popup-summary { margin: 8px 0 0; font-size: 0.75rem; line-height: 1.4; color: var(--muted); }
 .popup-empty { margin: 0; font-size: 0.8rem; color: var(--muted); }
 
-/* ------------------------------------------------------------ light basemap */
+/* ------------------------------------------------------------ text on the map */
 
-body.theme-light {
-    --panel: rgba(17, 17, 17, 0.86);
+/* The top bar's brand, clock and fallback badge are the one piece of chrome
+   with nothing behind them: they sit directly on the map, so they are
+   coloured for the basemap, not for the page theme. A light page over the dark
+   basemap still wants near-white text with a dark glow, and a dark page over
+   OpenStreetMap still wants dark text with a white halo.
+ *
+ * Done by redefining the theme's own tokens on just these elements, so every
+ * rule above that says var(--text), var(--muted) or var(--glow) keeps working
+ * unchanged. The icon buttons beside them have backgrounds of their own and
+ * follow the page theme like the rest of the chrome. */
+.topbar .brand,
+.topbar .ref-time,
+.topbar .src-badge {
+    --text: #ECECE9;
+    --muted: #9C9C98;
+    --accent: #6FB2EE;
+    --rain-1: #3A78B8;
+    --rain-2: #5596D6;
+    --danger: #f0a02a;
+    --warn-bg: rgba(245, 158, 11, 0.22);
+    --warn-text: #fcd34d;
+    --glow: 0 2px 12px rgba(0, 0, 0, 0.7);
+}
+.topbar .brand { color: var(--text); }
+
+/* Over a light basemap: dark text with a white halo. The halo matters as much
+   as the colour: a light basemap is not uniformly light, and dark text alone
+   would disappear over a motorway casing or a forest. Light-on-dark measured
+   about 1.4:1 over OpenStreetMap's water, which is not a matter of taste.
+ *
+ * Muted means darker here, not paler: the halo would swallow a pale grey. And
+ * the stale amber goes darker rather than brighter to gain the same separation.
+ * #92400e was the first attempt and measured 4.45:1 against OSM's water --
+ * close enough to look fine and still under the 4.5:1 line, which is exactly
+ * the kind of miss that only shows up if you measure it. */
+body.map-light .topbar .brand,
+body.map-light .topbar .ref-time,
+body.map-light .topbar .src-badge {
+    --text: #111111;
+    --muted: #3A3A38;
+    --accent: #1B64B8;
+    --rain-1: #5891CC;
+    --rain-2: #3F80C4;
+    --danger: #7c2d12;
+    --warn-bg: rgba(245, 158, 11, 0.30);
+    --warn-text: #7c2d12;
+    --glow: 0 1px 10px rgba(255, 255, 255, 0.95), 0 0 3px rgba(255, 255, 255, 0.9);
 }
 
-/* The top bar is the one piece of chrome with nothing behind it — brand and
-   clock sit directly on the map, lit for a dark basemap: near-white text with
-   a dark glow. Over OpenStreetMap's water that measures about 1.4:1, which is
-   not a matter of taste, it is unreadable.
- *
- * Dark text with a white halo instead. The halo matters as much as the colour:
- * a light basemap is not uniformly light, and dark text alone would disappear
- * over a motorway casing or a forest.
- *
- * Scoped to these two rather than done by redefining --text and --muted,
- * because the panel, the popups and the icon buttons keep their dark
- * backgrounds in this theme and still want the light-on-dark tokens. */
-body.theme-light .brand,
-body.theme-light .ref-time {
-    text-shadow: 0 1px 10px rgba(255, 255, 255, 0.95), 0 0 3px rgba(255, 255, 255, 0.9);
-}
-body.theme-light .brand { color: #111111; --rain-1: #5891CC; --rain-2: #3F80C4; }
-body.theme-light .brand-mark { color: #1B64B8; }
-body.theme-light .ref-time { color: #3A3A38; }
-body.theme-light .ref-time time { color: #111111; }
-/* Muted against a light basemap means darker, not paler — and the rule above
-   hands this a white glow, which a #98a3b5 would disappear into. */
-body.theme-light .brand-home a,
-body.theme-light .brand-sep { color: #3A3A38; }
-body.theme-light .brand-home a:hover { color: #111111; }
-
-/* The stale amber is picked for a dark background; on a light one it needs to
-   go darker rather than brighter to gain the same separation. #92400e was the
-   first attempt and measured 4.45:1 against OSM's water — close enough to look
-   fine and still under the 4.5:1 line, which is exactly the kind of miss that
-   only shows up if you measure it. */
-body.theme-light .ref-time.is-stale,
-body.theme-light .ref-time.is-stale time { color: #7c2d12; }
-body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
+/* A panel over a light basemap: more opaque, whichever theme it is in. */
+body.map-light { --panel: var(--panel-over-light-map); }
 
 /* ------------------------------------------------------------ responsive */
 
@@ -1215,11 +1294,11 @@ body.page-forecast {
 }
 .forecast-head-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 
-/* The light/dark switch every mhjansen.nl site has, last in the bar. Same
-   rule as the family's (https://mhjansen.nl/family.css), copied rather than
-   linked because style-src here is 'self'; js/family.js draws the icon and
-   unhides it. */
-.theme-toggle {
+/* The light/dark switch every mhjansen.nl site has, last in the bar. Here
+   the family's bare icon (https://mhjansen.nl/family.css, copied rather than
+   linked because style-src here is 'self'); on the map page one more round
+   .icon-btn. js/family.js draws the icon and unhides it. */
+.forecast-head .theme-toggle {
     font: inherit;
     color: var(--muted);
     background: none;
@@ -1229,8 +1308,12 @@ body.page-forecast {
     line-height: 0;
     cursor: pointer;
 }
-.theme-toggle:hover { color: var(--text); }
-.theme-toggle svg { width: 16px; height: 16px; transition: transform .2s; }
+.forecast-head .theme-toggle:hover { color: var(--text); }
+.forecast-head .theme-toggle svg { width: 16px; height: 16px; }
+.icon-btn.theme-toggle svg { width: 17px; height: 17px; }
+/* .icon-btn's display would otherwise beat the hidden attribute. */
+.theme-toggle[hidden] { display: none; }
+.theme-toggle svg { transition: transform .2s; }
 .theme-toggle[aria-pressed="true"] svg { transform: rotate(180deg); }
 
 .field-inline { display: flex; align-items: center; gap: 8px; }
@@ -1392,7 +1475,7 @@ body.page-forecast {
     margin-top: 12px;
     padding-top: 10px;
     border-top: 1px solid var(--border);
-    color: #7cb2ff;
+    color: var(--link);
     font-size: 0.78rem;
     font-weight: 600;
     text-decoration: none;
@@ -1402,7 +1485,7 @@ body.page-forecast {
 .popup-link {
     display: inline-block;
     margin-top: 8px;
-    color: #7cb2ff;
+    color: var(--link);
     font-size: 0.74rem;
     font-weight: 600;
     text-decoration: none;

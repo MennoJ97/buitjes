@@ -171,7 +171,7 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
             attrib?.removeAttribute('open');
             attrib?.classList.remove('maplibregl-compact-show');
         });
-        mapEl.classList.toggle('theme-light', !!config.lightUi);
+        mapEl.classList.toggle('map-light', !!config.lightUi);
         map.on('error', (event) => fail('map error', event?.error));
         // 'style.load' rather than 'load': it fires when the stylesheet has been
         // parsed and its layers exist, which is everything the radar layer

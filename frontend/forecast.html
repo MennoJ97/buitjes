@@ -1,11 +1,16 @@
 <!DOCTYPE html>
-<html lang="en" class="has-light">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
     <!-- See robots.txt. -->
     <meta name="robots" content="noindex, nofollow">
+    <!-- For the radar card's OpenStreetMap basemap, the default in light mode:
+         OSM's tile servers answer a request with no Referer with a "blocked"
+         tile, and the proxy's Referrer-Policy: same-origin strips it. Same fix
+         and reasoning as index.html. -->
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>Buitjes — Forecast detail</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">

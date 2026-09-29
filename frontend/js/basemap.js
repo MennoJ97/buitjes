@@ -168,11 +168,26 @@ export const BASEMAPS = {
     },
 };
 
-// One remembered basemap per theme. The dark key is the original one, so a
-// choice made before there was a light theme carries on as the dark choice
-// and never drags a dark map into the light page.
-const BASEMAP_KEYS = { dark: 'buitjes.basemap', light: 'buitjes.basemap.light' };
-const LEGACY_BASEMAP_KEY = 'stratus.basemap';  // named Stratus once; dark-era
+// One remembered basemap per theme.
+const BASEMAP_KEYS = { dark: 'buitjes.basemap.dark', light: 'buitjes.basemap.light' };
+// From before there was a light theme: one choice for everything (and before
+// that the app was called Stratus).
+const PRE_THEME_KEYS = ['buitjes.basemap', 'stratus.basemap'];
+
+/**
+ * Move a choice made before there were themes to the theme it suits: a light
+ * map to the light theme, a dark one to the dark. Counting every old choice as
+ * a dark one held a reader who had picked OpenStreetMap on it in both themes,
+ * since that is also the light default, and the switch never moved the map.
+ */
+function migratePreThemeChoice() {
+    const old = PRE_THEME_KEYS.map((key) => localStorage.getItem(key)).find(Boolean);
+    if (old && BASEMAPS[old]) {
+        const key = BASEMAP_KEYS[BASEMAPS[old].lightUi ? 'light' : 'dark'];
+        if (!localStorage.getItem(key)) localStorage.setItem(key, old);
+    }
+    for (const key of PRE_THEME_KEYS) localStorage.removeItem(key);
+}
 
 /**
  * The page theme: light or dark, the reader's choice from the family switch
@@ -203,10 +218,9 @@ export function defaultBasemap() {
  * page is a dark-page choice, so each theme remembers its own.
  */
 export function storedBasemap() {
-    const theme = pageTheme();
     try {
-        const name = localStorage.getItem(BASEMAP_KEYS[theme])
-            || (theme === 'dark' ? localStorage.getItem(LEGACY_BASEMAP_KEY) : null);
+        migratePreThemeChoice();
+        const name = localStorage.getItem(BASEMAP_KEYS[pageTheme()]);
         return name && BASEMAPS[name] ? name : defaultBasemap();
     } catch {
         // Private browsing, or storage disabled entirely.

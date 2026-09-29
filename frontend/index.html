@@ -20,6 +20,9 @@
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
     <link rel="stylesheet" href="style.css">
+    <!-- Before anything is drawn: applies a saved light/dark choice (the
+         switch in the top bar), so the page never flashes the other theme. -->
+    <script src="js/family.js"></script>
 </head>
 <body>
     <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -101,6 +104,9 @@
             <button type="button" id="info-btn" class="icon-btn" aria-label="About this map" aria-expanded="false" title="About this map">
                 <svg aria-hidden="true"><use href="#icon-info"/></svg>
             </button>
+            <!-- The light/dark switch all the mhjansen.nl sites share, last in
+                 the bar as on the others. family.js fills it in and shows it. -->
+            <button class="icon-btn theme-toggle" hidden></button>
         </div>
 
     </header>
