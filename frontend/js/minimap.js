@@ -42,6 +42,8 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
     /** Set on 'style.load'; see addRadarLayer for why not isStyleLoaded(). */
     let styleReady = false;
     let marker = null;
+    /** The basemap on screen, so a theme switch can tell whether it changes it. */
+    let shownBasemap = null;
     let index = 0;
     let timer = null;
     let playing = true;
@@ -141,6 +143,7 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
     function buildMap() {
         const name = storedBasemap();
         const config = BASEMAPS[name];
+        shownBasemap = name;
         map = new maplibregl.Map({
             container: mapEl,
             style: styleFor(config),
@@ -232,6 +235,35 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
         );
     }
 
+    /**
+     * The location pin, coloured for the map under it rather than the page: a
+     * near-white pin on a dark basemap, near-black on a light one, where the
+     * white one all but disappeared into OpenStreetMap's streets.
+     */
+    function placeMarker() {
+        marker?.remove();
+        const colour = BASEMAPS[shownBasemap]?.lightUi ? '#111111' : '#F5F5F3';
+        marker = new maplibregl.Marker({ color: colour, scale: 0.7 })
+            .setLngLat([point.lon, point.lat]).addTo(map);
+    }
+
+    /**
+     * A light/dark switch changes which basemap this theme shows: its own
+     * remembered pick, or its default (see storedBasemap). When both themes
+     * land on the same map this does nothing. Rebuilt rather than restyled: the
+     * canvas source and the repaint both hang off 'style.load', which a style
+     * swap does not reliably fire, and a flip is too rare to be worth the
+     * machinery the map page needs for its picker.
+     */
+    window.addEventListener('themechange', () => {
+        if (!map || storedBasemap() === shownBasemap) return;
+        map.remove();
+        map = null;
+        styleReady = false;
+        buildMap();
+        if (point) placeMarker();
+    });
+
     async function loadFrames() {
         const response = await apiFetch('/api/config', { cache: 'no-store' });
         if (!response.ok) throw new Error(`manifest unavailable (${response.status})`);
@@ -285,16 +317,9 @@ export function createRadarMinimap({ mapEl, canvasEl, timeEl, playBtn, statusEl,
             if (map && moved) {
                 map.jumpTo({ center: [point.lon, point.lat], zoom: 8 });
             }
-            if (map) {
-                marker?.remove();
-                marker = new maplibregl.Marker({ color: '#F5F5F3', scale: 0.7 })
-                    .setLngLat([point.lon, point.lat]).addTo(map);
-            }
+            if (map) placeMarker();
             await loadFrames();
-            if (!marker) {
-                marker = new maplibregl.Marker({ color: '#F5F5F3', scale: 0.7 })
-                    .setLngLat([point.lon, point.lat]).addTo(map);
-            }
+            if (!marker) placeMarker();
         },
         refreshTimer: setInterval(() => { loadFrames().catch(() => {}); }, REFRESH_MS),
     };

@@ -1,9 +1,9 @@
 :root {
     /* Neutrals and accent follow the mhjansen.nl family palette
        (https://mhjansen.nl/family.css): pure greys, no blue tint, and buitjes'
-       own blue -- its dark-mode value, because this chrome is dark in both
-       themes (the light theme only swaps the basemap). The rainfall ramp and
-       the rain chart keep the radar colours: those encode data, not brand. */
+       own blue. Dark is the default here, the reverse of the family, and the
+       light values are further down under "light theme". The rainfall ramp
+       keeps the radar colours in both: those encode data, not brand. */
     --bg: #111111;
     --panel: rgba(20, 20, 20, 0.78);
     --panel-solid: #1A1A1A;
@@ -31,7 +31,134 @@
     --thumb: 16px;
     --radius: 14px;
     --shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+    /* What used to be written into the rules as white-on-dark literals, named
+       so the light theme can turn each one over. */
+    --hover: rgba(255, 255, 255, 0.08);
+    --control-bg: rgba(255, 255, 255, 0.06);
+    --spinner-track: rgba(255, 255, 255, 0.2);
+    --glow: 0 2px 12px rgba(0, 0, 0, 0.7);
+    /* MapLibre's credits glyph is a dark SVG; on a dark chip it is inverted. */
+    --attrib-glyph: invert(1);
+
+    /* Amber: a warning about the data (estimated, fallback, stale). */
+    --warn-bg: rgba(245, 158, 11, 0.22);
+    --warn-text: #fcd34d;
+    --warn-line: #f59e0b;
+    --banner-text: #fde9c8;
+
+    /* Charts. The series colours stand for the quantity, so each one exists
+       once per theme; the rain line keeps the ramp's 1 mm/h blue in both. */
+    --grid: rgba(255, 255, 255, 0.08);
+    --daybreak: rgba(255, 255, 255, 0.16);
+    --crosshair: rgba(255, 255, 255, 0.45);
+    --now: #F5F5F3;
+    --marker-ring: #0a0c11;
+    --tooltip-bg: rgba(10, 12, 17, 0.94);
+    --tooltip-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    --series-rain: #3b82f6;
+    --series-temperature: #f97316;
+    --series-wind: #22c55e;
+    --series-solar: #eab308;
+    --series-outlook: #818cf8;
 }
+
+/* ------------------------------------------------------------ light theme */
+
+/* The mhjansen.nl family switch: follow the system unless the reader chose,
+   in which case js/family.js has set data-theme on <html>. The media query
+   and the attribute cannot share a selector, so the block is written twice:
+   keep the two identical.
+ *
+ * Gated on .has-light for now: only the forecast page carries it. The map
+ * page's floating chrome has not been given light values yet, and until it
+ * has, it stays dark whatever the system says. Drop the class from the
+ * selectors once both pages have it. */
+@media (prefers-color-scheme: light) {
+    :root.has-light:not([data-theme="dark"]) {
+        color-scheme: light;
+        --bg: #F5F5F3;
+        --panel: rgba(255, 255, 255, 0.86);
+        --panel-solid: #FFFFFF;
+        --border: rgba(0, 0, 0, 0.10);
+        --border-strong: rgba(0, 0, 0, 0.18);
+        --text: #111111;
+        --muted: #666663;
+        --muted-dim: #767672;
+        --accent: #1B64B8;
+        --rain-1: #5891CC;
+        --rain-2: #3F80C4;
+        --accent-strong: #154F93;
+        --danger: #A35400;
+        --zone-observed: rgba(17, 17, 17, 0.30);
+        --zone-nowcast: rgba(17, 17, 17, 0.15);
+        --zone-forecast: rgba(17, 17, 17, 0.07);
+        --shadow: 0 12px 40px rgba(0, 0, 0, 0.14);
+        --hover: rgba(0, 0, 0, 0.05);
+        --control-bg: #FFFFFF;
+        --spinner-track: rgba(0, 0, 0, 0.15);
+        --glow: none;
+        --attrib-glyph: none;
+        --warn-bg: rgba(245, 158, 11, 0.18);
+        --warn-text: #8A4B00;
+        --warn-line: #B87400;
+        --banner-text: #6B3B00;
+        --grid: rgba(0, 0, 0, 0.08);
+        --daybreak: rgba(0, 0, 0, 0.16);
+        --crosshair: rgba(0, 0, 0, 0.4);
+        --now: #111111;
+        --marker-ring: #FFFFFF;
+        --tooltip-bg: rgba(255, 255, 255, 0.96);
+        --tooltip-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+        /* Each at least 3:1 on the white card (the dark values are 1.9-2.8:1
+           there); rain stays the ramp's blue, 3.7:1. */
+        --series-temperature: #D2580A;
+        --series-wind: #1E8E48;
+        --series-solar: #A67C00;
+        --series-outlook: #6060D8;
+    }
+}
+:root.has-light[data-theme="light"] {
+    color-scheme: light;
+    --bg: #F5F5F3;
+    --panel: rgba(255, 255, 255, 0.86);
+    --panel-solid: #FFFFFF;
+    --border: rgba(0, 0, 0, 0.10);
+    --border-strong: rgba(0, 0, 0, 0.18);
+    --text: #111111;
+    --muted: #666663;
+    --muted-dim: #767672;
+    --accent: #1B64B8;
+    --rain-1: #5891CC;
+    --rain-2: #3F80C4;
+    --accent-strong: #154F93;
+    --danger: #A35400;
+    --zone-observed: rgba(17, 17, 17, 0.30);
+    --zone-nowcast: rgba(17, 17, 17, 0.15);
+    --zone-forecast: rgba(17, 17, 17, 0.07);
+    --shadow: 0 12px 40px rgba(0, 0, 0, 0.14);
+    --hover: rgba(0, 0, 0, 0.05);
+    --control-bg: #FFFFFF;
+    --spinner-track: rgba(0, 0, 0, 0.15);
+    --glow: none;
+    --attrib-glyph: none;
+    --warn-bg: rgba(245, 158, 11, 0.18);
+    --warn-text: #8A4B00;
+    --warn-line: #B87400;
+    --banner-text: #6B3B00;
+    --grid: rgba(0, 0, 0, 0.08);
+    --daybreak: rgba(0, 0, 0, 0.16);
+    --crosshair: rgba(0, 0, 0, 0.4);
+    --now: #111111;
+    --marker-ring: #FFFFFF;
+    --tooltip-bg: rgba(255, 255, 255, 0.96);
+    --tooltip-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    --series-temperature: #D2580A;
+    --series-wind: #1E8E48;
+    --series-solar: #A67C00;
+    --series-outlook: #6060D8;
+}
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 
@@ -115,7 +242,7 @@ body {
    only the mark is affected. */
 .maplibregl-ctrl-attrib-button {
     background-color: transparent;
-    filter: invert(1);
+    filter: var(--attrib-glyph);
 }
 
 .maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
@@ -190,7 +317,7 @@ button { font: inherit; }
     font-weight: 700;
     letter-spacing: -0.01em;
     white-space: nowrap;
-    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+    text-shadow: var(--glow);
 }
 .brand-mark { width: 28px; height: 26px; color: var(--accent); flex: none; }
 /* Classes, not style="" attributes: the CSP here is style-src 'self', which
@@ -219,7 +346,7 @@ button { font: inherit; }
     margin: 0 4px 0 0;
     font-size: 0.8rem;
     color: var(--muted);
-    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+    text-shadow: var(--glow);
     white-space: nowrap;
 }
 .ref-time time { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -289,7 +416,7 @@ button { font: inherit; }
     max-width: min(520px, calc(100% - 32px));
     padding: 10px 12px;
     border-color: rgba(240, 160, 42, 0.35);
-    color: #fde9c8;
+    color: var(--banner-text);
     font-size: 0.85rem;
 }
 /* Must beat the display:flex above, which otherwise defeats the hidden attribute. */
@@ -306,7 +433,7 @@ button { font: inherit; }
     width: 15px;
     height: 15px;
     flex: none;
-    border: 2px solid rgba(255, 255, 255, 0.2);
+    border: 2px solid var(--spinner-track);
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: banner-spin 0.8s linear infinite;
@@ -329,7 +456,7 @@ button { font: inherit; }
     font-weight: 600;
     cursor: pointer;
 }
-.banner-retry:hover { background: rgba(255, 255, 255, 0.08); }
+.banner-retry:hover { background: var(--hover); }
 
 /* ------------------------------------------------------------ panel */
 
@@ -580,7 +707,7 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
 .kind-badge--forecast { background: rgba(156, 156, 152, 0.18); color: #D0D0CC; }
 /* Amber rather than another zone colour: this is not a fourth kind of frame but
    a warning about one, and it should not read as a peer of the other three. */
-.kind-badge--estimated { background: rgba(245, 158, 11, 0.22); color: #fcd34d; }
+.kind-badge--estimated { background: var(--warn-bg); color: var(--warn-text); }
 
 /* Same amber as the estimated badge, and for the same reason: it is a warning
    about the data rather than a label for a kind of it. Deliberately a badge and
@@ -596,8 +723,8 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    background: rgba(245, 158, 11, 0.22);
-    color: #fcd34d;
+    background: var(--warn-bg);
+    color: var(--warn-text);
     white-space: nowrap;
     cursor: help;
 }
@@ -685,8 +812,8 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
    what is drawn is no longer the expected field. */
 .pct-option.is-active[data-band="p10"],
 .pct-option.is-active[data-band="p90"] {
-    background: rgba(245, 158, 11, 0.22);
-    color: #fcd34d;
+    background: var(--warn-bg);
+    color: var(--warn-text);
 }
 .hover-band { color: var(--muted-dim); font-variant-numeric: tabular-nums; }
 .scale-bar {
@@ -747,7 +874,7 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(1
     padding: 7px 10px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--control-bg);
     color: var(--text);
     font-size: 0.8rem;
     cursor: pointer;
@@ -1018,11 +1145,11 @@ body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
    have padded each of those out to 190 and left a gap under every one. */
 .chart-card > .chart { flex: 1; min-height: 190px; }
 .chart svg { display: block; overflow: visible; }
-.chart-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
-.chart-now { stroke: #F5F5F3; stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.7; }
+.chart-grid { stroke: var(--grid); stroke-width: 1; }
+.chart-now { stroke: var(--now); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.7; }
 /* Same amber as the map's badge, and deliberately fainter than "now": it is a
    footnote on one point, not a landmark on the axis. */
-.chart-estimated { stroke: #f59e0b; stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.55; }
+.chart-estimated { stroke: var(--warn-line); stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.55; }
 .chart-axis {
     fill: var(--muted-dim);
     font-size: 10px;
@@ -1030,6 +1157,20 @@ body.theme-light .ref-time.is-stale .ref-time-dot { background: #7c2d12; }
     font-variant-numeric: tabular-nums;
 }
 .chart-axis--time { text-anchor: middle; }
+
+/* A series' colour comes from the theme (--series-*), picked by the name
+   chart.js writes on the svg. It also writes the colour as fill/stroke
+   attributes, which is only the fallback for a chart without a name: CSS
+   outranks presentation attributes. */
+svg[data-series="rain"] { --series: var(--series-rain); }
+svg[data-series="temperature"] { --series: var(--series-temperature); }
+svg[data-series="wind"] { --series: var(--series-wind); }
+svg[data-series="solar"] { --series: var(--series-solar); }
+svg[data-series="outlook"] { --series: var(--series-outlook); }
+svg[data-series] .chart-band { fill: var(--series); }
+svg[data-series] .chart-line { stroke: var(--series); }
+svg[data-series] .chart-marker { fill: var(--series); }
+.chart-marker { stroke: var(--marker-ring); }
 .chart-unit {
     position: absolute;
     top: 0;
@@ -1074,6 +1215,24 @@ body.page-forecast {
 }
 .forecast-head-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 
+/* The light/dark switch every mhjansen.nl site has, last in the bar. Same
+   rule as the family's (https://mhjansen.nl/family.css), copied rather than
+   linked because style-src here is 'self'; js/family.js draws the icon and
+   unhides it. */
+.theme-toggle {
+    font: inherit;
+    color: var(--muted);
+    background: none;
+    border: 0;
+    padding: .35rem;
+    margin: -.35rem;
+    line-height: 0;
+    cursor: pointer;
+}
+.theme-toggle:hover { color: var(--text); }
+.theme-toggle svg { width: 16px; height: 16px; transition: transform .2s; }
+.theme-toggle[aria-pressed="true"] svg { transform: rotate(180deg); }
+
 .field-inline { display: flex; align-items: center; gap: 8px; }
 .field-inline > span {
     font-size: 0.62rem;
@@ -1086,7 +1245,7 @@ body.page-forecast {
     padding: 6px 10px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--control-bg);
     color: var(--text);
     font-size: 0.82rem;
     cursor: pointer;
@@ -1102,7 +1261,7 @@ body.page-forecast {
     font-weight: 600;
     text-decoration: none;
 }
-.link-button:hover { background: rgba(255, 255, 255, 0.08); }
+.link-button:hover { background: var(--hover); }
 
 .forecast-main {
     max-width: 1180px;
@@ -1275,8 +1434,8 @@ body.page-forecast {
 
 /* ------------------------------------------------- chart interaction */
 
-.chart-daybreak { stroke: rgba(255, 255, 255, 0.16); stroke-width: 1; }
-.chart-crosshair { stroke: rgba(255, 255, 255, 0.45); stroke-width: 1; pointer-events: none; }
+.chart-daybreak { stroke: var(--daybreak); stroke-width: 1; }
+.chart-crosshair { stroke: var(--crosshair); stroke-width: 1; pointer-events: none; }
 .chart svg { cursor: crosshair; }
 
 .chart-tooltip {
@@ -1292,10 +1451,10 @@ body.page-forecast {
        amount of repositioning can rescue. */
     max-width: calc(100% - 12px);
     padding: 8px 10px;
-    background: rgba(10, 12, 17, 0.94);
+    background: var(--tooltip-bg);
     border: 1px solid var(--border-strong);
     border-radius: 9px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--tooltip-shadow);
     pointer-events: none;
     font-variant-numeric: tabular-nums;
 }

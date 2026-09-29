@@ -168,23 +168,58 @@ export const BASEMAPS = {
     },
 };
 
-// The repainted one, not the plain one. Both are now the same OpenFreeMap
-// cartography, so the only thing separating them is legibility under rain - and
-// on the plain style a place name sitting under a heavy cell loses. A first
-// visit should get the one that was tuned for the job.
-const DEFAULT_BASEMAP = 'contrast';
-export const BASEMAP_STORAGE_KEY = 'buitjes.basemap';
-const LEGACY_BASEMAP_KEY = 'stratus.basemap';
+// One remembered basemap per theme. The dark key is the original one, so a
+// choice made before there was a light theme carries on as the dark choice
+// and never drags a dark map into the light page.
+const BASEMAP_KEYS = { dark: 'buitjes.basemap', light: 'buitjes.basemap.light' };
+const LEGACY_BASEMAP_KEY = 'stratus.basemap';  // named Stratus once; dark-era
 
-/** The style chosen last time. Picking a legible map should not be a per-visit chore. */
+/**
+ * The page theme: light or dark, the reader's choice from the family switch
+ * (data-theme on <html>, set by family.js) or else the system's. Same rule as
+ * family.js, so the map and the page never disagree about which one is on.
+ */
+export function pageTheme() {
+    const chosen = document.documentElement.getAttribute('data-theme');
+    if (chosen === 'light' || chosen === 'dark') return chosen;
+    return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+/**
+ * What a reader who never picked a basemap gets: one that matches the page.
+ *
+ * Dark: the repainted one, not the plain one. Both are the same OpenFreeMap
+ * cartography, so the only thing separating them is legibility under rain -
+ * and on the plain style a place name sitting under a heavy cell loses.
+ * Light: OpenStreetMap, the map a light page is expected to sit on.
+ */
+export function defaultBasemap() {
+    return pageTheme() === 'light' ? 'osm' : 'contrast';
+}
+
+/**
+ * The style chosen last time in this theme, or the theme's default. Picking a
+ * legible map should not be a per-visit chore; but a map picked on the dark
+ * page is a dark-page choice, so each theme remembers its own.
+ */
 export function storedBasemap() {
+    const theme = pageTheme();
     try {
-        const name = localStorage.getItem(BASEMAP_STORAGE_KEY)
-            || localStorage.getItem(LEGACY_BASEMAP_KEY);  // named Stratus once
-        return name && BASEMAPS[name] ? name : DEFAULT_BASEMAP;
+        const name = localStorage.getItem(BASEMAP_KEYS[theme])
+            || (theme === 'dark' ? localStorage.getItem(LEGACY_BASEMAP_KEY) : null);
+        return name && BASEMAPS[name] ? name : defaultBasemap();
     } catch {
         // Private browsing, or storage disabled entirely.
-        return DEFAULT_BASEMAP;
+        return defaultBasemap();
+    }
+}
+
+/** Remember a picked basemap, for the theme it was picked in. */
+export function rememberBasemap(name) {
+    try {
+        localStorage.setItem(BASEMAP_KEYS[pageTheme()], name);
+    } catch {
+        // Not being able to remember the choice is not worth an error.
     }
 }
 

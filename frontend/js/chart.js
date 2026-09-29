@@ -81,7 +81,12 @@ const MIN_CHART_HEIGHT = 190;
 export function renderBandChart(container, series, options = {}) {
     const {
         unit = '',
+        // The colour is the fallback; `series` names the quantity, and the
+        // stylesheet picks that quantity's colour for the current theme
+        // (svg[data-series] in style.css), so a light/dark switch needs no
+        // redraw.
         colour = '#3b82f6',
+        series: seriesName = null,
         zeroFloor = false,
         height: fixedHeight = null,
         formatValue = (value) => String(value),
@@ -179,6 +184,7 @@ export function renderBandChart(container, series, options = {}) {
         role: 'img',
         preserveAspectRatio: 'none',
     });
+    if (seriesName) svg.dataset.series = seriesName;
 
     // Gridlines and value labels.
     for (let value = min; value <= max + 1e-9; value += step) {
@@ -206,6 +212,7 @@ export function renderBandChart(container, series, options = {}) {
                 const bottom = run.map((entry) => `${x(entry.t)},${y(entry[lowKey])}`).reverse();
                 svg.appendChild(element('polygon', {
                     points: [...top, ...bottom].join(' '),
+                    class: 'chart-band',
                     fill: colour,
                     'fill-opacity': opacity,
                 }));
@@ -230,6 +237,7 @@ export function renderBandChart(container, series, options = {}) {
         if (line.length > 1) {
             svg.appendChild(element('polyline', {
                 points: line.map((entry) => `${x(entry.t)},${y(centre(entry))}`).join(' '),
+                class: 'chart-line',
                 fill: 'none',
                 stroke: colour,
                 'stroke-width': 2,
@@ -357,7 +365,8 @@ function attachHover({ container, svg, series, unit, colour, formatValue,
     crosshair.style.display = 'none';
     svg.appendChild(crosshair);
 
-    const marker = element('circle', { r: 3.5, fill: colour, stroke: '#0a0c11', 'stroke-width': 1.5 });
+    // Ringed in the card's own colour (--marker-ring) so it lifts off the line.
+    const marker = element('circle', { r: 3.5, class: 'chart-marker', fill: colour, 'stroke-width': 1.5 });
     marker.style.display = 'none';
     svg.appendChild(marker);
 

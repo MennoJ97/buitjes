@@ -25,24 +25,24 @@ const WET_THRESHOLD_MM_H = 0.1;
 const CHARTS = [
     {
         key: 'precipitation', container: 'chart-rain', meta: 'rain-meta',
-        colour: '#3b82f6', zeroFloor: true, minSpan: 1,
+        series: 'rain', colour: '#3b82f6', zeroFloor: true, minSpan: 1,
         format: (value) => (value >= 10 ? value.toFixed(0) : value.toFixed(1)),
     },
     {
         key: 'temperature', container: 'chart-temperature', meta: 'temp-meta',
-        colour: '#f97316', zeroFloor: false, minSpan: 4, format: (value) => value.toFixed(0),
+        series: 'temperature', colour: '#f97316', zeroFloor: false, minSpan: 4, format: (value) => value.toFixed(0),
     },
     {
         key: 'wind', container: 'chart-wind', meta: 'wind-meta',
-        colour: '#22c55e', zeroFloor: true, minSpan: 4, format: (value) => value.toFixed(0),
+        series: 'wind', colour: '#22c55e', zeroFloor: true, minSpan: 4, format: (value) => value.toFixed(0),
     },
     {
         key: 'solar', container: 'chart-solar', meta: 'solar-meta',
-        colour: '#eab308', zeroFloor: true, minSpan: 100, format: (value) => value.toFixed(0),
+        series: 'solar', colour: '#eab308', zeroFloor: true, minSpan: 100, format: (value) => value.toFixed(0),
     },
     {
         key: 'precipitation_outlook', container: 'chart-outlook', meta: 'outlook-meta',
-        colour: '#818cf8', zeroFloor: true, minSpan: 1,
+        series: 'outlook', colour: '#818cf8', zeroFloor: true, minSpan: 1,
         // Named because the card above it draws a different statistic, and two
         // rain charts with unlabelled lines invite the reader to compare them
         // as though they were the same measurement.
@@ -179,6 +179,7 @@ function drawChart(config, block, reference) {
     renderBandChart(container, block.series, {
         ...centreOf(block, config.label),
         unit: block.unit,
+        series: config.series,
         colour: config.colour,
         zeroFloor: config.zeroFloor,
         minSpan: config.minSpan,

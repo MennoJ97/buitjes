@@ -8,7 +8,7 @@ import { fetchHealth, readHealth, describeAge, HEALTH_POLL_MS } from './health.j
 import { applySiteHome } from './site.js';
 import { formatClock } from './time.js';
 import {
-    BASEMAPS, BASEMAP_STORAGE_KEY, OWN_CREDIT,
+    BASEMAPS, OWN_CREDIT, rememberBasemap,
     applyStyleOverrides, labelLayerId, pristineStyle, storedBasemap, styleFor,
 } from './basemap.js';
 
@@ -1020,11 +1020,11 @@ function drawSparkline(canvas, series) {
  * ingestor samples, and inventing a band for an arbitrary pixel would be a lie.
  */
 const TREND_CHARTS = [
-    { key: 'precipitation', label: 'Rainfall', colour: '#3b82f6', zeroFloor: true, minSpan: 1,
+    { key: 'precipitation', label: 'Rainfall', series: 'rain', colour: '#3b82f6', zeroFloor: true, minSpan: 1,
       format: (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1)) },
-    { key: 'temperature', label: 'Temperature', colour: '#f97316', zeroFloor: false, minSpan: 4,
+    { key: 'temperature', label: 'Temperature', series: 'temperature', colour: '#f97316', zeroFloor: false, minSpan: 4,
       format: (v) => v.toFixed(0) },
-    { key: 'wind', label: 'Wind', colour: '#22c55e', zeroFloor: true, minSpan: 4,
+    { key: 'wind', label: 'Wind', series: 'wind', colour: '#22c55e', zeroFloor: true, minSpan: 4,
       format: (v) => v.toFixed(0) },
 ];
 
@@ -1087,6 +1087,7 @@ function renderTrend(document_) {
             // to one drew nothing here while the full page drew the forecast.
             // No fallback label — `config.label` is this card's heading.
             ...centreOf(block),
+            series: config.series,
             colour: config.colour,
             zeroFloor: config.zeroFloor,
             minSpan: config.minSpan,
@@ -1389,11 +1390,7 @@ function setBasemap(name) {
     if (!config) return;
 
     document.body.classList.toggle('theme-light', !!config.lightUi);
-    try {
-        localStorage.setItem(BASEMAP_STORAGE_KEY, name);
-    } catch {
-        // Not being able to remember the choice is not worth an error.
-    }
+    rememberBasemap(name);
 
     if (loadingBasemap) queuedBasemap = name;
     else applyBasemap(name);
