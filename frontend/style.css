@@ -1314,7 +1314,7 @@ body.page-forecast {
 /* .icon-btn's display would otherwise beat the hidden attribute. */
 .theme-toggle[hidden] { display: none; }
 .theme-toggle svg { transition: transform .2s; }
-.theme-toggle[aria-pressed="true"] svg { transform: rotate(180deg); }
+.theme-toggle[data-showing="dark"] svg { transform: rotate(180deg); }
 
 .field-inline { display: flex; align-items: center; gap: 8px; }
 .field-inline > span {

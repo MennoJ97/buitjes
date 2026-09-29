@@ -18,6 +18,13 @@
   <html> before the first paint. Once the DOM is there it fills every
   <button class="theme-toggle" hidden> with the icon and shows it.
 
+  The button is named for what a click does, not for what is showing: "Lichte
+  modus" while the page is dark, "Donkere modus" while it is light. Its
+  tooltip is that same name, and a tooltip stuck on one word read as a switch
+  that never switched. (So no aria-pressed: a label that changes with the
+  state and a pressed state as well would contradict each other.) The theme
+  on screen is in data-showing, for the stylesheet.
+
   A page that bakes colours in at draw time (stonks' canvas and Plotly charts)
   listens for the "themechange" event on window, fired whenever the theme on
   screen changes: the switch, the system flipping, or another tab or site
@@ -35,7 +42,9 @@
   var ICON = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
     '<circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
     '<path d="M8 1.75a6.25 6.25 0 0 1 0 12.5z" fill="currentColor"/></svg>';
-  var LABEL = /^nl\b/.test(root.lang) ? "Donkere modus" : "Dark mode";
+  var LABELS = /^nl\b/.test(root.lang)
+    ? { light: "Lichte modus", dark: "Donkere modus" }
+    : { light: "Light mode", dark: "Dark mode" };
 
   function saved() {
     var m = document.cookie.match(/(?:^|;\s*)theme=(light|dark)(?:;|$)/);
@@ -51,9 +60,12 @@
     else root.removeAttribute("data-theme");
 
     var now = current();
+    var label = LABELS[now === "dark" ? "light" : "dark"];
     var buttons = document.querySelectorAll(".theme-toggle");
     for (var i = 0; i < buttons.length; i++) {
-      buttons[i].setAttribute("aria-pressed", String(now === "dark"));
+      buttons[i].setAttribute("data-showing", now);
+      buttons[i].setAttribute("aria-label", label);
+      buttons[i].title = label;
     }
     if (shown && now !== shown) window.dispatchEvent(new Event("themechange"));
     shown = now;
@@ -73,8 +85,6 @@
       var b = buttons[i];
       b.type = "button";
       b.innerHTML = ICON;
-      b.setAttribute("aria-label", LABEL);
-      b.title = LABEL;
       b.addEventListener("click", toggle);
       b.hidden = false;
     }
