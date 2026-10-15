@@ -207,7 +207,13 @@ document.body.classList.toggle('map-light', !!initialConfig.lightUi);
 onStyleReady(async () => {
     applyStyleOverrides(map, initialConfig, await pristineStyle(initialConfig));
 });
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+// The compass is the reset-north button: a right-drag or a two-finger twist
+// turns the map, and there is otherwise no way back short of a reload.
+// `visualizePitch` makes the same click flatten a ctrl-drag tilt as well.
+map.addControl(
+    new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }),
+    'bottom-right'
+);
 
 // ---------------------------------------------------------------- boot
 
