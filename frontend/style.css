@@ -38,8 +38,9 @@
     --control-bg: rgba(255, 255, 255, 0.06);
     --spinner-track: rgba(255, 255, 255, 0.2);
     --glow: 0 2px 12px rgba(0, 0, 0, 0.7);
-    /* MapLibre's credits glyph is a dark SVG; on a dark chip it is inverted. */
-    --attrib-glyph: invert(1);
+    /* MapLibre's control icons (the credits ⓘ, zoom, compass) are dark SVGs;
+       on dark chrome they are inverted. */
+    --ctrl-glyph: invert(1);
 
     /* Amber: a warning about the data (estimated, fallback, stale). */
     --warn-bg: rgba(245, 158, 11, 0.22);
@@ -120,7 +121,7 @@
         --control-bg: #FFFFFF;
         --spinner-track: rgba(0, 0, 0, 0.15);
         --glow: none;
-        --attrib-glyph: none;
+        --ctrl-glyph: none;
         --warn-bg: rgba(245, 158, 11, 0.18);
         --warn-text: #8A4B00;
         --warn-line: #B87400;
@@ -185,7 +186,7 @@
     --control-bg: #FFFFFF;
     --spinner-track: rgba(0, 0, 0, 0.15);
     --glow: none;
-    --attrib-glyph: none;
+    --ctrl-glyph: none;
     --warn-bg: rgba(245, 158, 11, 0.18);
     --warn-text: #8A4B00;
     --warn-line: #B87400;
@@ -308,12 +309,36 @@ body {
    only the mark is affected. */
 .maplibregl-ctrl-attrib-button {
     background-color: transparent;
-    filter: var(--attrib-glyph);
+    filter: var(--ctrl-glyph);
 }
 
 .maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
     background-color: rgba(0, 0, 0, 0.08);
 }
+
+/* The zoom and compass buttons get the same chip. MapLibre's own group is a
+   fixed white block with #ddd dividers, which in the dark theme was the one
+   bright thing on the page. Inverting the compass keeps its meaning: the north
+   half (#333) becomes the light one, still the half that stands out. */
+.maplibregl-ctrl-group {
+    background: var(--panel-solid);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+.maplibregl-ctrl-group:not(:empty) { box-shadow: none; }
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--border); }
+.maplibregl-ctrl-group .maplibregl-ctrl-icon { filter: var(--ctrl-glyph); }
+.maplibregl-ctrl-group button:not(:disabled):hover { background-color: var(--hover); }
+/* The end buttons follow the chip's corners (its radius less the 1px border),
+   always rather than only on focus as MapLibre does: the hover fill and the
+   focus ring would otherwise draw square corners past the rounded edge. */
+.maplibregl-ctrl-group button:first-child,
+.maplibregl-ctrl-group button:focus:first-child { border-radius: 9px 9px 0 0; }
+.maplibregl-ctrl-group button:last-child,
+.maplibregl-ctrl-group button:focus:last-child { border-radius: 0 0 9px 9px; }
+.maplibregl-ctrl-group button:only-child,
+.maplibregl-ctrl-group button:focus:only-child { border-radius: 9px; }
+.maplibregl-ctrl-group button:focus:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
 
 /* The playback panel covers the bottom corners once it grows near the full
    width of the window, hiding the zoom buttons and the credits behind it.
