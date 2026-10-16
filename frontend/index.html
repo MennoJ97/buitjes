@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <!-- See robots.txt. -->
-    <meta name="robots" content="noindex, nofollow">
+    <!-- Indexed on purpose since 2026-10-16; see robots.txt. The description is
+         what a search result shows under the title. -->
+    <meta name="description" content="Rain radar and a two-hour precipitation forecast for the Netherlands, from KNMI radar data.">
+    <link rel="canonical" href="https://buitjes.mhjansen.nl/">
     <!-- Only the map page, and only because OpenStreetMap's tile servers reject
          requests with no Referer. A reverse proxy sending Referrer-Policy:
          same-origin — a reasonable default, and what this runs behind — strips
@@ -37,6 +39,14 @@
     <!-- Before anything is drawn: applies a saved light/dark choice (the
          switch in the top bar), so the page never flashes the other theme. -->
     <script src="js/family.js"></script>
+    <!-- Tells search engines the site's name (shown above the result instead of the
+         bare host) and what it is. A data block, not a script: CSP script-src does
+         not apply to it. -->
+    <script type="application/ld+json">
+    {"@context": "https://schema.org", "@type": "WebSite", "name": "Buitjes",
+     "url": "https://buitjes.mhjansen.nl/", "inLanguage": "en",
+     "description": "Rain radar and a two-hour precipitation forecast for the Netherlands."}
+    </script>
 </head>
 <body>
     <svg class="icon-sprite" aria-hidden="true" focusable="false">

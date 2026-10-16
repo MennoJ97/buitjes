@@ -1,12 +1,33 @@
-# Deliberately not indexed. This is one person's radar page, not a service
-# anyone should arrive at from a search — and KNMI, Buienradar and the rest
-# already answer that query properly for the people asking it.
-#
-# Paired with <meta name="robots" content="noindex, nofollow"> on both pages.
-# The two are not redundant but they do interact: a Disallow means a crawler
-# never fetches the page, so it never reads the noindex either, and a URL
-# linked from somewhere crawlable can still surface as a bare listing. Here
-# the only public link is from an apex page that is itself Disallow-all, so
-# there is nothing pointing at this from a crawlable source.
-User-agent: *
+# Indexed on purpose since 2026-10-16 (Disallow-all before): a rain radar and
+# forecast for the Netherlands that anyone may find. One of five indexed sites
+# on mhjansen.nl; the rest send X-Robots-Tag: noindex from Traefik.
+
+# AI training crawlers are not welcome; AI *search* crawlers are (OAI-SearchBot,
+# ChatGPT-User, Claude-SearchBot, Claude-User, PerplexityBot and the like fetch
+# a page to cite it in an answer, and fall under * below). Google-Extended and
+# Applebot-Extended are not crawlers but opt-out tokens: Googlebot and Applebot
+# still crawl for search, they just may not use the pages for training.
+# A crawler obeys only the most specific group that names it, so this list is
+# the whole rule for these names. The same list is in the robots.txt of all
+# five indexed sites on mhjansen.nl; keep them in step.
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: anthropic-ai
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: CCBot
+User-agent: meta-externalagent
+User-agent: Bytespider
+User-agent: Amazonbot
+User-agent: cohere-training-data-crawler
 Disallow: /
+
+User-agent: *
+# Not for crawlers: /api/conditions calls a metered upstream API per request,
+# and a ?key= URL carries an API key that must never end up in an index.
+Disallow: /api/conditions
+Disallow: /*?key=
+Disallow: /*&key=
+Allow: /
+
+Sitemap: https://buitjes.mhjansen.nl/sitemap.xml

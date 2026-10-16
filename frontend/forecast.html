@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <!-- See robots.txt. -->
-    <meta name="robots" content="noindex, nofollow">
+    <!-- Not indexed, though the site is (see robots.txt): without a ?location= or
+         ?lat=&lon= this page has nothing to show a stranger (saved locations need a
+         key), and the coordinate URLs are endless. "follow" keeps its links. -->
+    <meta name="robots" content="noindex, follow">
     <!-- For the radar card's OpenStreetMap basemap, the default in light mode:
          OSM's tile servers answer a request with no Referer with a "blocked"
          tile, and the proxy's Referrer-Policy: same-origin strips it. Same fix
