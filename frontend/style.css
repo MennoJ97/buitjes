@@ -411,6 +411,9 @@ button { font: inherit; }
     text-shadow: var(--glow);
 }
 .brand-mark { width: 28px; height: 26px; color: var(--accent); flex: none; }
+/* The name is the page's <h1> (index.html); drop the heading's own size and
+   margins so it sets exactly like the rest of the line. */
+.brand-name { margin: 0; font: inherit; letter-spacing: inherit; }
 /* Classes, not style="" attributes: the CSP here is style-src 'self', which
    blocks inline styles, and the two lighter streaks silently lost their colour. */
 .brand-mark .rain-1 { stroke: var(--rain-1); }
