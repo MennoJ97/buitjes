@@ -591,6 +591,7 @@ function updateScaleTitle(showingBand) {
 async function setBand(band) {
     if (band === currentBand) return;
     currentBand = band;
+    window.umami?.track('band', { band });
     for (const option of el.pctSwitch.querySelectorAll('.pct-option')) {
         const active = option.dataset.band === band;
         option.classList.toggle('is-active', active);
@@ -1490,8 +1491,11 @@ el.infoBtn.addEventListener('click', () => (aboutIsOpen() ? closeAbout() : openA
 el.aboutClose.addEventListener('click', closeAbout);
 el.trendClose.addEventListener('click', closeTrend);
 el.trendToggle.addEventListener('change', () => {
-    if (el.trendToggle.checked) openTrend();
-    else closeTrend();
+    if (el.trendToggle.checked) {
+        // Umami (the /_u/ tag in index.html); a no-op where it is blocked or absent.
+        window.umami?.track('trend-open');
+        openTrend();
+    } else closeTrend();
 });
 el.aboutBackdrop.addEventListener('click', closeAbout);
 
@@ -1502,7 +1506,9 @@ el.collapseBtn.addEventListener('click', () => {
 });
 
 el.locateBtn.addEventListener('click', () => {
+    // The outcome only: never the position, which is somebody's home.
     if (!navigator.geolocation) {
+        window.umami?.track('geolocate', { result: 'unsupported' });
         showBanner('This browser cannot share a location.', false);
         return;
     }
@@ -1510,12 +1516,14 @@ el.locateBtn.addEventListener('click', () => {
     navigator.geolocation.getCurrentPosition(
         (position) => {
             el.locateBtn.classList.remove('is-busy');
+            window.umami?.track('geolocate', { result: 'ok' });
             const lngLat = new maplibregl.LngLat(position.coords.longitude, position.coords.latitude);
             map.easeTo({ center: lngLat, zoom: Math.max(map.getZoom(), 8) });
             inspect(lngLat);
         },
         () => {
             el.locateBtn.classList.remove('is-busy');
+            window.umami?.track('geolocate', { result: 'failed' });
             showBanner('Could not get your location.', false);
         },
         { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
@@ -1524,6 +1532,8 @@ el.locateBtn.addEventListener('click', () => {
 
 map.on('click', (event) => {
     closePopovers();
+    // The other way to pick a place, against `geolocate` above. No coordinates.
+    window.umami?.track('location-pick', { via: 'map' });
     inspect(event.lngLat);
     if (!el.trendPanel.hidden) openTrend(event.lngLat);
 });

@@ -482,6 +482,9 @@ async function boot() {
     select.addEventListener('change', () => {
         const name = select.value;
         if (!name && !request.coords) return;
+        // Umami (the /_u/ tag in forecast.html). Not the name: the published
+        // locations are a key-holder's own (Home, Work).
+        window.umami?.track('location-pick', { via: 'list' });
         load(name ? { name } : { coords: request.coords }, { explicit: true });
     });
 }
