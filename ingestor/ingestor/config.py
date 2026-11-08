@@ -70,6 +70,7 @@ class Config:
     stall_webhook: str
     stall_format: str
     stall_auth: str
+    verify_dir: str = ''
 
     @classmethod
     def from_env(cls) -> 'Config':
@@ -297,4 +298,8 @@ class Config:
             stall_format=stall_format,
             stall_auth=(os.environ.get('STALL_WEBHOOK_AUTH', '').strip()
                         or os.environ.get('ALERT_WEBHOOK_AUTH', '').strip()),
+            # Where forecast verification keeps its record. Empty switches it
+            # off. Outside FRAME_DIR on purpose: everything in there can be
+            # downloaded again, and this can't. See ingestor/verify.py.
+            verify_dir=os.environ.get('VERIFY_DIR', '').strip(),
         )

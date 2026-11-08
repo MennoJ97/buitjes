@@ -25,6 +25,7 @@ import re
 import tempfile
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -48,6 +49,7 @@ from .alerts import (
 )
 from .conditions import ATTRIBUTION as CONDITIONS_ATTRIBUTION, ConditionsSource
 from .raster import MercatorResampler, StereographicResampler, TargetGrid
+from . import verify
 
 log = logging.getLogger('ingestor')
 
@@ -384,6 +386,9 @@ def build_from_source(source, config: Config, conditions=None, alert_runner=None
             for location in extractor.locations
         ],
     }
+    # Last, once every frame of the cycle is on disk: from here on its frames
+    # are held back from pruning until the radar has scored them.
+    verify.record_cycle(config, source, meta, frames, extractor)
     return frames, meta, resampler.target
 
 
@@ -725,14 +730,46 @@ def publish_measured_history(config: Config, grid: TargetGrid, reference_time: i
 # ------------------------------------------------------------------ retention
 
 
-def prune(config: Config, keep_references: set[int], reference_time: int) -> None:
-    oldest_observed = reference_time - config.history_minutes * 60 - OBSERVED_GRACE_SECONDS
+def observable_since(config: Config, reference_time: int) -> int:
+    """The oldest moment a radar frame can still be fetched for.
+
+    :func:`fetch_observed` only looks inside the history window, so a moment
+    older than this that has no frame on disk will never get one.
+    """
+    return reference_time - config.history_minutes * 60 - OBSERVED_GRACE_SECONDS
+
+
+def oldest_observed_time(config: Config, reference_time: int) -> int:
+    """The oldest observed frame :func:`prune` keeps.
+
+    With verification on that is six hours back, not one. The radar at a
+    cycle's own reference time is the "nothing moves" forecast its scores are
+    compared against, and the cycle's last lead is six hours out. It is about
+    a megabyte of small frames, and every reader except verification only looks
+    inside the history window, so the extra frames are never published.
+    """
+    since = observable_since(config, reference_time)
+    if verify.enabled(config):
+        since = min(since, reference_time - verify.OBSERVED_KEEP_SECONDS)
+    return since
+
+
+def prune(config: Config, keep_references: set[int], reference_time: int,
+          hold=frozenset()) -> None:
+    """Remove frames nothing will read again.
+
+    ``hold`` is a set of ``(reference, valid)`` forecast frames to keep past
+    their cycle, because verification has not scored them yet. Their spread
+    frames are held too.
+    """
+    oldest_observed = oldest_observed_time(config, reference_time)
     removed = 0
     for entry in os.listdir(config.frame_dir):
         forecast = FORECAST_PATTERN.match(entry) or SPREAD_PATTERN.match(entry)
         observed = OBSERVED_PATTERN.match(entry)
         stale = (
-            (forecast and int(forecast.group(1)) not in keep_references)
+            (forecast and int(forecast.group(1)) not in keep_references
+             and (int(forecast.group(1)), int(forecast.group(2))) not in hold)
             or (observed and int(observed.group(1)) < oldest_observed)
         )
         if stale:
@@ -743,6 +780,21 @@ def prune(config: Config, keep_references: set[int], reference_time: int) -> Non
                 pass
     if removed:
         log.info('pruned %d stale frames', removed)
+
+
+def existing_forecast_frames(config: Config) -> set[tuple[int, int]]:
+    """Every ``(reference, valid)`` forecast frame on disk, current or held."""
+    found = set()
+    for entry in os.listdir(config.frame_dir):
+        match = FORECAST_PATTERN.match(entry)
+        if match:
+            found.add((int(match.group(1)), int(match.group(2))))
+    return found
+
+
+#: How :mod:`ingestor.verify` finds a frame, without importing this module.
+FRAME_NAMES = SimpleNamespace(forecast=forecast_frame_name, spread=spread_frame_name,
+                              observed=observed_frame_name)
 
 
 def known_reference_times(config: Config) -> set[int]:
@@ -1193,8 +1245,17 @@ def update_observed(client: KnmiClient, config: Config, state: State) -> None:
         # measured half can be out of date.
         publish_measured_history(config, state.grid, reference_time)
 
+    # Before pruning, and every poll: a new radar frame is what scores the
+    # forecasts that predicted it, and only a scored frame is free to go.
+    hold = set()
+    if verify.enabled(config):
+        forecasts = existing_forecast_frames(config)
+        verify.verify_observed(config, state.grid, forecasts,
+                               existing_observed_times(config), FRAME_NAMES)
+        hold = verify.pending(config, forecasts, observable_since(config, reference_time))
+
     keep = sorted(known_reference_times(config), reverse=True)[: config.keep_cycles]
-    prune(config, set(keep), reference_time)
+    prune(config, set(keep), reference_time, hold)
 
 
 def build_listener(config: Config):
@@ -1239,6 +1300,13 @@ def main() -> None:
              config.dataset, config.version, config.frame_dir,
              config.history_minutes, config.observed_dataset,
              'notification service' if listener else 'scheduled polling')
+    if verify.enabled(config):
+        if config.history_minutes > 0:
+            log.info('verification: scoring forecasts against the radar into %s',
+                     config.verify_dir)
+        else:
+            log.warning('verification: VERIFY_DIR is set but HISTORY_MINUTES is 0, '
+                        'so there is no radar to score against')
     if config.widget_locations:
         log.info('point forecasts for %s; conditions: %s',
                  ', '.join(l.name for l in config.widget_locations),

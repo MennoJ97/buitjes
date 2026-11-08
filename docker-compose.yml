@@ -38,8 +38,14 @@ services:
       # time two hours in the past and reads as a stale notification.
       # A bind-mounted /etc/localtime would NOT fix this on its own.
       TZ: ${TZ:-Europe/Amsterdam}
+      # Forecast verification, off unless set. See .env.example.
+      VERIFY_DIR: ${VERIFY_DIR:-}
     volumes:
       - frames:/data
+      # The verification record. A named volume by default; set VERIFY_HOST_DIR
+      # to a directory your backups cover, because unlike the frames this one
+      # cannot be fetched again.
+      - ${VERIFY_HOST_DIR:-verification}:/verify
     # One cycle holds all 20 members of a single 5-minute step at once
     # (20 x 780 x 780 float32), then drops them; the arrays never stack up
     # across steps. The exception is a step KNMI published without an ensemble
@@ -218,6 +224,8 @@ volumes:
   # every frame in here is re-fetched from KNMI within one cycle, and the point
   # documents are rewritten each cycle too. Nothing in it is worth restoring.
   frames:
+  # Only used when VERIFY_HOST_DIR is unset.
+  verification:
 
 networks:
   proxy:

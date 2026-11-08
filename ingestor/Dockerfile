@@ -23,8 +23,8 @@ COPY ingestor/ ./
 #   docker compose up -d
 RUN groupadd --system --gid 10001 buitjes \
     && useradd --system --uid 10001 --gid 10001 --no-create-home buitjes \
-    && mkdir -p /data \
-    && chown buitjes:buitjes /data
+    && mkdir -p /data /verify \
+    && chown buitjes:buitjes /data /verify
 USER buitjes
 
 # /app belongs to root and is not writable now, which is the point - but it does

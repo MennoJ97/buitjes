@@ -71,6 +71,13 @@ as twitchy as convective rain is a number that will be wrong.
   and all. It says `out_of_coverage` rather than a confident line of zeros once
   you leave the radar's domain.
 - **Five basemaps**, dark through high-contrast, none needing an API key.
+- **A record of how good it was** (opt-in, `VERIFY_DIR`). Every forecast is
+  scored against the radar that later measured the same moment, so over time
+  you can see how far ahead it can be trusted: hit rates and a fractions skill
+  score per lead time, whether the band's p10 and p90 are breached as often as
+  they should be, and the same for the probabilities at your own locations.
+  Each score sits beside persistence, so months can be compared on how much
+  the forecast added rather than on how hard their weather was.
 
 ![The forecast detail page: the looping radar, and ensemble spread on every series](docs/images/forecast.png)
 
@@ -160,6 +167,22 @@ everywhere else in this app too.
 linearly *in Web Mercator space*. KNMI's grid is regular in latitude, and
 latitude is not linear in Mercator, so handing the grid over unchanged would
 misplace rain by kilometres away from the middle of the domain.
+
+**Keeping score.** Each radar frame that lands is compared with every forecast
+frame still on disk that predicted that moment. That is one per cycle from the
+last six hours, so one observation scores every lead time at once. Only the
+scores are kept, in a SQLite file outside the frames volume, and every column
+is a sum rather than a ratio, so a month of rows adds up into one honest
+number instead of an average of averages. The band is checked by putting the
+radar through the same neighbourhood maximum the band was built over, and
+comparing in the band's own byte encoding. Without that, a calibrated band
+would read as too narrow. Every row also scores persistence, the radar at the
+moment the forecast was made held still, over the same pixels. A July of
+showers will always score below a January of rain bands, and only the gap over
+persistence says whether the forecast itself did worse. A forecast frame is
+kept on disk until it has been scored, and a radar frame for six hours, so the
+extra disk this costs stays at about 100 MB. `python -m ingestor.verify`
+prints skill by lead time; `--by month` puts the months side by side.
 
 ## Running it
 
