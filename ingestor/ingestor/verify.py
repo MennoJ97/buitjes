@@ -80,6 +80,17 @@ FSS_WINDOWS = (5, 25)
 #: this has nothing left that a new observation could score.
 MAX_LEAD_SECONDS = 7 * 3600
 
+def is_forecast(reference: int, valid: int) -> bool:
+    """Whether a frame predicts anything at all.
+
+    The stand-in publishes a step at its own reference time (lead 0). That is
+    the radar picture it started from, not a forecast: scored, it comes out
+    near perfect and props up the shortest lead. The primary's first step is
+    normally +5 min, but the same rule holds for it.
+    """
+    return valid > reference
+
+
 #: How long radar frames stay on disk while verifying: the longest lead plus
 #: half an hour. The radar at a cycle's reference time is that cycle's
 #: persistence forecast, so it has to outlive the cycle's last lead.
@@ -202,6 +213,8 @@ def record_cycle(config, source, meta: dict, frames: list, extractor) -> None:
     if extractor:
         for index, location in enumerate(extractor.locations):
             for entry in extractor.series_for(index):
+                if not is_forecast(reference_time, entry['t']):
+                    continue
                 lead = (entry['t'] - reference_time) // 60
                 rows.append((
                     location.name, reference_time, lead,
@@ -279,7 +292,8 @@ def pending(config, forecast_frames, cutoff: int) -> set:
         log.warning('verification: could not read pending frames (%s)', error)
         return set()
     return {(reference, valid) for reference, valid in forecast_frames
-            if reference in tracked and valid >= cutoff and (reference, valid) not in scored}
+            if reference in tracked and valid >= cutoff and is_forecast(reference, valid)
+            and (reference, valid) not in scored}
 
 
 # ------------------------------------------------------------------ scoring
@@ -316,6 +330,7 @@ def verify_observed(config, grid, forecast_frames, observed_times, names) -> int
             waiting = {}
             for reference, valid in forecast_frames:
                 if (valid in observed_times and reference in cycles
+                        and is_forecast(reference, valid)
                         and (reference, valid) not in scored):
                     waiting.setdefault(valid, []).append(reference)
 
@@ -681,7 +696,7 @@ def _field_buckets(db, start, end, fallback, group='NULL'):
     rows = db.execute(f"""
         SELECT {group}, f.lead_min, {', '.join(_FIELD_SUMS[name] for name in names)}
         FROM field_scores f JOIN cycles c USING (reference_time)
-        WHERE f.reference_time >= ? AND f.reference_time < ? {fallback}
+        WHERE f.reference_time >= ? AND f.reference_time < ? AND f.lead_min > 0 {fallback}
         GROUP BY 1, 2""", (start, end)).fetchall()
     out = {}
     for key, lead, *values in rows:
@@ -769,7 +784,7 @@ def report(directory: str, days: float | None = 30.0, products: str = 'primary',
         cycles = db.execute(
             f'SELECT COUNT(DISTINCT reference_time) FROM field_scores f JOIN cycles c '
             f'USING (reference_time) WHERE f.reference_time >= ? AND f.reference_time < ? '
-            f'{fallback}', (start, end)).fetchone()[0]
+            f'AND f.lead_min > 0 {fallback}', (start, end)).fetchone()[0]
         print(f'Whole map, {scope} ({cycles} cycles).', file=out)
         print('Scores at 1 mm/h; CSI@0.1 at the bottom of the colour ramp. '
               'p = persistence.', file=out)
@@ -879,7 +894,8 @@ def _report_points(db, start, end, fallback, out):
           ON o.location = f.location AND o.valid_time = f.reference_time + f.lead_min * 60
         LEFT JOIN point_observed earlier
           ON earlier.location = f.location AND earlier.valid_time = f.reference_time
-        WHERE f.reference_time >= ? AND f.reference_time < ? {fallback}""",
+        WHERE f.reference_time >= ? AND f.reference_time < ? AND f.lead_min > 0
+          {fallback}""",
                       (start, end)).fetchall()
     if not rows:
         return

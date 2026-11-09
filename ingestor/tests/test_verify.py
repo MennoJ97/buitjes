@@ -217,7 +217,10 @@ def test_switchover():
         # The stand-in puts the patch ten pixels east: 400 hits, 200 each way.
         write(cfg, m.forecast_frame_name(REF, valid),
               encode_frame(field(2.0, (slice(30, 50), slice(50, 80))), MAX))
-        record(cfg, REF, (5, 60), spread=False, fallback=True)
+        # And a step at its own reference time, which is the radar it started
+        # from rather than a forecast.
+        write(cfg, m.forecast_frame_name(REF, REF), encode_frame(field(2.0, rain), MAX))
+        record(cfg, REF, (0, 5, 60), spread=False, fallback=True)
 
         db = sqlite3.connect(os.path.join(store, v.DB_NAME))
         hits = lambda: db.execute('SELECT hits_t1, band_pixels FROM field_scores').fetchall()
@@ -225,7 +228,16 @@ def test_switchover():
 
         v.verify_observed(cfg, GRID, m.existing_forecast_frames(cfg), {REF, valid},
                           m.FRAME_NAMES)
-        check('the stand-in is scored, with no band', hits() == [(400, None)], hits())
+        check('the stand-in is scored, with no band, and lead 0 is not',
+              hits() == [(400, None)], hits())
+        check('lead 0 is not held back from pruning',
+              (REF, REF) not in v.pending(cfg, m.existing_forecast_frames(cfg), REF - 3600))
+        check('lead 0 is not recorded for the locations', db.execute(
+            'SELECT COUNT(*) FROM point_forecast WHERE lead_min = 0').fetchone()[0] == 0)
+        # A lead-0 row as the first deployment wrote them: the report skips it.
+        db.execute('INSERT INTO field_scores (reference_time, lead_min, scored_at, measured, '
+                   'hits_t1, misses_t1, false_alarms_t1) VALUES (?, 0, 0, 1, 1, 0, 0)', (REF,))
+        db.commit()
 
         def text(products):
             out = io.StringIO()
@@ -233,12 +245,16 @@ def test_switchover():
             return out.getvalue()
         check('--fallback-only shows the stand-in', '≤5m' in text('fallback')
               and 'stand-in only' in text('fallback'), text('fallback'))
+        five = [line for line in text('fallback').splitlines() if line.strip().startswith('≤5m')]
+        check('the report leaves out the old lead-0 row', five and five[0].split()[1] == '1',
+              five)
         check('the default report leaves the stand-in out',
               'no scored forecasts' in text('primary'), text('primary'))
         check('--include-fallback counts it', '≤5m' in text('all'), text('all'))
 
-        record(cfg, REF, (5, 60), spread=False, fallback=True)
-        check('rebuilding the stand-in keeps its scores', hits() == [(400, None)], hits())
+        record(cfg, REF, (0, 5, 60), spread=False, fallback=True)
+        check('rebuilding the stand-in keeps its scores',
+              sorted(hits()) == [(1, None), (400, None)], hits())
 
         # The primary's first cycle back lands on the same reference time and
         # overwrites the frame. It forecasts the patch exactly.
