@@ -213,13 +213,33 @@ def record_cycle(config, source, meta: dict, frames: list, extractor) -> None:
                     _centi(entry.get('nearby_p90')),
                     1 if entry.get('estimated') else 0,
                 ))
+    fallback = 1 if getattr(source, 'is_fallback', False) else 0
     try:
         with closing(connect(config.verify_dir)) as db, db:
+            previous = db.execute('SELECT fallback FROM cycles WHERE reference_time = ?',
+                                  (reference_time,)).fetchone()
+            if previous is not None and previous[0] != fallback:
+                # The other product already published this reference time. Both
+                # run on the same 5-minute clock, so the primary's first cycle
+                # after an outage can land on the stand-in's last one, and its
+                # frames have just overwritten the stand-in's files of the same
+                # name. Whatever was scored from those files belongs to the
+                # other product, and keeping it under this row's flag would
+                # count it as this one. It is dropped instead. The radar frames
+                # are still on disk, so the next pass scores the same leads
+                # again from the frames now there.
+                dropped = db.execute('DELETE FROM field_scores WHERE reference_time = ?',
+                                     (reference_time,)).rowcount
+                db.execute('DELETE FROM point_forecast WHERE reference_time = ?',
+                           (reference_time,))
+                log.info('verification: cycle %d is now %s; dropped %d scores from the %s',
+                         reference_time, 'the stand-in' if fallback else 'the primary',
+                         dropped, 'primary' if fallback else 'stand-in')
             db.execute(
                 'INSERT OR REPLACE INTO cycles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (reference_time, int(time.time()),
                  getattr(source, 'dataset_label', None) or config.dataset,
-                 1 if getattr(source, 'is_fallback', False) else 0,
+                 fallback,
                  getattr(source, 'member_count', None), meta.get('reducer'),
                  float(config.max_precip),
                  getattr(extractor, 'neighbourhood_km', None) if extractor else None,
@@ -680,13 +700,26 @@ def _fss(num, den):
     return 1 - num / den if den else None
 
 
-def report(directory: str, days: float | None = 30.0, include_fallback: bool = False,
+#: Which cycles a report covers, as the SQL that picks them out.
+PRODUCTS = {
+    'primary': ('AND c.fallback = 0', ''),
+    'all': ('', ', stand-in included'),
+    'fallback': ('AND c.fallback = 1', ', stand-in only'),
+}
+
+
+def report(directory: str, days: float | None = 30.0, products: str = 'primary',
            month: str | None = None, by_month: bool = False, out=sys.stdout) -> None:
     """Print skill by lead time, for the map and for each location.
 
     ``month`` (``YYYY-MM``) narrows it to one calendar month. ``by_month``
     prints one summary line per month instead, over ``days`` if given and over
     everything otherwise. Months are in the container's local time zone.
+
+    ``products`` picks the cycles: ``primary`` (the default), ``fallback`` for
+    the deterministic stand-in alone, or ``all``. The stand-in is one run with
+    no spread layer, so its band columns read "–" and its location
+    probabilities are only ever 0 or 100%.
 
     How to read it:
 
@@ -714,7 +747,7 @@ def report(directory: str, days: float | None = 30.0, include_fallback: bool = F
     if not os.path.exists(path):
         print(f'no verification data at {path}', file=out)
         return
-    fallback = '' if include_fallback else 'AND c.fallback = 0'
+    fallback, scope_note = PRODUCTS[products]
     if month:
         start, end = _month_range(month)
         scope = f'{month}'
@@ -722,8 +755,7 @@ def report(directory: str, days: float | None = 30.0, include_fallback: bool = F
         start, end, scope = 0, 2 ** 62, 'all data'
     else:
         start, end, scope = int(time.time() - days * 86400), 2 ** 62, f'last {days:g} days'
-    if include_fallback:
-        scope += ', fallback included'
+    scope += scope_note
 
     db = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
     with closing(db):
@@ -945,8 +977,13 @@ def main(argv=None) -> None:
                       help='one calendar month in full, instead of the last N days')
     when.add_argument('--by', choices=['month'],
                       help='one summary line per month, to compare months')
-    parser.add_argument('--include-fallback', action='store_true',
-                        help='also score cycles from the deterministic stand-in')
+    product = parser.add_mutually_exclusive_group()
+    product.add_argument('--include-fallback', dest='products', action='store_const',
+                         const='all', default='primary',
+                         help='also count cycles from the deterministic stand-in')
+    product.add_argument('--fallback-only', dest='products', action='store_const',
+                         const='fallback',
+                         help='only the stand-in, to see what an outage costs')
     args = parser.parse_args(argv)
     if not args.dir:
         parser.error('no directory: pass --dir or set VERIFY_DIR')
@@ -958,7 +995,7 @@ def main(argv=None) -> None:
         if args.days is not None:
             parser.error('--month and --days do not combine')
     days = args.days if args.days is not None or args.by or args.month else 30.0
-    report(args.dir, days, args.include_fallback, month=args.month, by_month=bool(args.by))
+    report(args.dir, days, args.products, month=args.month, by_month=bool(args.by))
 
 
 if __name__ == '__main__':

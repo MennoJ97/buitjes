@@ -72,8 +72,8 @@ def series(reference, leads):
             for lead in leads]
 
 
-def record(cfg, reference, leads, spread=True):
-    source = SimpleNamespace(member_count=20, is_fallback=False)
+def record(cfg, reference, leads, spread=True, fallback=False):
+    source = SimpleNamespace(member_count=1 if fallback else 20, is_fallback=fallback)
     meta = {'reference_time': reference, 'reducer': 'pmm',
             'spread': {'radius_km': 3.0, 'downsample': 2} if spread else None}
     frames = [{'t': reference + lead * 60} for lead in leads]
@@ -206,6 +206,59 @@ def test_pairing_and_retention():
               out.getvalue())
 
 
+def test_switchover():
+    print('primary taking over a reference time from the stand-in')
+    with tempfile.TemporaryDirectory() as frames, tempfile.TemporaryDirectory() as store:
+        cfg = config(frames, store)
+        rain = (slice(30, 50), slice(40, 70))
+        valid = REF + 300
+        write(cfg, m.observed_frame_name(REF), encode_frame(field(2.0, rain), MAX))
+        write(cfg, m.observed_frame_name(valid), encode_frame(field(2.0, rain), MAX))
+        # The stand-in puts the patch ten pixels east: 400 hits, 200 each way.
+        write(cfg, m.forecast_frame_name(REF, valid),
+              encode_frame(field(2.0, (slice(30, 50), slice(50, 80))), MAX))
+        record(cfg, REF, (5, 60), spread=False, fallback=True)
+
+        db = sqlite3.connect(os.path.join(store, v.DB_NAME))
+        hits = lambda: db.execute('SELECT hits_t1, band_pixels FROM field_scores').fetchall()
+        flag = lambda: db.execute('SELECT fallback FROM cycles').fetchall()
+
+        v.verify_observed(cfg, GRID, m.existing_forecast_frames(cfg), {REF, valid},
+                          m.FRAME_NAMES)
+        check('the stand-in is scored, with no band', hits() == [(400, None)], hits())
+
+        def text(products):
+            out = io.StringIO()
+            v.report(store, days=None, products=products, out=out)
+            return out.getvalue()
+        check('--fallback-only shows the stand-in', '≤5m' in text('fallback')
+              and 'stand-in only' in text('fallback'), text('fallback'))
+        check('the default report leaves the stand-in out',
+              'no scored forecasts' in text('primary'), text('primary'))
+        check('--include-fallback counts it', '≤5m' in text('all'), text('all'))
+
+        record(cfg, REF, (5, 60), spread=False, fallback=True)
+        check('rebuilding the stand-in keeps its scores', hits() == [(400, None)], hits())
+
+        # The primary's first cycle back lands on the same reference time and
+        # overwrites the frame. It forecasts the patch exactly.
+        write(cfg, m.forecast_frame_name(REF, valid), encode_frame(field(2.0, rain), MAX))
+        record(cfg, REF, (5, 10))
+        check('the cycle is now the primary', flag() == [(0,)], flag())
+        check("the stand-in's scores are dropped, not relabelled", hits() == [], hits())
+        leads = [row[0] for row in db.execute(
+            'SELECT lead_min FROM point_forecast ORDER BY lead_min')]
+        check("the stand-in's hourly lead is gone from the location rows",
+              leads == [5, 10], leads)
+
+        scored = v.verify_observed(cfg, GRID, m.existing_forecast_frames(cfg),
+                                   {REF, valid}, m.FRAME_NAMES)
+        check("the same lead is scored again, from the primary's frame",
+              scored == 1 and hits()[0][0] == 600, (scored, hits()))
+        check('--fallback-only is empty now', 'no scored forecasts' in text('fallback'),
+              text('fallback'))
+
+
 def test_retention():
     print('radar retention')
     with tempfile.TemporaryDirectory() as frames, tempfile.TemporaryDirectory() as store:
@@ -272,6 +325,7 @@ def test_band():
 if __name__ == '__main__':
     test_scores()
     test_pairing_and_retention()
+    test_switchover()
     test_retention()
     test_band()
     if failures:
