@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Listed in robots.txt. The map page and the accuracy page: forecast.html is
-     noindex. No <lastmod> by hand; see CLAUDE.md. -->
+     noindex. <lastmod> is each page's last commit date, written at commit time
+     by .githooks/stamp_sitemap.py: never type one in by hand. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://buitjes.mhjansen.nl/</loc></url>
-  <url><loc>https://buitjes.mhjansen.nl/accuracy.html</loc></url>
+  <url><loc>https://buitjes.mhjansen.nl/</loc><lastmod>2026-11-17</lastmod></url>
+  <url><loc>https://buitjes.mhjansen.nl/accuracy.html</loc><lastmod>2026-11-17</lastmod></url>
 </urlset>
