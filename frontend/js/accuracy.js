@@ -21,7 +21,22 @@ const SERIES = {
     persistence: { label: 'Persistence', cls: 'acc-s-baseline', dashed: true },
     above: { label: 'Above High (p90)', short: 'Above High', cls: 'acc-s-above' },
     below: { label: 'Below Low (p10)', short: 'Below Low', cls: 'acc-s-below' },
+    // The FSS chart draws two square sizes. Colour still says forecast or
+    // persistence; the size is a thinner line and hollow dots, and its name.
+    forecast25: { label: 'Forecast, 25 km', short: 'Forecast 25 km', cls: 'acc-s-forecast' },
+    persistence25: { label: 'Persistence, 25 km', short: 'Persist. 25 km', cls: 'acc-s-baseline', dashed: true },
+    forecast5: { label: 'Forecast, 5 km', short: 'Forecast 5 km', cls: 'acc-s-forecast', fine: true },
+    persistence5: {
+        label: 'Persistence, 5 km', short: 'Persist. 5 km', cls: 'acc-s-baseline', dashed: true, fine: true,
+    },
 };
+
+function swatchClass(meta) {
+    return `acc-swatch ${meta.cls}${meta.dashed ? ' acc-swatch--dashed' : ''}${meta.fine ? ' acc-swatch--fine' : ''}`;
+}
+
+/** Whether a series has anything to draw. */
+const hasData = (s) => s.values.some((value) => value != null);
 
 /** Ticks for the lead-time axis, in minutes. */
 const LEAD_TICKS = [5, 15, 30, 60, 120, 180, 360];
@@ -125,7 +140,9 @@ function lineChart(container, options) {
     container.replaceChildren();
     const width = Math.max(260, container.clientWidth);
     const height = fixedHeight || Math.max(200, Math.min(280, Math.round(width * 0.42)));
-    const labelRoom = bars ? 8 : 84;
+    // The same right margin for bars as for lines, even though bars have no end
+    // labels: a bar chart stacked under a line chart has to share its x axis.
+    const labelRoom = 96;
     const pad = { top: 12, right: labelRoom, bottom: 26, left: 40 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
@@ -139,8 +156,10 @@ function lineChart(container, options) {
         const [lo, hi] = [Math.log(xs[0]), Math.log(xs[xs.length - 1])];
         x = (v) => pad.left + ((Math.log(v) - lo) / (hi - lo || 1)) * plotWidth;
     } else {
-        const step = plotWidth / Math.max(1, xs.length - (bars ? 0 : 1));
-        x = (v) => pad.left + (bars ? (v + 0.5) * step : v * step);
+        // Categories (days) sit in the middle of equal slots, for lines and bars
+        // alike, so day i lands at the same x in both of the daily charts.
+        const step = plotWidth / Math.max(1, xs.length);
+        x = (v) => pad.left + (v + 0.5) * step;
     }
 
     const svg = el('svg', { width, height, viewBox: `0 0 ${width} ${height}` }, container);
@@ -182,12 +201,19 @@ function lineChart(container, options) {
             });
         }
     } else {
-        for (const s of series) {
+        for (const s of series.filter(hasData)) {
             const meta = SERIES[s.key];
             const points = s.values.map((v, i) => (v == null ? null : [x(xs[i]), y(Math.max(yMin, Math.min(top, v)))]));
-            el('path', { d: linePath(points), class: `acc-line ${meta.cls}${meta.dashed ? ' acc-line--dashed' : ''}` }, svg);
+            el('path', {
+                d: linePath(points),
+                class: `acc-line ${meta.cls}${meta.dashed ? ' acc-line--dashed' : ''}${meta.fine ? ' acc-line--fine' : ''}`,
+            }, svg);
             for (const point of points) {
-                if (point) el('circle', { cx: point[0], cy: point[1], r: 3.5, class: `acc-dot ${meta.cls}` }, svg);
+                if (!point) continue;
+                el('circle', {
+                    cx: point[0], cy: point[1], r: meta.fine ? 3 : 3.5,
+                    class: `acc-dot ${meta.cls}${meta.fine ? ' acc-dot--hollow' : ''}`,
+                }, svg);
             }
             const last = [...points].reverse().find(Boolean);
             if (last) ends.push({ y: last[1], x: last[0], text: meta.short || meta.label, cls: 'acc-end-label' });
@@ -266,11 +292,11 @@ function attachHover(container, svg, geometry) {
         crosshair.setAttribute('visibility', 'visible');
 
         tooltip.replaceChildren(html('span', 'tip-time', tipTitle(index)));
-        for (const s of series) {
+        for (const s of series.filter(hasData)) {
             const meta = SERIES[s.key] || { label: s.label, cls: s.cls };
             const row = html('span', 'tip-band');
             const name = html('i', null);
-            name.append(html('b', `acc-swatch ${meta.cls}${meta.dashed ? ' acc-swatch--dashed' : ''}`), meta.label || s.label);
+            name.append(html('b', swatchClass(meta)), meta.label || s.label);
             row.append(name, document.createTextNode(yFormat(s.values[index])));
             tooltip.append(row);
         }
@@ -308,13 +334,15 @@ function table(target, head, rows) {
 
 // ------------------------------------------------------------ the page
 
-function legends() {
+/** Fill every `[data-legend]`, leaving out series in `empty` (nothing to draw). */
+function legends(empty = new Set()) {
     for (const node of document.querySelectorAll('[data-legend]')) {
         node.replaceChildren();
         for (const key of node.dataset.legend.split(' ')) {
+            if (empty.has(key)) continue;
             const meta = SERIES[key];
             const item = html('span', 'acc-legend-item');
-            item.append(html('b', `acc-swatch ${meta.cls}${meta.dashed ? ' acc-swatch--dashed' : ''}`), meta.label);
+            item.append(html('b', swatchClass(meta)), meta.label);
             node.append(item);
         }
     }
@@ -328,9 +356,18 @@ function draw(data) {
     const leadTitle = (index) => `+${formatLead(xs[index])}`;
     const leadAxis = { xs, xTicks: leadTicks, xTickLabel: formatLead, tipTitle: leadTitle };
 
+    // p_fss5 arrived after the first summaries were written; an older summary
+    // simply has no persistence line at 5 km, and the legend leaves it out.
+    const fss = [
+        { key: 'forecast25', values: pick('fss25') },
+        { key: 'persistence25', values: pick('p_fss25') },
+        { key: 'forecast5', values: pick('fss5') },
+        { key: 'persistence5', values: pick('p_fss5') },
+    ];
+    legends(new Set(fss.filter((s) => !hasData(s)).map((s) => s.key)));
     lineChart(document.getElementById('chart-fss'), {
         ...leadAxis, yMax: 1,
-        series: [{ key: 'forecast', values: pick('fss25') }, { key: 'persistence', values: pick('p_fss25') }],
+        series: fss,
         refs: [{ y: data.definitions.useful_fss, label: 'useful' }],
     });
     lineChart(document.getElementById('chart-csi'), {
@@ -357,8 +394,10 @@ function draw(data) {
     lineChart(document.getElementById('chart-daily'), {
         xs: dayIndex, xScale: 'linear', xTicks: dayTicks, xTickLabel: dayLabel, tipTitle: dayTitle, yMax: 1,
         series: [
-            { key: 'forecast', values: days.map((day) => day.h1?.fss25 ?? null) },
-            { key: 'persistence', values: days.map((day) => day.h1?.p_fss25 ?? null) },
+            // 5 km rather than 25: whether rain reaches your town, not just your
+            // region, is the question a day's plans turn on.
+            { key: 'forecast5', values: days.map((day) => day.h1?.fss5 ?? null) },
+            { key: 'persistence5', values: days.map((day) => day.h1?.p_fss5 ?? null) },
         ],
         refs: [{ y: data.definitions.useful_fss, label: 'useful' }],
     });
@@ -371,11 +410,11 @@ function draw(data) {
 
     table(document.getElementById('acc-leads'),
         ['Lead', 'Pairs', 'CSI', 'Persist. CSI', 'POD', 'FAR', 'Bias', 'FSS 5 km', 'FSS 25 km',
-            'Persist. FSS 25', 'Skill vs persist.', 'MAE mm/h', 'Above High', 'Below Low'],
+            'Persist. FSS 5', 'Persist. FSS 25', 'Skill vs persist.', 'MAE mm/h', 'Above High', 'Below Low'],
         leads.map((row) => [
             `+${formatLead(row.lead)}`, row.pairs.toLocaleString('en-GB'), score(row.csi), score(row.p_csi),
             score(row.pod), score(row.far), score(row.bias), score(row.fss5), score(row.fss25),
-            score(row.p_fss25), score(row.skill25), row.mae == null ? '–' : row.mae.toFixed(3),
+            score(row.p_fss5), score(row.p_fss25), score(row.skill25), row.mae == null ? '–' : row.mae.toFixed(3),
             percent(row.above_p90), percent(row.below_p10),
         ]));
 

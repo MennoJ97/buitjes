@@ -685,6 +685,7 @@ _FIELD_SUMS = {
     'band': 'SUM(band_pixels)', 'below': 'SUM(below_p10)', 'above': 'SUM(above_p90)',
     'p_hits': 'SUM(p_hits_t1)', 'p_misses': 'SUM(p_misses_t1)',
     'p_false_alarms': 'SUM(p_false_alarms_t1)',
+    'p_num5': 'SUM(p_fss_num_5)', 'p_den5': 'SUM(p_fss_den_5)',
     'p_num25': 'SUM(p_fss_num_25)', 'p_den25': 'SUM(p_fss_den_25)',
     'paired_num25': 'SUM(CASE WHEN p_fss_num_25 IS NOT NULL THEN fss_num_25 END)',
     'paired_den25': 'SUM(CASE WHEN p_fss_num_25 IS NOT NULL THEN fss_den_25 END)',
@@ -1015,6 +1016,7 @@ def _metrics(t: dict) -> dict:
         'csi01': rounded(_csi(t['hits01'], t['misses01'], t['false_alarms01'])),
         'mae': ratio(t['abs_error'], t['measured']),
         'fss5': rounded(_fss(t['num5'], t['den5'])),
+        'p_fss5': rounded(_fss(t['p_num5'], t['p_den5'])),
         'fss25': rounded(fss25),
         'p_fss25': rounded(persistence),
         # Over the rows that have a persistence score, so the gap is exact.

@@ -1844,3 +1844,11 @@ body.page-accuracy {
 @media (max-width: 760px) {
     .page-accuracy .forecast-main { grid-template-columns: minmax(0, 1fr); }
 }
+/* The 5 km lines in the FSS chart: thinner, with hollow dots, so square size
+   is told apart by shape and by name while colour keeps meaning "forecast"
+   or "persistence". */
+.acc-line--fine { stroke-width: 1.25; }
+.acc-dot.acc-dot--hollow { fill: var(--panel-solid); stroke-width: 1.5; }
+.acc-dot--hollow.acc-s-forecast { stroke: var(--acc-forecast); }
+.acc-dot--hollow.acc-s-baseline { stroke: var(--acc-baseline); }
+.acc-swatch--fine { border-top-width: 1px; }

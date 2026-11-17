@@ -196,7 +196,7 @@ def test_pairing_and_retention():
         first = document['leads'][0] if document else {}
         check('the summary has the scored lead, with persistence beside it',
               first.get('lead') == 5 and first.get('csi') == 1.0
-              and first.get('p_csi') is not None, first)
+              and first.get('p_csi') is not None and first.get('p_fss5') is not None, first)
         check('the summary has a day and a month',
               len(document['daily']) == 1 and len(document['months']) == 1, document)
         check('the summary leaves the locations out', 'utrecht' not in json.dumps(document))
