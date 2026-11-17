@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stamps <lastmod> in frontend/sitemap.xml from the pages' commit dates.
+# Git only runs hooks from this folder once a clone has opted in:
+#   git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/.githooks/stamp_sitemap.py"

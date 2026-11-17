@@ -1728,3 +1728,119 @@ body.page-forecast {
 /* MapLibre paints its own canvas; the card supplies the rounded corner. */
 .mini-map .maplibregl-canvas { border-radius: 10px; }
 .mini-map .maplibregl-ctrl-attrib.maplibregl-compact { font-size: 0.68rem; }
+
+/* ------------------------------------------------------- accuracy page */
+
+/* Series colours for accuracy.html, checked with a palette validator against
+   the card surface in each theme: lightness band, chroma, colour-blind
+   separation and 3:1 contrast. Blue is the forecast everywhere on the page,
+   and nothing else. Persistence is the neutral dashed line a baseline usually
+   gets. The band chart has its own pair, so blue keeps one meaning. */
+body.page-accuracy {
+    --acc-forecast: #3987E5;
+    --acc-baseline: #9C9C98;
+    --acc-above: #D95926;
+    --acc-below: #199E70;
+    --acc-rain: #6E6E6A;
+}
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) body.page-accuracy {
+        --acc-forecast: #1B64B8;
+        --acc-baseline: #767672;
+        --acc-above: #D2580A;
+        --acc-below: #138A60;
+        --acc-rain: #9C9C98;
+    }
+}
+:root[data-theme="light"] body.page-accuracy {
+    --acc-forecast: #1B64B8;
+    --acc-baseline: #767672;
+    --acc-above: #D2580A;
+    --acc-below: #138A60;
+    --acc-rain: #9C9C98;
+}
+
+.acc-wide { grid-column: 1 / -1; }
+.acc-title { margin: 0 0 6px; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
+.page-accuracy .summary-text { font-weight: 500; }
+.page-accuracy .chart-note a,
+.page-accuracy .acc-glossary a { color: var(--link); }
+.acc-stat-note { display: block; margin-top: 1px; font-size: 0.66rem; color: var(--muted-dim); }
+
+.page-accuracy .chart-card > .acc-chart { min-height: 200px; }
+.page-accuracy .chart-card > .acc-chart--short { flex: 0 0 auto; min-height: 110px; margin-top: 6px; }
+
+.acc-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.acc-line--dashed { stroke-dasharray: 5 4; }
+/* A ring in the card's own colour, so a dot sitting on a line or gridline
+   stays a separate mark. */
+.acc-dot { stroke: var(--panel-solid); stroke-width: 1.5; }
+.acc-line.acc-s-forecast { stroke: var(--acc-forecast); }
+.acc-line.acc-s-baseline { stroke: var(--acc-baseline); }
+.acc-line.acc-s-above { stroke: var(--acc-above); }
+.acc-line.acc-s-below { stroke: var(--acc-below); }
+.acc-dot.acc-s-forecast { fill: var(--acc-forecast); }
+.acc-dot.acc-s-baseline { fill: var(--acc-baseline); }
+.acc-dot.acc-s-above { fill: var(--acc-above); }
+.acc-dot.acc-s-below { fill: var(--acc-below); }
+.acc-bar.acc-s-rain { fill: var(--acc-rain); }
+
+.acc-ref { stroke: var(--muted-dim); stroke-width: 1; stroke-dasharray: 2 3; }
+.acc-ref-label,
+.acc-end-label { font-size: 10px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.acc-end-label { font-size: 11px; font-weight: 600; }
+
+.acc-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.72rem; color: var(--muted); }
+.acc-legend-item { display: inline-flex; align-items: center; }
+.acc-swatch {
+    display: inline-block;
+    flex: none;
+    width: 16px;
+    margin-right: 6px;
+    border-top: 2px solid var(--muted);
+    vertical-align: middle;
+}
+.acc-swatch--dashed { border-top-style: dashed; }
+.acc-swatch.acc-s-forecast { border-color: var(--acc-forecast); }
+.acc-swatch.acc-s-baseline { border-color: var(--acc-baseline); }
+.acc-swatch.acc-s-above { border-color: var(--acc-above); }
+.acc-swatch.acc-s-below { border-color: var(--acc-below); }
+.acc-swatch.acc-s-rain { width: 9px; height: 9px; border: 0; border-radius: 2px; background: var(--acc-rain); }
+.chart-tooltip .tip-band i { display: inline-flex; align-items: center; }
+
+.acc-table-wrap { overflow-x: auto; }
+.acc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.acc-table th,
+.acc-table td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+.acc-table thead th {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted-dim);
+}
+.acc-table th:first-child { text-align: left; }
+.acc-table tbody th { font-weight: 600; }
+
+.acc-details summary { cursor: pointer; font-size: 0.9rem; font-weight: 700; }
+.acc-details[open] summary { margin-bottom: 10px; }
+
+.acc-glossary { margin: 0; display: grid; grid-template-columns: minmax(150px, 220px) 1fr; gap: 12px 24px; }
+.acc-glossary dt { font-size: 0.84rem; font-weight: 700; scroll-margin-top: 16px; }
+.acc-glossary dd { margin: 0; font-size: 0.84rem; line-height: 1.55; color: var(--muted); }
+@media (max-width: 760px) {
+    .acc-glossary { grid-template-columns: 1fr; gap: 4px; }
+    .acc-glossary dd { margin-bottom: 10px; }
+}
+/* Grid items default to min-width: auto, so a wide table inside a card would
+   stretch its column past the screen instead of scrolling in its own box. */
+.page-accuracy .forecast-main > * { min-width: 0; }
+@media (max-width: 760px) {
+    .page-accuracy .forecast-main { grid-template-columns: minmax(0, 1fr); }
+}

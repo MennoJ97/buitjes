@@ -25,6 +25,8 @@ mod point;
 /// Frames and the manifest are produced by the ingestor sidecar and shared
 /// through a volume; this server only hands them out.
 const MANIFEST_NAME: &str = "manifest.json";
+/// Written by the ingestor's verification once an hour; read by accuracy.html.
+const ACCURACY_NAME: &str = "accuracy.json";
 
 /// How stale the manifest may get before /healthz starts failing. The ingestor
 /// publishes every ~5 minutes, so this tolerates a few missed cycles.
@@ -515,6 +517,7 @@ async fn main() {
         .route("/api/point/:name", get(serve_point))
         .route("/api/current/:name", get(serve_current))
         .route("/api/conditions", get(serve_conditions))
+        .route("/api/accuracy", get(serve_accuracy))
         .fallback_service(static_files())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -791,6 +794,35 @@ async fn serve_manifest(
                 (header::RETRY_AFTER, "10"),
             ],
             br#"{"status":"warming_up","error":"no forecast has been published yet"}"#.to_vec(),
+        )
+            .into_response(),
+    }
+}
+
+/// How well past forecasts did against the radar, for the accuracy page.
+///
+/// Whole-map scores only: the ingestor leaves the per-location ones out of
+/// this document, so it is safe to serve without a key. It changes once an
+/// hour, so a ten-minute cache costs nothing. A deployment with verification
+/// switched off never writes it, and the page explains a 404 as exactly that.
+async fn serve_accuracy(State(state): State<AppState>) -> Response {
+    match tokio::fs::read(state.frame_dir.join(ACCURACY_NAME)).await {
+        Ok(body) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "public, max-age=600"),
+            ],
+            body,
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            br#"{"status":"not_published","error":"no accuracy summary yet: verification is off, or has not run for an hour"}"#.to_vec(),
         )
             .into_response(),
     }

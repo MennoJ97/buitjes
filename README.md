@@ -77,7 +77,10 @@ as twitchy as convective rain is a number that will be wrong.
   score per lead time, whether the band's p10 and p90 are breached as often as
   they should be, and the same for the probabilities at your own locations.
   Each score sits beside persistence, so months can be compared on how much
-  the forecast added rather than on how hard their weather was.
+  the forecast added rather than on how hard their weather was. The whole-map
+  scores are on a page of their own, `accuracy.html`, with charts by lead time
+  and day and what each term means; it is linked from the map's About dialog
+  and rebuilt from the record every hour. The locations' scores stay off it.
 
 ![The forecast detail page: the looping radar, and ensemble spread on every series](docs/images/forecast.png)
 
@@ -94,6 +97,7 @@ as twitchy as convective rain is a number that will be wrong.
 │  ─ resamples rows to Mercator     ─ /api/point?lat=&lon=       │
 │  ─ + a p10/p50/p90 spread frame   ─ /api/current/<name>        │
 │  ─ encodes 16-bit WebP frames     ─ /api/conditions            │
+│  ─ scores forecasts (opt-in)      ─ /api/accuracy  the scores  │
 │                                   ─ /healthz  data freshness   │
 │                                   ─ /livez    is it serving?   │
 │           │                                ▲                   │

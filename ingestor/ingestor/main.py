@@ -1253,6 +1253,8 @@ def update_observed(client: KnmiClient, config: Config, state: State) -> None:
         verify.verify_observed(config, state.grid, forecasts,
                                existing_observed_times(config), FRAME_NAMES)
         hold = verify.pending(config, forecasts, observable_since(config, reference_time))
+        # At most once an hour; the accuracy page reads it.
+        verify.publish_summary(config)
 
     keep = sorted(known_reference_times(config), reverse=True)[: config.keep_cycles]
     prune(config, set(keep), reference_time, hold)

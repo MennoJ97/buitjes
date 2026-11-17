@@ -50,6 +50,7 @@ import math
 import os
 import sqlite3
 import sys
+import tempfile
 import time
 from contextlib import closing
 
@@ -978,6 +979,161 @@ def _brier_vs_persistence(pairs, width=7):
         return f'{"–":>{width}}'
     brier = sum((p - o) ** 2 for p, o, _ in paired) / len(paired)
     return f'{1 - brier / reference:>{width}.2f}'
+
+
+# ------------------------------------------------------------------ summary
+
+#: The document the accuracy page reads, written into FRAME_DIR so the web
+#: server (which never sees VERIFY_DIR) can serve it.
+SUMMARY_NAME = 'accuracy.json'
+
+#: How often it is rewritten. Aggregating is cheap (well under a second on a
+#: month of rows), and the newest scores are a few minutes old anyway.
+SUMMARY_INTERVAL_SECONDS = 3600
+
+#: The window the lead-time charts cover, and how many days the daily one shows.
+SUMMARY_DAYS = 30
+SUMMARY_DAILY_DAYS = 90
+
+
+def _metrics(t: dict) -> dict:
+    """The page's numbers for one set of summed rows. None where undefined."""
+    def ratio(top, bottom):
+        return round(top / bottom, 4) if bottom else None
+
+    fss25 = _fss(t['num25'], t['den25'])
+    paired = _fss(t['paired_num25'], t['paired_den25'])
+    persistence = _fss(t['p_num25'], t['p_den25'])
+    rounded = lambda value: None if value is None else round(value, 4)
+    return {
+        'pairs': t['pairs'],
+        'csi': rounded(_csi(t['hits'], t['misses'], t['false_alarms'])),
+        'p_csi': rounded(_csi(t['p_hits'], t['p_misses'], t['p_false_alarms'])),
+        'pod': ratio(t['hits'], t['hits'] + t['misses']),
+        'far': ratio(t['false_alarms'], t['hits'] + t['false_alarms']),
+        'bias': ratio(t['hits'] + t['false_alarms'], t['hits'] + t['misses']),
+        'csi01': rounded(_csi(t['hits01'], t['misses01'], t['false_alarms01'])),
+        'mae': ratio(t['abs_error'], t['measured']),
+        'fss5': rounded(_fss(t['num5'], t['den5'])),
+        'fss25': rounded(fss25),
+        'p_fss25': rounded(persistence),
+        # Over the rows that have a persistence score, so the gap is exact.
+        'skill25': rounded(_skill_vs(paired, persistence)),
+        'below_p10': ratio(t['below'], t['band']),
+        'above_p90': ratio(t['above'], t['band']),
+        # Share of measured pixels with rain at 1 mm/h or more.
+        'rain': ratio(t['hits'] + t['misses'], t['measured']),
+    }
+
+
+def _useful_to(buckets) -> int | None:
+    """The last lead, in minutes, before FSS at 25 km first drops below 0.5."""
+    reached = None
+    for bucket in sorted(buckets):
+        if (_fss(buckets[bucket]['num25'], buckets[bucket]['den25']) or 0) < USEFUL_FSS:
+            break
+        reached = bucket
+    return reached
+
+
+def summary(directory: str, now: float | None = None) -> dict | None:
+    """Everything the accuracy page draws, as one JSON-ready dict.
+
+    The primary product only: the stand-in is counted, not scored, here. And
+    the whole map only. The location scores stay in the database, because
+    this document is served to anyone and a location's name is the
+    deployment's business.
+    """
+    path = os.path.join(directory, DB_NAME)
+    if not os.path.exists(path):
+        return None
+    now = time.time() if now is None else now
+    end = 2 ** 62
+    since = int(now - SUMMARY_DAYS * 86400)
+    daily_since = int(now - SUMMARY_DAILY_DAYS * 86400)
+    primary = PRODUCTS['primary'][0]
+    with closing(sqlite3.connect(f'file:{path}?mode=ro', uri=True)) as db:
+        leads = _field_buckets(db, since, end, primary).get(None, {})
+        if not leads:
+            return None
+        span = db.execute(
+            'SELECT COUNT(*), MIN(reference_time), MAX(reference_time), SUM(fallback) '
+            'FROM cycles WHERE reference_time >= ?', (since,)).fetchone()
+        days = _field_buckets(db, daily_since, end, primary,
+                              group="strftime('%Y-%m-%d', f.reference_time, 'unixepoch', "
+                                    "'localtime')")
+        months = _field_buckets(db, 0, end, primary,
+                                group="strftime('%Y-%m', f.reference_time, 'unixepoch', "
+                                      "'localtime')")
+
+    def at(buckets, lead):
+        return _metrics(buckets[lead]) if lead in buckets else None
+
+    def totals(buckets):
+        return {name: sum(b[name] for b in buckets.values()) for name in _FIELD_SUMS}
+
+    return {
+        'generated_at': int(now),
+        'window_days': SUMMARY_DAYS,
+        'from': span[1],
+        'to': span[2],
+        'cycles': span[0] - (span[3] or 0),
+        'stand_in_cycles': span[3] or 0,
+        'definitions': {
+            'threshold_mm_h': FSS_THRESHOLD_MM_H,
+            'fss_windows_km': list(FSS_WINDOWS),
+            'useful_fss': USEFUL_FSS,
+            'band': [10, 90],
+        },
+        'useful_to': _useful_to(leads),
+        'leads': [{'lead': lead, **_metrics(leads[lead])} for lead in sorted(leads)],
+        'daily': [{
+            'date': day,
+            'pairs': totals(buckets)['pairs'],
+            'rain': (at(buckets, 5) or {}).get('rain'),
+            'h1': at(buckets, 60),
+            'h3': at(buckets, 180),
+        } for day, buckets in sorted(days.items())],
+        'months': [{
+            'month': month,
+            **{key: value for key, value in _metrics(totals(buckets)).items()
+               if key in ('pairs', 'rain', 'below_p10', 'above_p90')},
+            'h1': at(buckets, 60),
+            'h3': at(buckets, 180),
+            'useful_to': _useful_to(buckets),
+        } for month, buckets in sorted(months.items())],
+    }
+
+
+def publish_summary(config, now: float | None = None, force: bool = False) -> bool:
+    """Rewrite ``accuracy.json`` in FRAME_DIR if it is due. True if it did."""
+    if not enabled(config):
+        return False
+    now = time.time() if now is None else now
+    target = os.path.join(config.frame_dir, SUMMARY_NAME)
+    try:
+        if not force and now - os.path.getmtime(target) < SUMMARY_INTERVAL_SECONDS:
+            return False
+    except OSError:
+        pass  # not written yet
+    try:
+        document = summary(config.verify_dir, now)
+    except sqlite3.Error as error:
+        log.warning('verification: could not build the summary (%s)', error)
+        return False
+    if document is None:
+        return False
+    handle, temporary = tempfile.mkstemp(dir=config.frame_dir, prefix='.tmp-')
+    try:
+        with os.fdopen(handle, 'wb') as stream:
+            stream.write(json.dumps(document, separators=(',', ':')).encode())
+        os.replace(temporary, target)
+    except BaseException:
+        os.unlink(temporary)
+        raise
+    log.info('verification: summary published (%d cycles, %d days)',
+             document['cycles'], len(document['daily']))
+    return True
 
 
 def main(argv=None) -> None:

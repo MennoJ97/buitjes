@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Listed in robots.txt. Only the map page: forecast.html is noindex. -->
+<!-- Listed in robots.txt. The map page and the accuracy page: forecast.html is
+     noindex. No <lastmod> by hand; see CLAUDE.md. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://buitjes.mhjansen.nl/</loc></url>
+  <url><loc>https://buitjes.mhjansen.nl/accuracy.html</loc></url>
 </urlset>

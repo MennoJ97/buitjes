@@ -13,6 +13,7 @@ would be reported as too narrow.
 """
 
 import io
+import json
 import os
 import sqlite3
 import sys
@@ -190,6 +191,19 @@ def test_pairing_and_retention():
         check('the report has the location', 'utrecht' in text, text)
         check('the report compares with persistence', 'pCSI' in text and 'vs pers' in text,
               text)
+
+        document = v.summary(store, now=REF + 3600)
+        first = document['leads'][0] if document else {}
+        check('the summary has the scored lead, with persistence beside it',
+              first.get('lead') == 5 and first.get('csi') == 1.0
+              and first.get('p_csi') is not None, first)
+        check('the summary has a day and a month',
+              len(document['daily']) == 1 and len(document['months']) == 1, document)
+        check('the summary leaves the locations out', 'utrecht' not in json.dumps(document))
+        check('the summary is published once, then not again within the hour',
+              v.publish_summary(cfg, now=REF + 3600)
+              and os.path.exists(os.path.join(frames, v.SUMMARY_NAME))
+              and not v.publish_summary(cfg, now=REF + 3700))
 
         out = io.StringIO()
         v.report(store, days=None, by_month=True, out=out)

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>Buitjes — How accurate is the forecast?</title>
+    <meta name="description" content="How well Buitjes' rain forecast for the Netherlands has matched the radar, by how far ahead it looks: scores against KNMI's measured rain, updated every hour.">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="buitjes.mhjansen.nl">
+    <meta property="og:title" content="Buitjes — How accurate is the forecast?">
+    <meta property="og:description" content="Every forecast scored against the radar that later measured it, by lead time.">
+    <meta property="og:url" content="https://buitjes.mhjansen.nl/accuracy.html">
+    <meta property="og:image" content="https://buitjes.mhjansen.nl/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="buitjes — rain radar">
+    <meta property="og:locale" content="en_GB">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="stylesheet" href="style.css">
+    <script src="js/family.js"></script>
+    <script defer src="/_u/script.js" data-website-id="5db1bbe6-77d1-4e22-93b8-75728d1d619f"
+            data-domains="buitjes.mhjansen.nl" data-do-not-track="true" data-performance="true" data-exclude-search="true"></script>
+</head>
+<body class="page-forecast page-accuracy">
+    <header class="forecast-head">
+        <div class="brand">
+            <span class="brand-home" data-site-home hidden><a href=""></a><span class="brand-sep" aria-hidden="true">/</span></span>
+            <svg class="brand-mark" viewBox="0 0 28 26" aria-hidden="true">
+                <path transform="translate(1 -1.5) scale(1.05)" fill="currentColor" d="M7 18a4.5 4.5 0 0 1-.6-8.96 5.5 5.5 0 0 1 10.55-1.4A4.25 4.25 0 0 1 17.5 18z"/>
+                <g stroke-width="2.4" stroke-linecap="square"><line class="rain-1" x1="8" y1="19.5" x2="6.5" y2="25"/><line class="rain-2" x1="13.5" y1="19.5" x2="12" y2="25"/><line x1="19" y1="19.5" x2="17.5" y2="25" stroke="currentColor"/></g>
+            </svg>
+            <span class="brand-name">buitjes</span>
+            <span class="brand-tag">Accuracy</span>
+        </div>
+        <div class="forecast-head-actions">
+            <p class="ref-time"><span class="ref-time-label">Updated</span> <time id="acc-updated">--:--</time></p>
+            <a class="link-button" href="index.html">Back to map</a>
+            <button class="theme-toggle" hidden></button>
+        </div>
+    </header>
+
+    <main class="forecast-main">
+        <section class="summary-card">
+            <h1 class="acc-title">How accurate is the forecast?</h1>
+            <p class="summary-text" id="acc-headline">Loading…</p>
+            <dl class="summary-stats" id="acc-stats"></dl>
+            <p class="chart-note">Every forecast frame the map shows is scored against the radar
+               that later measured the same moment, over the whole map. Each one is set against
+               <a href="#term-persistence">persistence</a>: the radar at the moment the
+               forecast was made, held still. That is the forecast you get for free, so it is
+               the one worth beating. What the terms mean is <a href="#terms">further down</a>.</p>
+        </section>
+
+        <section class="chart-card acc-wide">
+            <div class="chart-head">
+                <h2>Is the rain in the right area?</h2>
+                <span class="acc-legend" data-legend="forecast persistence"></span>
+            </div>
+            <div class="chart acc-chart" id="chart-fss" role="img"
+                 aria-label="Fractions skill score at 25 km by lead time, forecast against persistence"></div>
+            <p class="chart-note"><a href="#term-fss">Fractions skill score</a> at 1 mm/h, in
+               25 km squares: did about the right share of each square get rain? 1 is perfect.
+               Above the dashed 0.5 line the forecast is usually called useful at that scale.
+               The time axis is stretched at the short end, where most of the change happens.</p>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Rain on the exact square kilometre</h2>
+                <span class="acc-legend" data-legend="forecast persistence"></span>
+            </div>
+            <div class="chart acc-chart" id="chart-csi" role="img"
+                 aria-label="Critical success index at 1 mm/h by lead time, forecast against persistence"></div>
+            <p class="chart-note"><a href="#term-csi">Critical success index</a> at 1 mm/h,
+               pixel by pixel. Much stricter than the chart above: a shower one kilometre out of
+               place counts as both a miss and a false alarm.</p>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-head">
+                <h2>Too much rain, or too little?</h2>
+            </div>
+            <div class="chart acc-chart" id="chart-bias" role="img"
+                 aria-label="Frequency bias at 1 mm/h by lead time"></div>
+            <p class="chart-note"><a href="#term-bias">Bias</a>: how much map area the forecast
+               painted at 1 mm/h or more, against how much the radar measured. 1 is the right
+               amount, 1.2 is a fifth too much.</p>
+        </section>
+
+        <section class="chart-card acc-wide">
+            <div class="chart-head">
+                <h2>Is the uncertainty band honest?</h2>
+                <span class="acc-legend" data-legend="above below"></span>
+            </div>
+            <div class="chart acc-chart" id="chart-band" role="img"
+                 aria-label="How often the radar fell above the band's 90th percentile or below its 10th, by lead time"></div>
+            <p class="chart-note">The map's <a href="#term-band">Low and High</a> are the 10th and
+               90th percentile of the twenty ensemble runs. If they are honest, the radar lands
+               above High about 10% of the time and below Low about 10% of the time. Counted only
+               where either the band or the radar had rain nearby.</p>
+        </section>
+
+        <section class="chart-card acc-wide">
+            <div class="chart-head">
+                <h2>Day by day, one hour ahead</h2>
+                <span class="acc-legend" data-legend="forecast persistence"></span>
+            </div>
+            <div class="chart acc-chart" id="chart-daily" role="img"
+                 aria-label="Fractions skill score at 25 km one hour ahead, per day, forecast against persistence"></div>
+            <div class="chart acc-chart acc-chart--short" id="chart-rain" role="img"
+                 aria-label="Share of the map with rain of 1 mm/h or more, per day"></div>
+            <p class="chart-note">Top: the same score as the first chart, one hour ahead, for each
+               day. Bottom: how much of the map had rain of 1 mm/h or more that day. A day with
+               almost no rain scores erratically, because a handful of showers decides it. A
+               missing point is a day with no rain to score.</p>
+        </section>
+
+        <section class="chart-card acc-wide" id="acc-months-card" hidden>
+            <div class="chart-head"><h2>By month</h2></div>
+            <div class="acc-table-wrap">
+                <table class="acc-table" id="acc-months"></table>
+            </div>
+            <p class="chart-note">Compare months on <a href="#term-skill">skill against
+               persistence</a> rather than on the raw scores. Showers in summer are harder to
+               forecast than rain bands in winter at every lead time, so the raw scores mostly say
+               how hard the weather was. The gap over persistence says how good the forecast was.</p>
+        </section>
+
+        <section class="chart-card acc-wide">
+            <details class="acc-details">
+                <summary>All the numbers, by lead time</summary>
+                <div class="acc-table-wrap">
+                    <table class="acc-table" id="acc-leads"></table>
+                </div>
+            </details>
+        </section>
+
+        <section class="chart-card acc-wide acc-terms" id="terms">
+            <div class="chart-head"><h2>What the terms mean</h2></div>
+            <dl class="acc-glossary">
+                <dt id="term-lead">Lead time</dt>
+                <dd>How far ahead a forecast looks, counted from the radar picture it started
+                    from. "+1 h" is a forecast for one hour after that picture.</dd>
+
+                <dt id="term-persistence">Persistence</dt>
+                <dd>The simplest possible forecast: assume the rain stays exactly where the radar
+                    has it now, at the same strength. It is very good for the next few minutes and
+                    gets worse quickly as showers move and change. A forecast earns its keep only
+                    where it beats persistence.</dd>
+
+                <dt id="term-threshold">1 mm/h</dt>
+                <dd>The rain rate most scores here are counted at: rain you would notice and
+                    want an umbrella for. Below that is drizzle, which the radar and the
+                    forecast both find hard to place.</dd>
+
+                <dt id="term-csi">Critical success index (CSI)</dt>
+                <dd>Of all the pixels where the forecast or the radar (or both) had rain, the
+                    share where both did. 1 is perfect, 0 means no overlap at all. In the table,
+                    <strong>POD</strong> (probability of detection) is the share of measured rain
+                    the forecast caught, and <strong>FAR</strong> (false alarm ratio) is the share
+                    of forecast rain that did not happen.</dd>
+
+                <dt id="term-fss">Fractions skill score (FSS)</dt>
+                <dd>Instead of asking "did it rain on this pixel?", it asks "did about the right
+                    share of this square get rain?". A shower a few kilometres out of place then
+                    counts as nearly right rather than as a miss and a false alarm. Shown for
+                    25 km squares; the table also has 5 km. Above 0.5 is the usual rule of thumb
+                    for "useful at that scale".</dd>
+
+                <dt id="term-bias">Bias</dt>
+                <dd>The area the forecast painted with rain, divided by the area that actually
+                    had rain. Above 1 means it spreads rain over too much of the map, below 1 too
+                    little. A forecast can have a perfect bias and still put every shower in the
+                    wrong place; that is what the other scores are for.</dd>
+
+                <dt id="term-band">The band (Low and High)</dt>
+                <dd>The forecast is twenty runs, not one. The map's Low and High are the 10th and
+                    90th percentile of what those runs put within a few kilometres of each point.
+                    An honest band is breached on each side about 10% of the time. More often
+                    above means real rain tends to be heavier than High suggests; more often below
+                    means it tends to be lighter than Low.</dd>
+
+                <dt id="term-skill">Skill against persistence</dt>
+                <dd>(FSS of the forecast − FSS of persistence) ÷ (1 − FSS of persistence). 0
+                    means no better than holding the radar still, 1 means perfect, and below 0
+                    means persistence did better.</dd>
+
+                <dt id="term-mae">Mean absolute error</dt>
+                <dd>The average difference in rain rate between forecast and radar, over every
+                    measured pixel, in mm/h. Small because most of the map is dry most of the
+                    time; useful for comparing lead times, not as a number on its own.</dd>
+
+                <dt id="term-scope">What is and is not counted</dt>
+                <dd>The whole map, as published, against KNMI's real-time radar. Pixels the radar
+                    could not see are left out on both sides rather than counted as dry. Cycles
+                    from the stand-in forecast, used while KNMI's main product is unavailable,
+                    are left out of every number here.</dd>
+            </dl>
+        </section>
+
+        <p class="forecast-foot" id="acc-foot"></p>
+    </main>
+
+    <script type="module" src="js/accuracy.js"></script>
+</body>
+</html>
