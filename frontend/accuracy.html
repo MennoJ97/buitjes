@@ -37,8 +37,14 @@
             <span class="brand-tag">Accuracy</span>
         </div>
         <div class="forecast-head-actions">
-            <p class="ref-time"><span class="ref-time-label">Updated</span> <time id="acc-updated">--:--</time></p>
-            <a class="link-button" href="index.html">Back to map</a>
+            <div class="forecast-head-meta">
+                <p class="ref-time"><span class="ref-time-label">Updated</span> <time id="acc-updated">--:--</time></p>
+            </div>
+            <nav class="page-nav" aria-label="Buitjes pages">
+                <a class="link-button" href="index.html">Radar map</a>
+                <a class="link-button" id="acc-forecast-link" href="forecast.html?lat=52.1015&amp;lon=5.1779"
+                   title="Asks your browser where you are; De Bilt if it may not say">Forecast near you</a>
+            </nav>
             <button class="theme-toggle" hidden></button>
         </div>
     </header>
@@ -110,15 +116,15 @@
         <section class="chart-card acc-wide">
             <div class="chart-head">
                 <h2>Day by day, one hour ahead</h2>
-                <span class="acc-legend" data-legend="forecast5 persistence5"></span>
+                <span class="acc-legend" data-legend="forecast25 persistence25 forecast5 persistence5"></span>
             </div>
             <div class="chart acc-chart" id="chart-daily" role="img"
-                 aria-label="Fractions skill score at 5 km one hour ahead, per day, forecast against persistence"></div>
+                 aria-label="Fractions skill score at 25 km and 5 km one hour ahead, per day, forecast against persistence"></div>
             <div class="chart acc-chart acc-chart--short" id="chart-rain" role="img"
                  aria-label="Share of the map with rain of 1 mm/h or more, per day"></div>
-            <p class="chart-note">Top: the fractions skill score in 5 km squares, one hour ahead,
-               for each day: roughly, whether rain reached your town rather than just your
-               region, which is the scale a day's plans turn on. Bottom: how much of the map had rain of 1 mm/h or more that day. A day with
+            <p class="chart-note">Top: the fractions skill score one hour ahead, for each day, in
+               25 km squares (filled dots: did your region get the rain?) and 5 km squares
+               (hollow dots: did your town?). Bottom: how much of the map had rain of 1 mm/h or more that day. A day with
                almost no rain scores erratically, because a handful of showers decides it. A
                missing point is a day with no rain to score.</p>
         </section>
@@ -206,6 +212,13 @@
             </dl>
         </section>
 
+        <nav class="acc-foot-nav" aria-label="Buitjes pages">
+            <a href="index.html">Radar map</a>
+            <span aria-hidden="true">·</span>
+            <a href="forecast.html?lat=52.1015&amp;lon=5.1779">Forecast for De Bilt</a>
+            <span aria-hidden="true">·</span>
+            <span>Accuracy</span>
+        </nav>
         <p class="forecast-foot" id="acc-foot"></p>
     </main>
 

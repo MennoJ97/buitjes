@@ -364,7 +364,6 @@ function draw(data) {
         { key: 'forecast5', values: pick('fss5') },
         { key: 'persistence5', values: pick('p_fss5') },
     ];
-    legends(new Set(fss.filter((s) => !hasData(s)).map((s) => s.key)));
     lineChart(document.getElementById('chart-fss'), {
         ...leadAxis, yMax: 1,
         series: fss,
@@ -391,13 +390,21 @@ function draw(data) {
     const dayTicks = dayIndex.filter((index) => index % every === 0);
     const dayTitle = (index) => formatDate(days[index].date, { weekday: 'short', day: 'numeric', month: 'short' });
     const dayLabel = (index) => formatDate(days[index].date);
+    // Both square sizes, as in the first chart: 25 km says whether your region
+    // got the rain, 5 km whether your town did.
+    const daily = [
+        { key: 'forecast25', values: days.map((day) => day.h1?.fss25 ?? null) },
+        { key: 'persistence25', values: days.map((day) => day.h1?.p_fss25 ?? null) },
+        { key: 'forecast5', values: days.map((day) => day.h1?.fss5 ?? null) },
+        { key: 'persistence5', values: days.map((day) => day.h1?.p_fss5 ?? null) },
+    ];
+    // p_fss5 arrived after the first summaries were written: a series with
+    // nothing in it, in either chart, is left out of the legends as well.
+    legends(new Set([...fss, ...daily].filter((s) => !hasData(s)).map((s) => s.key)));
     lineChart(document.getElementById('chart-daily'), {
         xs: dayIndex, xScale: 'linear', xTicks: dayTicks, xTickLabel: dayLabel, tipTitle: dayTitle, yMax: 1,
         series: [
-            // 5 km rather than 25: whether rain reaches your town, not just your
-            // region, is the question a day's plans turn on.
-            { key: 'forecast5', values: days.map((day) => day.h1?.fss5 ?? null) },
-            { key: 'persistence5', values: days.map((day) => day.h1?.p_fss5 ?? null) },
+            ...daily,
         ],
         refs: [{ y: data.definitions.useful_fss, label: 'useful' }],
     });
@@ -449,6 +456,40 @@ function summarise(data) {
         + (data.stand_in_cycles ? ` ${data.stand_in_cycles} cycles from the stand-in forecast are left out.` : '');
 }
 
+/** De Bilt, where KNMI is: the forecast to show someone who will not say where they are. */
+const FALLBACK_PLACE = { lat: 52.1015, lon: 5.1779 };
+
+/**
+ * The forecast page needs a place, and a visitor without a key cannot pick
+ * one of the saved locations. So the link asks the browser where it is, and
+ * goes to De Bilt if it is told no. Its href is that same De Bilt link, which
+ * is also what a middle-click or a script-less visit gets.
+ */
+function forecastLink() {
+    const link = document.getElementById('acc-forecast-link');
+    if (!link || !navigator.geolocation) return;
+    const go = (lat, lon) => {
+        location.href = `forecast.html?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`;
+    };
+    link.addEventListener('click', (event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        link.classList.add('is-busy');
+        link.setAttribute('aria-busy', 'true');
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                window.umami?.track('geolocate', { result: 'ok', page: 'accuracy' });
+                go(position.coords.latitude, position.coords.longitude);
+            },
+            () => {
+                window.umami?.track('geolocate', { result: 'failed', page: 'accuracy' });
+                go(FALLBACK_PLACE.lat, FALLBACK_PLACE.lon);
+            },
+            { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 },
+        );
+    });
+}
+
 function unavailable(message) {
     document.getElementById('acc-headline').textContent = message;
     for (const chart of document.querySelectorAll('.acc-chart')) {
@@ -458,6 +499,7 @@ function unavailable(message) {
 
 async function start() {
     legends();
+    forecastLink();
     fetch('/api/config').then((response) => (response.ok ? response.json() : null))
         .then((manifest) => applySiteHome(manifest?.site)).catch(() => applySiteHome(null));
 

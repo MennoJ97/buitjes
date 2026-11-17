@@ -1321,6 +1321,35 @@ body.page-forecast {
     text-transform: uppercase;
 }
 .forecast-head-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.forecast-head-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.page-nav { display: flex; gap: 8px; }
+
+/* Page header on phones. Left to wrap, the line broke wherever the next item
+   happened not to fit, which stranded a lone button and the theme switch on a
+   row of their own. Instead the groups become rows: the brand with the theme
+   switch beside it, then what the page shows, then the links as an even pair. */
+@media (max-width: 560px) {
+    .forecast-head {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 10px 12px;
+    }
+    .forecast-head-actions { display: contents; }
+    .forecast-head .brand { grid-column: 1; grid-row: 1; }
+    .forecast-head .theme-toggle { grid-column: 2; grid-row: 1; justify-self: end; margin: 0; }
+    .forecast-head-meta {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        gap: 6px 10px;
+    }
+    /* The location and its coordinates read as one item on the left, and
+       the update time takes the right edge. */
+    .forecast-head-meta .ref-time { margin: 0 0 0 auto; }
+    .forecast-head .ref-time-label { display: inline; }
+    .page-nav { grid-column: 1 / -1; grid-row: 3; display: grid; grid-template-columns: 1fr 1fr; }
+    .page-nav .link-button { text-align: center; }
+}
 
 /* The light/dark switch every mhjansen.nl site has, last in the bar. Here
    the family's bare icon (https://mhjansen.nl/family.css, copied rather than
@@ -1852,3 +1881,14 @@ body.page-accuracy {
 .acc-dot--hollow.acc-s-forecast { stroke: var(--acc-forecast); }
 .acc-dot--hollow.acc-s-baseline { stroke: var(--acc-baseline); }
 .acc-swatch--fine { border-top-width: 1px; }
+.page-nav .link-button.is-busy { opacity: 0.6; cursor: progress; }
+.acc-foot-nav {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: var(--muted-dim);
+}
+.acc-foot-nav a { color: var(--link); text-decoration: none; }
+.acc-foot-nav a:hover { text-decoration: underline; }

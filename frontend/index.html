@@ -68,6 +68,11 @@
         <symbol id="icon-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
             <circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.6v.3"/>
         </symbol>
+        <!-- A small line chart falling to the right: the accuracy page's
+             skill-by-lead-time curve, which is what it links to. -->
+        <symbol id="icon-accuracy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4v16h16"/><path d="M7.5 8l3.5 3 3-1.5 4.5 5.5"/>
+        </symbol>
         <symbol id="icon-locate" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
             <circle cx="12" cy="12" r="6"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
         </symbol>
@@ -134,6 +139,11 @@
             <button type="button" id="locate-btn" class="icon-btn" aria-label="Find my location" title="Find my location">
                 <svg aria-hidden="true"><use href="#icon-locate"/></svg>
             </button>
+            <!-- A link, not a button: it goes to another page. Styled as the
+                 icons beside it so the bar stays one row of round controls. -->
+            <a class="icon-btn" href="accuracy.html" aria-label="How accurate is the forecast?" title="How accurate is the forecast?">
+                <svg aria-hidden="true"><use href="#icon-accuracy"/></svg>
+            </a>
             <button type="button" id="info-btn" class="icon-btn" aria-label="About this map" aria-expanded="false" title="About this map">
                 <svg aria-hidden="true"><use href="#icon-info"/></svg>
             </button>
